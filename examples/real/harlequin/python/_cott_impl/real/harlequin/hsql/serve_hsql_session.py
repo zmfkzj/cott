@@ -12,7 +12,6 @@ from typing import Final, cast
 
 import filelock
 from cott_runtime import CottList, FrozenMap, I64, Nothing, Ok, Some
-
 from real.harlequin.adapters import cancel_queries, close_connection, connect
 from real.harlequin.adapters_types import AdapterOption, Connection, ConnectionError_Failed, ConnectionError_InvalidOption, ConnectionRequest, OptionKind, OptionKind_FilePath, OptionKind_Flag, OptionKind_Repeated, OptionKind_Text, SettingValue_Flag, SettingValue_Text
 from real.harlequin.hsql import execute_hsql_request, hsql_error_line, parse_hsql_arguments, session_socket_path, valid_session_name
@@ -45,8 +44,8 @@ def _usage(message: str) -> I64:
     return 2
 
 
-def _error_response(error: HsqlError, status: I64) -> HsqlResponse:
-    return HsqlResponse(stdout=b"", stderr=hsql_error_line(error), status=status)
+def _error_response(failure: HsqlError, status: I64) -> HsqlResponse:
+    return HsqlResponse(stdout=b"", stderr=hsql_error_line(failure), status=status)
 
 
 def _check_directory(directory: pathlib.Path) -> str | None:
@@ -59,8 +58,8 @@ def _check_directory(directory: pathlib.Path) -> str | None:
         return f"{directory} is not a real directory."
     if info.st_uid != os.getuid():
         return f"{directory} is not owned by you."
-    if info.st_mode & 0o077:
-        return f"{directory} is accessible by other users; restrict it with chmod 700."
+    if info.st_mode & 0o077 or info.st_mode & 0o700 != 0o700:
+        return f"{directory} must have permissions 0700."
     return None
 
 
@@ -96,8 +95,7 @@ def _options(request: ConnectionRequest, adapter_name: str) -> CottList[AdapterO
         "sqlite": "mode lock_timeout detect_types isolation_level cached_statements extension no_init init_path",
         "postgres": "host port user password dbname sslmode sslrootcert sslcert sslkey connect_timeout application_name options",
         "mysql": "host port unix_socket database user password password1 password2 password3 connection_timeout ssl_ca ssl_cert ssl_key ssl_disabled openid_token_file enable_cleartext_plugin",
-        "odbc": "",
-        "bigquery": "project location",
+        "odbc": "", "bigquery": "project location",
         "trino": "host port user catalog schema require_auth password sslcert",
         "databricks": "server_hostname http_path access_token username password auth_type client_id client_secret no_init init_path skip_legacy_indexing",
         "adbc": "driver_type driver_path db_kwargs_str",
@@ -108,7 +106,7 @@ def _options(request: ConnectionRequest, adapter_name: str) -> CottList[AdapterO
     flags = {"md_saas", "allow_unsigned_extensions", "force_install_extensions", "no_init", "ssl_disabled", "enable_cleartext_plugin", "skip_legacy_indexing", "show_system"}
     repeated = {"extension"}
     paths = {"init_path", "ssl_ca", "ssl_cert", "ssl_key", "sslcert", "sslrootcert", "sslkey", "openid_token_file", "driver_path"}
-    reserved = {"adapter", "command", "file", "output", "format", "profile", "config_path", "read_only", "timeout", "path", "limit", "ssh_host", "ssh_forward", "ssh_batch_mode", "ssh_allow_reuse", "ssh_timeout", "catalog", "catalog_search", "session", "serve", "stats", "color", "result"}
+    reserved = {"adapter", "command", "file", "output", "format", "profile", "config_path", "read_only", "timeout", "path", "limit", "ssh_host", "ssh_forward", "ssh_batch_mode", "ssh_allow_reuse", "ssh_timeout", "catalog", "catalog_search", "history", "history_search", "session", "serve", "session_reset", "session_status", "queue_timeout", "idle_timeout", "max_lifetime", "stats", "color", "result", "display_rows", "on_error", "no_write_history", "no_header", "no_footer", "no_align", "tuples_only", "null_string"}
     names = known.get(adapter_name.lower(), "").split()
     for setting in request.settings:
         key = setting.name.replace("-", "_")
@@ -140,7 +138,8 @@ def _options(request: ConnectionRequest, adapter_name: str) -> CottList[AdapterO
             kind = inferred
         else:
             kind = OptionKind_Text()
-        options.append(AdapterOption(name=key.replace("_", "-"), short_decls=CottList(values=[]), kind=kind, label=key.replace("_", "-"), description="", default=Nothing(), secret=any(part in key for part in ("password", "secret", "token", "ssl_key", "sslkey"))))
+        shorts = ["-e"] if key == "extension" and adapter_name.lower() in ("duckdb", "sqlite") else (["-i", "-init"] if key == "init_path" and adapter_name.lower() in ("duckdb", "sqlite") else [])
+        options.append(AdapterOption(name=key.replace("_", "-"), short_decls=CottList(values=shorts), kind=kind, label=key.replace("_", "-"), description="", default=Nothing(), secret=any(part in key for part in ("password", "secret", "token", "ssl_key", "sslkey"))))
     return CottList(values=options)
 
 
@@ -226,7 +225,7 @@ def _send_stderr(peer: socket.socket, send_lock: threading.Lock, text: str) -> N
 
 def _request_body(payload: bytes) -> tuple[list[str], pathlib.Path, Some[str] | Nothing, bool, bool, bool, str, str | None] | None:
     try:
-        raw = cast(object, json.loads(payload.decode("utf-8")))
+        raw: object = cast(object, json.loads(payload.decode("utf-8")))
     except (ValueError, UnicodeDecodeError):
         return None
     if not isinstance(raw, dict):
@@ -305,7 +304,6 @@ def _run_request(name: str, payload: bytes, request: ConnectionRequest, context:
     condition = cast(threading.Condition, cells["condition"])
     connections = cast(list[Connection], cells["connections"])
     counts = cast(dict[str, int], cells["counts"])
-    times = cast(dict[str, float], cells["times"])
     if isinstance(args.mode, HsqlMode_SessionStatus):
         with condition:
             waiting = cast(list[int], cells["line"])
@@ -325,6 +323,7 @@ def _run_request(name: str, payload: bytes, request: ConnectionRequest, context:
         return _error_response(HsqlError_Timeout(message=f"waited {waited:g}s for the session's previous request and never reached the database (--queue-timeout)."), 4)
     if turn == "stopping":
         return _error_response(HsqlError_Connection(message=f"session '{name}' is stopping."), 3)
+    times = cast(dict[str, float], cells["times"])
     try:
         with condition:
             cells["current"] = "" if isinstance(args.mode, HsqlMode_SessionReset) else request_id
@@ -613,16 +612,11 @@ def serve_hsql_session(name: str, request: ConnectionRequest, context: HsqlConte
             return 3
         now = time.monotonic()
         cells: dict[str, object] = {
-            "connections": [connection],
-            "adapter_names": CottList(values=_ADAPTERS.split(",")),
-            "adapter_options": _options(request, context.adapter_name),
-            "condition": threading.Condition(),
+            "connections": [connection], "adapter_names": CottList(values=_ADAPTERS.split(",")),
+            "adapter_options": _options(request, context.adapter_name), "condition": threading.Condition(),
             "counts": {"requests": 0, "queued": 0, "busy": 0, "cancelling": 0, "inflight": 0, "ticket": 0},
-            "times": {"started": now, "last": now},
-            "current": "",
-            "stopping": False,
-            "line": [],
-            "peers": [],
+            "times": {"started": now, "last": now}, "current": "", "stopping": False,
+            "line": [], "peers": [],
         }
         ready = False
         startup_error: str | None = None

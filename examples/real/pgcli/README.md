@@ -38,6 +38,8 @@ The IPython extension (`%load_ext pgcli.magic`, upstream `magic.py`) is part of 
 
 ```sh
 project=examples/real/pgcli
+# Set this to your native PostgreSQL 16 bin directory when it is not on PATH.
+export COTT_POSTGRES_BIN=/tmp/cott-pg/root/usr/lib/postgresql/16/bin
 UV_PROJECT_ENVIRONMENT="$(pwd)/$project/.venv" uv sync --locked --project "$project/python"
 cott check --project "$project"
 cott fmt --check --project "$project"
@@ -48,18 +50,22 @@ cott requirements --project "$project"
 PYTHONPATH="$project/generated/python:$project/python" "$project/.venv/bin/python" "$project/python/pgcli_cli.py" --help
 ```
 
-The current `generated/generation.json` snapshot is verified with `current == last_verified`, 85 bound implementations and zero unresolved symbols. `cott verify` reports **47 observed, 29 trust_declaration, 0 unknown and 0 unobserved** semantic clauses after regenerating 34 implementations with `openai-codex/gpt-6-sol`. The three requirements remain `unverified` because they have no `checked_by` links; the external regression is separate evidence, not Cott scenario evidence. The external program regression in `tests/pgcli_program.rs` and `tests/support/pgcli_program.py` previously passed **13/13** checks against a scratch PostgreSQL 16 server using a verified deployment. Prerequisites of the ignored Rust regression test: `COTT_POSTGRES_BIN=/tmp/cott-pg/root/usr/lib/postgresql/16/bin` (or another PostgreSQL 16 binary directory), OpenSSH's `/usr/sbin/sshd` and `/usr/bin/ssh-keygen`, the locked `.venv`, and the compiler's Linux sandbox, whose private network namespace supplies the loopback for PostgreSQL's TCP listener and sshd (nothing binds a host port). A missing sshd fails `database.ssh_tunnel` (`openssh_missing`) instead of skipping it. The upstream comparison and pyte PTY drivers used for that verification are retained in the durable drafts under `/home/arthur/.cache/cott-real-drafts/pgcli/scripts/`.
+The current `generated/generation.json` snapshot is verified with `current == last_verified`, 85 bound implementations and zero unresolved symbols. `cott verify` reports **68 observed, 8 trust_declaration, 0 unknown and 0 unobserved** semantic clauses after legitimate `openai-codex/gpt-6-sol` generation. The three requirements remain `unverified` because they have no `checked_by` links; the external regression is separate evidence, not Cott scenario evidence. The external program regression in `tests/pgcli_program.rs` and `tests/support/pgcli_program.py` previously passed **13/13** checks against a scratch PostgreSQL 16 server using a verified deployment. Prerequisites of that ignored external regression test: `COTT_POSTGRES_BIN`, OpenSSH's `/usr/sbin/sshd` and `/usr/bin/ssh-keygen`, the locked `.venv`, and the compiler's Linux sandbox. A missing sshd fails `database.ssh_tunnel` (`openssh_missing`) instead of skipping it. The upstream comparison and pyte PTY drivers used for that historical verification remain in `/home/arthur/.cache/cott-real-drafts/pgcli/scripts/`.
 
 The strict coverage policy selects 53 clauses across 27 callables, including
 connection/reconnection, SQL execution and destructive-query confirmation,
 configuration, completion, URI/service resolution and CLI/output boundaries.
-No `unobserved`, `trust_declaration` or `unknown` is allowed. The latest
-`emit python` succeeded; `verify` resolved 12 of the previous 32 violations but
-still rejected the policy for 20 database-effect trust declarations. A real
-PostgreSQL 16.15 binary is available at the documented path; the missing
-capability is compiler-owned database fixture authorization and lifecycle,
-not permission to substitute fake connections or use an ambient server.
-Artifact certification is not policy approval; deployment remains blocked.
+No `unobserved`, `trust_declaration` or `unknown` is allowed. Real `verify` now
+passes all 53 selected clauses (exit 0), resolving all 32 original violations.
+The database scenarios use fresh compiler-owned PostgreSQL 16.15 clusters over
+private Unix sockets, real facade-created connections, SQL/catalog operations,
+injected database failures and actual SIGINT. They do not use ambient servers,
+fake driver objects or external regression results as clause evidence.
+The `VirtualDatabase` rejection scenario retains a live facade-created connection
+and sets the public executor's caller-supplied flag. It tests that flag's guard,
+not a PgBouncer server; the original connection is then pinged and closed.
+`tools.postgresql_fixture` records the native version and frozen content hashes;
+shutdown and scratch cleanup must succeed before any scenario is certified.
 The PostgreSQL regression result above is historical and is not Cott scenario
-evidence. The current compiler can classify contract `proved` evidence as
-`observed`, so even selected observed clauses do not establish execution.
+evidence. Static proofs remain separate from execution coverage; selected
+observations establish only the exercised invocation scope, not every path.

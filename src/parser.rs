@@ -806,7 +806,10 @@ impl Parser {
             "fs" => self.parse_scenario_filesystem(start.clone())?,
             "http" => self.parse_scenario_http(start.clone())?,
             "clock" => self.parse_scenario_clock(start.clone())?,
+            "random" => self.parse_scenario_random(start.clone())?,
             "failure" => self.parse_scenario_failure(start.clone())?,
+            "database" => self.parse_scenario_database(start.clone())?,
+            "socket" => self.parse_scenario_socket(start.clone())?,
             _ => {
                 self.error("unknown scenario fixture kind", start);
                 self.recover_line();
@@ -889,6 +892,70 @@ impl Parser {
         })
     }
 
+    fn parse_scenario_random(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let seed = self.parse_scenario_integer_field("seed")?;
+        Some(ScenarioFixtureConfig::Random { span, seed })
+    }
+
+    fn parse_scenario_database(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let (backend, backend_span) = self.parse_scenario_name_field("backend")?;
+        let kind = match backend.as_str() {
+            "sqlite" => ScenarioDatabaseBackendKind::Sqlite,
+            "duckdb" => ScenarioDatabaseBackendKind::Duckdb,
+            "postgres" => ScenarioDatabaseBackendKind::Postgres,
+            _ => {
+                self.error(
+                    "database fixture backend must be `sqlite`, `duckdb` or `postgres`",
+                    backend_span,
+                );
+                return None;
+            }
+        };
+        Some(ScenarioFixtureConfig::Database {
+            span,
+            backend: ScenarioDatabaseBackend {
+                span: backend_span,
+                kind,
+            },
+        })
+    }
+
+    fn parse_scenario_socket(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let (path, path_span) = self.parse_scenario_string_argument_span("path")?;
+        if !normalized_relative_path(&path) {
+            self.error(
+                "fixture path must be normalized relative UTF-8 without symlinks",
+                path_span,
+            );
+        }
+        self.newline();
+        let greeting = self.parse_scenario_data_argument("greeting")?;
+        self.newline();
+        let response = self.parse_scenario_data_argument("response")?;
+        self.newline();
+        self.parse_scenario_field_name("interrupt_after_request")?;
+        let interrupt_after_request = match self.current().kind {
+            TokenKind::Keyword(Keyword::True) => true,
+            TokenKind::Keyword(Keyword::False) => false,
+            _ => {
+                self.error(
+                    "expected `true` or `false` for `interrupt_after_request`",
+                    self.span_here(),
+                );
+                return None;
+            }
+        };
+        self.bump();
+        self.newline();
+        Some(ScenarioFixtureConfig::Socket {
+            span,
+            path,
+            greeting,
+            response,
+            interrupt_after_request,
+        })
+    }
+
     fn parse_scenario_failure(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
         let (point_name, point_span) = self.parse_scenario_qname_field("point")?;
         let point_kind = match point_name.segments.as_slice() {
@@ -914,6 +981,19 @@ impl Parser {
             [clock, operation] if clock == "clock" && operation == "read" => {
                 ScenarioFailurePointKind::ClockRead
             }
+            [database, operation] if database == "database" => match operation.as_str() {
+                "connect" => ScenarioFailurePointKind::DatabaseConnect,
+                "read" => ScenarioFailurePointKind::DatabaseRead,
+                "write" => ScenarioFailurePointKind::DatabaseWrite,
+                "commit" => ScenarioFailurePointKind::DatabaseCommit,
+                "rollback" => ScenarioFailurePointKind::DatabaseRollback,
+                "close" => ScenarioFailurePointKind::DatabaseClose,
+                "cancel" => ScenarioFailurePointKind::DatabaseCancel,
+                _ => {
+                    self.error("unknown failure point", point_span);
+                    return None;
+                }
+            },
             _ => {
                 self.error("unknown failure point", point_span);
                 return None;
@@ -931,11 +1011,21 @@ impl Parser {
             "disk_full" => ScenarioFailureErrorKind::DiskFull,
             "timeout" => ScenarioFailureErrorKind::Timeout,
             "connection_reset" => ScenarioFailureErrorKind::ConnectionReset,
+            "interrupted" => ScenarioFailureErrorKind::Interrupted,
             _ => {
                 self.error("unknown failure error", error_span);
                 return None;
             }
         };
+        if error_kind == ScenarioFailureErrorKind::Interrupted
+            && point_name.segments[0] != "database"
+        {
+            self.error(
+                "interrupted failure is supported only at database operation boundaries",
+                error_span,
+            );
+            return None;
+        }
         let error = ScenarioFailureError {
             span: error_span,
             kind: error_kind,
@@ -1154,6 +1244,46 @@ impl Parser {
                     binding: ScenarioBinding { span, name },
                     ty,
                     value,
+                })
+            }
+            TokenKind::Name(step)
+                if (step == "unwrap" || step == "item")
+                    && self.name_at(1)
+                    && matches!(
+                        self.tokens.get(self.pos + 2).map(|token| &token.kind),
+                        Some(TokenKind::Equal)
+                    ) =>
+            {
+                let st = self.bump().span;
+                let (name, span) = self.name("scenario value binding")?;
+                self.bump();
+                let value = self.with_scenario_values(Self::parse_expr)?;
+                let binding = ScenarioBinding { span, name };
+                if step == "unwrap" {
+                    let end = value.span.clone();
+                    self.newline();
+                    return Some(ScenarioStep::Unwrap {
+                        span: Self::join(st, end),
+                        binding,
+                        value,
+                    });
+                }
+                if !matches!(&self.current().kind, TokenKind::Name(word) if word == "at") {
+                    self.error(
+                        "expected `at` and a list index after the item value",
+                        self.span_here(),
+                    );
+                    return None;
+                }
+                self.bump();
+                let index = self.integer("unsigned list index after `at`")?;
+                let end = index.span.clone();
+                self.newline();
+                Some(ScenarioStep::Item {
+                    span: Self::join(st, end),
+                    binding,
+                    value,
+                    index,
                 })
             }
             _ => {
@@ -1392,8 +1522,16 @@ impl Parser {
 
     fn parse_scenario_qname_field(&mut self, expected: &str) -> Option<(QualifiedName, Span)> {
         self.parse_scenario_field_name(expected)?;
-        let value = self.parse_qname()?;
-        let span = value.span.clone();
+        let (namespace, start) = self.name("failure-point namespace")?;
+        self.expect(TokenKind::Dot, "expected `.` in failure point")?;
+        let (operation, end) = if self.at(&TokenKind::Keyword(Keyword::Cancel)) {
+            let token = self.bump();
+            ("cancel".to_owned(), token.span)
+        } else {
+            self.name("failure-point operation")?
+        };
+        let span = Self::join(start, end);
+        let value = QualifiedName::new(span.clone(), vec![namespace, operation]);
         self.newline();
         Some((value, span))
     }
@@ -3526,9 +3664,10 @@ fn normalized_route_path(path: &str) -> bool {
     path.starts_with('/')
         && !path.starts_with("//")
         && !path.contains('\\')
-        && path[1..]
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && (path.len() == 1
+            || path[1..]
+                .split('/')
+                .all(|part| !part.is_empty() && part != "." && part != ".."))
 }
 
 fn outcome_span(outcome: &ScenarioHttpOutcome) -> Span {

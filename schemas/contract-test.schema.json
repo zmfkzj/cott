@@ -96,30 +96,7 @@
         "span": {"$ref": "#/$defs/span"}
       }
     },
-    "fixture": {
-      "type": "object",
-      "required": ["id", "kind", "source_order", "span"],
-      "additionalProperties": false,
-      "properties": {
-        "id": {"type": "string"},
-        "kind": {"enum": ["fs", "http", "clock", "failure"]},
-        "source_order": {"type": "integer", "minimum": 0},
-        "span": {"$ref": "#/$defs/span"},
-        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
-        "routes": {"type": "array", "items": {"$ref": "#/$defs/route"}},
-        "start_ms": {"type": "integer", "minimum": 0},
-        "tick_ms": {"type": "integer", "minimum": 0},
-        "point": {"enum": ["file.open", "file.read", "file.write", "file.flush", "file.replace", "http.connect", "http.read", "clock.read"]},
-        "occurrence": {"type": "integer", "minimum": 1},
-        "error": {"enum": ["permission_denied", "not_found", "disk_full", "timeout", "connection_reset"]}
-      },
-      "allOf": [
-        {"if": {"properties": {"kind": {"const": "fs"}}, "required": ["kind"]}, "then": {"required": ["files"]}},
-        {"if": {"properties": {"kind": {"const": "http"}}, "required": ["kind"]}, "then": {"required": ["routes"]}},
-        {"if": {"properties": {"kind": {"const": "clock"}}, "required": ["kind"]}, "then": {"required": ["start_ms", "tick_ms"]}},
-        {"if": {"properties": {"kind": {"const": "failure"}}, "required": ["kind"]}, "then": {"required": ["point", "occurrence", "error"]}}
-      ]
-    },
+    "fixture": {"type":"object","required":["id","kind","source_order","span"],"additionalProperties":false,"properties":{"id":{"type":"string"},"kind":{"enum":["fs","http","clock","random","failure","database","socket"]},"source_order":{"type":"integer","minimum":0},"span":{"$ref":"#/$defs/span"},"files":{"type":"array","items":{"$ref":"#/$defs/file"}},"routes":{"type":"array","items":{"$ref":"#/$defs/route"}},"start_ms":{"type":"integer","minimum":0},"tick_ms":{"type":"integer","minimum":0},"seed":{"type":"integer","minimum":0,"maximum":18446744073709551615},"point":{"enum":["file.open","file.read","file.write","file.flush","file.replace","http.connect","http.read","clock.read","database.connect","database.read","database.write","database.commit","database.rollback","database.close","database.cancel"]},"occurrence":{"type":"integer","minimum":1},"error":{"enum":["permission_denied","not_found","disk_full","timeout","connection_reset","interrupted"]},"backend":{"enum":["sqlite","duckdb","postgres"]},"path":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._/-]*$"},"greeting":{"$ref":"#/$defs/data"},"response":{"$ref":"#/$defs/data"},"interrupt_after_request":{"type":"boolean"}},"allOf":[{"if":{"properties":{"kind":{"const":"fs"}},"required":["kind"]},"then":{"required":["files"],"properties":{"backend":false,"error":false,"greeting":false,"interrupt_after_request":false,"occurrence":false,"path":false,"point":false,"response":false,"routes":false,"seed":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"kind":{"const":"http"}},"required":["kind"]},"then":{"required":["routes"],"properties":{"backend":false,"error":false,"files":false,"greeting":false,"interrupt_after_request":false,"occurrence":false,"path":false,"point":false,"response":false,"seed":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"kind":{"const":"clock"}},"required":["kind"]},"then":{"required":["start_ms","tick_ms"],"properties":{"backend":false,"error":false,"files":false,"greeting":false,"interrupt_after_request":false,"occurrence":false,"path":false,"point":false,"response":false,"routes":false,"seed":false}}},{"if":{"properties":{"kind":{"const":"random"}},"required":["kind"]},"then":{"required":["seed"],"properties":{"backend":false,"error":false,"files":false,"greeting":false,"interrupt_after_request":false,"occurrence":false,"path":false,"point":false,"response":false,"routes":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"kind":{"const":"failure"}},"required":["kind"]},"then":{"required":["point","occurrence","error"],"properties":{"backend":false,"files":false,"greeting":false,"interrupt_after_request":false,"path":false,"response":false,"routes":false,"seed":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"kind":{"const":"database"}},"required":["kind"]},"then":{"required":["backend"],"properties":{"error":false,"files":false,"greeting":false,"interrupt_after_request":false,"occurrence":false,"path":false,"point":false,"response":false,"routes":false,"seed":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"kind":{"const":"socket"}},"required":["kind"]},"then":{"required":["path","greeting","response","interrupt_after_request"],"properties":{"backend":false,"error":false,"files":false,"occurrence":false,"point":false,"routes":false,"seed":false,"start_ms":false,"tick_ms":false}}},{"if":{"properties":{"error":{"const":"interrupted"}},"required":["error"]},"then":{"properties":{"point":{"enum":["database.connect","database.read","database.write","database.commit","database.rollback","database.close","database.cancel"]}}}}]},
     "expression": {"type":"object","required":["kind","span","type"],"additionalProperties":false,"properties":{"kind":{"enum":["literal","parameter_ref","binding_ref","self_ref","constant_ref","enum_singleton_ref","field","len","unary","binary","comparison_chain","result_ref","old_state_field","intrinsic","fixture_path","fixture_url","construct","variant","option_some","result_ok","result_err","list","set","tuple","array","map","match","dyn"]},"trait_ref":{"$ref":"#/$defs/tn"},"value":{"oneOf":[{"$ref":"#/$defs/value"},{"$ref":"#/$defs/expression"}]},"symbol":{"type":"string"},"base":{"$ref":"#/$defs/expression"},"name":{"type":"string"},"operand":{"$ref":"#/$defs/expression"},"op":{"type":"string"},"left":{"$ref":"#/$defs/expression"},"right":{"$ref":"#/$defs/expression"},"operands":{"type":"array","items":{"$ref":"#/$defs/expression"}},"operators":{"type":"array","items":{"type":"string"}},"reference":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/reference"}]},"span":{"$ref":"#/$defs/span"},"type":{"$ref":"#/$defs/type"},"field":{"type":"string"},"arguments":{"type":"array","items":{"$ref":"#/$defs/expression"}},"selector":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/selector"}]},"dependencies":{"$ref":"#/$defs/selector"},"fixture":{"type":"string"},"path":{"type":"string"},"fields":{"type":"array","items":{"oneOf":[{"$ref":"#/$defs/expression"},{"$ref":"#/$defs/construct_field"}]}},"payload":{"$ref":"#/$defs/expression"},"items":{"type":"array","items":{"$ref":"#/$defs/expression"}},"entries":{"type":"array","items":{"$ref":"#/$defs/map_entry"}},"condition":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/expression"}]},"pattern":{"$ref":"#/$defs/pattern"},"scrutinee":{"$ref":"#/$defs/expression"}},"allOf":[{"if":{"properties":{"kind":{"const":"dyn"}},"required":["kind"]},"then":{"type":"object","required":["kind","trait_ref","value","type","span"],"additionalProperties":false,"properties":{"kind":{"const":"dyn"},"trait_ref":{"$ref":"#/$defs/tn"},"value":{"$ref":"#/$defs/expression"},"type":{"$ref":"#/$defs/tdyn"},"span":{"$ref":"#/$defs/span"}}},"else":{"required":["reference"]}},{"if":{"properties":{"kind":{"const":"old_state_field"}},"required":["kind"]},"then":{"type":"object","required":["field","kind","reference","span","type"],"additionalProperties":false,"properties":{"field":{"type":"string"},"kind":{"const":"old_state_field"},"reference":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/reference"}]},"span":{"$ref":"#/$defs/span"},"type":{"$ref":"#/$defs/type"}}}},{"if":{"properties":{"kind":{"const":"construct"}},"required":["kind"]},"then":{"required":["fields","symbol"],"properties":{"fields":{"type":"array","items":{"$ref":"#/$defs/construct_field"}}}}},{"if":{"properties":{"kind":{"const":"variant"}},"required":["kind"]},"then":{"required":["fields","symbol"],"properties":{"fields":{"type":"array","items":{"$ref":"#/$defs/expression"}}}}},{"if":{"properties":{"kind":{"enum":["option_some","result_ok","result_err"]}},"required":["kind"]},"then":{"required":["payload"]}},{"if":{"properties":{"kind":{"enum":["list","set","tuple","array"]}},"required":["kind"]},"then":{"required":["items"]}},{"if":{"properties":{"kind":{"const":"map"}},"required":["kind"]},"then":{"required":["entries"]}},{"if":{"properties":{"kind":{"const":"match"}},"required":["kind"]},"then":{"required":["condition","pattern","scrutinee"]}}]},
     "const_argument": {"oneOf":[{"$ref":"#/$defs/const_value"},{"$ref":"#/$defs/const_parameter"},{"$ref":"#/$defs/const_reference"},{"$ref":"#/$defs/const_binary"}]},
     "const_binary": {"type":"object","required":["kind","left","op","right","type"],"additionalProperties":false,"properties":{"kind":{"const":"binary"},"left":{"$ref":"#/$defs/const_argument"},"op":{"enum":["add","subtract","multiply","divide","remainder"]},"right":{"$ref":"#/$defs/const_argument"},"type":{"$ref":"#/$defs/const_domain"}}},
@@ -179,7 +156,7 @@
       "required": ["kind", "step_id", "span"],
       "additionalProperties": false,
       "properties": {
-        "kind": {"enum": ["call", "init", "method_call", "spawn", "await", "cancel", "tick", "assert", "data"]},
+        "kind": {"enum": ["call", "init", "method_call", "spawn", "await", "cancel", "tick", "assert", "data", "unwrap_result", "list_item"]},
         "step_id": {"type": "integer", "minimum": 0, "maximum": 63},
         "span": {"$ref": "#/$defs/span"},
         "arguments": {"type": "array", "items": {"$ref": "#/$defs/expression"}},
@@ -192,7 +169,9 @@
         "worker": {"type": "string"},
         "result": {"oneOf": [{"type": "null"}, {"type": "string"}]},
         "cancelled": {"type": "boolean"},
-        "expression": {"$ref": "#/$defs/expression"}
+        "expression": {"$ref": "#/$defs/expression"},
+        "value": {"$ref": "#/$defs/expression"},
+        "index": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
       },
       "allOf": [
         {"if": {"properties": {"kind": {"const": "call"}}, "required": ["kind"]}, "then": {"required": ["arguments", "binding", "callable_kind", "parameters", "return_type", "target"]}},
@@ -203,7 +182,10 @@
         {"if": {"properties": {"kind": {"const": "await"}}, "required": ["kind"]}, "then": {"required": ["cancelled", "result", "return_type", "worker"]}},
         {"if": {"properties": {"kind": {"const": "cancel"}}, "required": ["kind"]}, "then": {"required": ["worker"]}},
         {"if": {"properties": {"kind": {"const": "assert"}}, "required": ["kind"]}, "then": {"required": ["expression"]}},
-        {"if": {"properties": {"kind": {"const": "data"}}, "required": ["kind"]}, "then": {"required": ["binding", "expression"]}}
+        {"if": {"properties": {"kind": {"const": "data"}}, "required": ["kind"]}, "then": {"required": ["binding", "expression"]}},
+        {"if": {"properties": {"kind": {"const": "unwrap_result"}}, "required": ["kind"]}, "then": {"required": ["binding", "return_type", "value"], "properties": {"arguments": false, "callable_kind": false, "parameters": false, "target": false, "worker": false, "result": false, "cancelled": false, "expression": false, "index": false}}},
+        {"if": {"properties": {"kind": {"const": "list_item"}}, "required": ["kind"]}, "then": {"required": ["binding", "index", "return_type", "value"], "properties": {"arguments": false, "callable_kind": false, "parameters": false, "target": false, "worker": false, "result": false, "cancelled": false, "expression": false}}},
+        {"if": {"properties": {"kind": {"enum": ["unwrap_result", "list_item"]}}, "required": ["kind"]}, "else": {"properties": {"value": false, "index": false}}}
       ]
     },
     "limits": {

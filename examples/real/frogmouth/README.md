@@ -94,9 +94,9 @@ configuration/bookmark/history persistence, with no unobserved, trust-declaratio
 or unknown allowance. Deployment still requires unchanged inputs and managed
 bytes; no deployment was performed in this verification run.
 Seven requirements retain bounded scenario evidence and desktop opening remains
-unverified. The current compiler can classify contract `proved` evidence as
-`observed`; neither policy selection nor this status establishes all-branch
-execution or correctness for arbitrary user files and remote servers.
+unverified. Static proofs are reported separately and never count as execution
+observations. Neither policy selection nor bounded observation establishes
+all-branch execution or correctness for arbitrary user files and remote servers.
 
 The TUI was launched in a real tmux pty at `120×36` with scratch XDG directories.
 Observed: a local Guide document rendered; Ctrl+Y showed persisted history;

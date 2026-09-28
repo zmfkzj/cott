@@ -72,8 +72,8 @@ The raw-line search scenario also checks that backward searches starting at or
 beyond the view's end return no result, including an empty view. The search doc
 now agrees with the unchanged formal result bound. Merge-order scenarios and the
 four requirements above remain separate evidence, not additional policy selectors.
-The current compiler can classify contract `proved` evidence as `observed`;
-policy selection and an observed status do not establish execution of every path.
+Static proofs are separate from execution coverage and cannot make a clause observed.
+Policy selection and bounded observation do not establish execution of every path.
 
 The viewer itself is exercised outside Cott evidence by driving the real program in a tmux
 pseudo-terminal: plain and highlighted logs, find, two tabs, a 300,000-line / 21 MB log (End,

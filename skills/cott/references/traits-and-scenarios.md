@@ -156,6 +156,44 @@ fixtures:
         tick_ms: 1
 ```
 
+Seeded random fixtures (Python; other targets report the scenario unavailable):
+
+```cott
+fixtures:
+    random order:
+        seed: 7
+```
+
+A `random` fixture grants only the `random` effect through one scenario-private generator seeded
+with the unsigned 64-bit `seed`; successive shuffles in the scenario advance that generator.
+
+Python database fixtures use real facade-created connections, never synthetic `Opaque` handles:
+
+```cott
+fixtures:
+    database db:
+        backend: postgres
+```
+
+`db.url("/")` is the compiler-owned PostgreSQL Unix-socket URI. SQLite and DuckDB use
+`backend: sqlite` or `backend: duckdb` and `db.path("store.db")`, or authored `":memory:"`
+inputs. PostgreSQL verification needs a native PostgreSQL 16 toolchain (`COTT_POSTGRES_BIN`
+when it is not on PATH) and explicit filesystem/time budgets large enough for its private cluster.
+Do not mix PostgreSQL and HTTP in one scenario. Missing native capability is not observation.
+
+Keep live facade results with `unwrap connection = opened` (requires `Result.Ok`) and
+`item statement = executed at 0` (bounds-checked `List` access). Neither step constructs or
+copies driver state; an error variant or out-of-range index fails the scenario.
+
+Database failure points are `database.connect`, `read`, `write`, `commit`, `rollback`, `close`,
+and `cancel`, qualified with `database.`. They use the normal closed failure labels; the
+database-only `interrupted` label delivers real SIGINT at the declared operation boundary.
+An injected failure tests the public facade's error handling, not successful database execution.
+Framed `socket` fixtures use a private relative path, finite greeting/response bytes and an
+optional self-only interrupt after a complete request. Interrupt fixtures require synchronous
+calls; they cannot be combined with async workers. Kotlin and Dart report these capabilities
+unavailable rather than borrowing Python evidence.
+
 Declare the corresponding function effects exactly as described in [contracts-and-effects.md](contracts-and-effects.md). Fixture identities live in the scenario, not in host configuration.
 
 ## Keep evidence meaningful

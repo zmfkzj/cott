@@ -3,6 +3,7 @@ import http.server
 import asyncio
 import collections.abc
 import dataclasses
+import hashlib
 import importlib
 import inspect
 import itertools
@@ -10,6 +11,7 @@ import json
 import math
 import os
 import pathlib
+import stat
 import struct
 import threading
 import urllib.parse
@@ -1173,7 +1175,10 @@ async def observe_protocol(result, strategy, hints, symbol):
 
 
 
-async def invoke_facade(function, args, kwargs, symbol, callable_kind):
+async def invoke_facade(function, args, kwargs, symbol, callable_kind, interrupt=None):
+    """Invoke one facade; `interrupt` is a started socket fixture armed only around a synchronous call."""
+    if interrupt is not None and callable_kind != "sync":
+        raise AssertionError(f"{symbol}: an interrupting socket fixture arms only synchronous facade calls")
     loop = asyncio.get_running_loop()
     before = asyncio.all_tasks()
     created = []
@@ -1209,7 +1214,14 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
     asyncio.Task = TrackedTask
     loop.set_task_factory(task_factory)
     try:
-        result = function(*args, **kwargs)
+        if interrupt is None:
+            result = function(*args, **kwargs)
+        else:
+            interrupt.arm()
+            try:
+                result = function(*args, **kwargs)
+            finally:
+                interrupt.disarm()
         return await result if callable_kind == "async" else result
     finally:
         try:
@@ -1525,24 +1537,39 @@ class FixtureHttpServer:
         self.thread.join(timeout=0.1)
 
 
-def audit_fixture_root(root, limits):
-    files = 0
-    size = 0
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            raise AssertionError("fixture filesystem contains a symlink")
-        if path.is_file():
-            files += 1
-            size += path.stat().st_size
+def audit_fixture_root(root, limits, owned=(), extra_usage=(0, 0)):
+    """Bound the authored and facade-written scenario files.
+
+    Live helper roots are checked at close; their final usage is then added to the
+    remaining files so the ceiling is per scenario, never per helper.
+    """
+    owned = {os.fspath(path) for path in owned}
+    files, size = extra_usage
+    for directory, subdirectories, names in os.walk(os.fspath(root)):
+        kept = []
+        for name in subdirectories:
+            path = os.path.join(directory, name)
+            if os.path.islink(path):
+                raise AssertionError("fixture filesystem contains a symlink")
+            if path not in owned:
+                kept.append(name)
+        subdirectories[:] = kept
+        for name in names:
+            status = os.lstat(os.path.join(directory, name))
+            if stat.S_ISLNK(status.st_mode):
+                raise AssertionError("fixture filesystem contains a symlink")
+            if stat.S_ISREG(status.st_mode):
+                files += 1
+                size += status.st_size
     if files > limits["filesystem_files"] or size > limits["filesystem_bytes"]:
         raise AssertionError("fixture filesystem exceeds configured limit")
 
 
 def prepare_scenario_fixtures(scenario, root):
-    root.mkdir(parents=True, exist_ok=False)
     fixtures = {}
     failures = {}
     clock = 0
+    random_seed = None
     for fixture in scenario["fixtures"]:
         kind = fixture["kind"]
         if kind == "fs":
@@ -1556,13 +1583,17 @@ def prepare_scenario_fixtures(scenario, root):
             }
         elif kind == "clock":
             clock = fixture["start_ms"]
+        elif kind == "random":
+            if random_seed is not None:
+                raise AssertionError("scenario declares more than one random fixture")
+            random_seed = fixture["seed"]
         elif kind == "failure":
             failures[fixture["point"]] = {
                 "occurrence": fixture["occurrence"],
                 "error": fixture["error"],
             }
     audit_fixture_root(root, scenario["limits"])
-    return fixtures, failures, clock
+    return fixtures, failures, clock, random_seed
 
 
 def scenario_facade(symbol):
@@ -1577,49 +1608,198 @@ async def await_worker(worker, timeout, symbol):
     return await asyncio.wait_for(asyncio.shield(worker["task"]), timeout=timeout)
 
 
+def scenario_root(root_parent, scenario_id):
+    """A short private root: a PostgreSQL socket path beneath it must fit in sun_path."""
+    digest = hashlib.sha256(scenario_id.encode("utf-8")).hexdigest()[:16]
+    return root_parent / f"scenario-{digest}"
+
+
+def helper_root(root, prefix):
+    """A short fresh child that one helper creates and owns; authored files never collide."""
+    for index in itertools.count():
+        candidate = root / f"{prefix}{index}"
+        if not os.path.lexists(candidate):
+            return candidate
+
+
+def import_scenario_helper(scenario_id, module, *names):
+    """Compiler-owned fixture helpers are staged read-only and imported only when selected."""
+    try:
+        loaded = importlib.import_module(module)
+        return tuple(getattr(loaded, name) for name in names)
+    except (ImportError, AttributeError) as error:
+        raise AssertionError(f"{scenario_id}: fixture helper {module} is unavailable") from error
+
+
+def database_resolvers(scenario_id, helper, failure):
+    """Fixture accessors of one started database; projection refusals fail the scenario."""
+
+    def project(accessor, value):
+        try:
+            return accessor(value)
+        except failure as error:
+            raise AssertionError(f"{scenario_id}: {error}") from error
+
+    return {
+        "path": lambda value: project(helper.path, value),
+        "url": lambda value: project(helper.url, value),
+    }
+
+
+async def release_scenario(root, previous_cwd, workers, started, limits):
+    """Cancel workers, close started helpers in reverse order and remove the scenario root.
+
+    Every close runs even after an earlier one fails; the failures are returned so a
+    scenario whose fixture lifecycle did not complete never counts as observed.
+    """
+    global _SCENARIO_FIXTURES
+    _SCENARIO_FIXTURES = {}
+    problems = []
+    for worker in workers.values():
+        if not worker["task"].done():
+            worker["task"].cancel()
+    pending = [worker["task"] for worker in workers.values() if not worker["task"].done()]
+    if pending:
+        _, unfinished = await asyncio.wait(pending, timeout=0.1)
+        if unfinished:
+            problems.append("scenario cleanup left running workers")
+    os.chdir(previous_cwd)
+    helper_files = helper_bytes = 0
+    while started:
+        helper = started.pop()
+        try:
+            helper.close()
+            files, size = getattr(helper, "filesystem_usage", (0, 0))
+            helper_files += files
+            helper_bytes += size
+        except KeyboardInterrupt:
+            problems.append("a socket fixture interrupt escaped its armed facade call")
+        except Exception as error:
+            problems.append(str(error))
+    try:
+        audit_fixture_root(root, limits, extra_usage=(helper_files, helper_bytes))
+    except Exception as error:
+        problems.append(str(error))
+    try:
+        __import__("shutil").rmtree(root)
+    except OSError as error:
+        problems.append(f"scenario root cleanup failed: {error}")
+    return problems
+
+
 async def run_scenario(module_value, strategy, request):
+    global _SCENARIO_FIXTURES
     scenario = strategy["scenario"]
+    scenario_id = scenario["id"]
+    limits = scenario["limits"]
     if len(scenario["steps"]) > 64:
-        raise AssertionError(f"{scenario['id']}: step limit exceeds 64")
+        raise AssertionError(f"{scenario_id}: step limit exceeds 64")
     if scenario["lifecycle_limit"] > 64:
-        raise AssertionError(f"{scenario['id']}: lifecycle limit exceeds 64")
-    root_parent = pathlib.Path(request.get("fixture_root", os.environ.get("TMPDIR", "."))).absolute()
-    root = root_parent / f"scenario-{len(request.get('strategies', ()))}-{scenario['id'].rsplit('.', 1)[-1]}"
-    fixtures, failures, clock = prepare_scenario_fixtures(scenario, root)
-    has_http = any(fixture["kind"] == "http" for fixture in scenario["fixtures"])
-    server = FixtureHttpServer(scenario["fixtures"], scenario["limits"]) if has_http else None
-    if server is not None:
-        server.start()
-    for fixture in scenario["fixtures"]:
-        if fixture["kind"] == "http":
-            fixtures[fixture["id"]] = {
-                "path": None,
-                "url": lambda path, base=server.url: f"{base}{path}",
-            }
+        raise AssertionError(f"{scenario_id}: lifecycle limit exceeds 64")
+    databases = [fixture for fixture in scenario["fixtures"] if fixture["kind"] == "database"]
+    sockets = [fixture for fixture in scenario["fixtures"] if fixture["kind"] == "socket"]
+    if len(databases) > 1:
+        raise AssertionError(f"{scenario_id}: scenario declares more than one database fixture")
+    if len(sockets) > 1:
+        raise AssertionError(f"{scenario_id}: scenario declares more than one socket fixture")
+    interrupts = any(fixture["interrupt_after_request"] for fixture in sockets) or any(
+        fixture["kind"] == "failure" and fixture["error"] == "interrupted"
+        for fixture in scenario["fixtures"]
+    )
+    if interrupts:
+        for step in scenario["steps"]:
+            if step["kind"] in ("spawn", "await", "cancel", "tick") or step.get("callable_kind", "sync") != "sync":
+                raise AssertionError(
+                    f"{scenario_id}: interrupting fixture rejects {step['kind']} step:{step['step_id']}"
+                )
     activate = getattr(cott_runtime, "_cott_fixture_activate", None)
     token_factory = getattr(cott_runtime, "_cott_fixture_runner_token", None)
     transcript = getattr(cott_runtime, "_cott_fixture_transcript", None)
     if not all(callable(value) for value in (activate, token_factory, transcript)):
-        if server is not None:
-            server.close()
-        __import__("shutil").rmtree(root, ignore_errors=True)
         raise AssertionError("fixture runtime adapters are unavailable")
+    root_parent = pathlib.Path(
+        os.path.normpath(os.path.abspath(request.get("fixture_root", os.environ.get("TMPDIR", "."))))
+    )
+    root = scenario_root(root_parent, scenario_id)
+    root.mkdir(parents=True, exist_ok=False)
+    started = []
+    socket_helpers = []
     workers = {}
-    values = {}
-    trace = []
-    assertions = []
-    ticks = 0
     previous_cwd = os.getcwd()
-    global _SCENARIO_FIXTURES
     try:
+        fixtures, failures, clock, random_seed = prepare_scenario_fixtures(scenario, root)
+        server = None
+        if any(fixture["kind"] == "http" for fixture in scenario["fixtures"]):
+            server = FixtureHttpServer(scenario["fixtures"], limits)
+            try:
+                server.start()
+            except BaseException:
+                server.server.server_close()
+                raise
+            started.append(server)
+            for fixture in scenario["fixtures"]:
+                if fixture["kind"] == "http":
+                    fixtures[fixture["id"]] = {
+                        "path": None,
+                        "url": lambda path, base=server.url: f"{base}{path}",
+                    }
+        # Helper setup is fixture lifecycle, never a facade call: it adds no trace
+        # step and no clause observation.
+        database_roots = []
+        if databases:
+            database_type, database_error = import_scenario_helper(
+                scenario_id, "cott-scenario-database", "DatabaseFixture", "DatabaseFixtureError"
+            )
+            toolchain = request.get("postgres_toolchain")
+            for fixture in databases:
+                postgres = fixture["backend"] == "postgres"
+                if postgres and toolchain is None:
+                    raise AssertionError(
+                        f"{scenario_id}: postgres database fixture requires the host-frozen postgres_toolchain"
+                    )
+                database_root = helper_root(root, "db")
+                try:
+                    helper = database_type(
+                        fixture, os.fspath(database_root), limits, toolchain if postgres else None
+                    )
+                    helper.start()
+                except database_error as error:
+                    raise AssertionError(f"{scenario_id}: {error}") from error
+                started.append(helper)
+                database_roots.append(database_root)
+                fixtures[fixture["id"]] = database_resolvers(scenario_id, helper, database_error)
+        interrupt = None
+        if sockets:
+            (socket_type,) = import_scenario_helper(scenario_id, "cott-scenario-socket", "FramedSocketFixture")
+            for fixture in sockets:
+                config = dict(
+                    fixture,
+                    greeting=fixture_bytes(fixture["greeting"]),
+                    response=fixture_bytes(fixture["response"]),
+                )
+                try:
+                    helper = socket_type(config, os.fspath(root), limits)
+                    helper.start()
+                except AssertionError as error:
+                    raise AssertionError(f"{scenario_id}: {error}") from error
+                started.append(helper)
+                socket_helpers.append(helper)
+                if fixture["interrupt_after_request"]:
+                    interrupt = helper
+        values = {}
+        trace = []
+        assertions = []
+        ticks = 0
         os.chdir(root)
         with activate(
             token_factory(),
             root=root,
             http_url=server.url if server is not None else None,
             clock=clock,
+            random_seed=random_seed,
+            database=bool(databases),
             failures=failures,
-            transcript_limit=scenario["limits"]["transcript_events"],
+            transcript_limit=limits["transcript_events"],
         ):
             _SCENARIO_FIXTURES = fixtures
             assertion_module = importlib.import_module(module_value["module"])
@@ -1630,14 +1810,14 @@ async def run_scenario(module_value, strategy, request):
                     function, module = scenario_facade(step["target"])
                     args = [evaluate(argument, values, module) for argument in step["arguments"]]
                     values[local(step["binding"])] = await invoke_facade(
-                        function, args, {}, strategy["symbol"], step["callable_kind"]
+                        function, args, {}, strategy["symbol"], step["callable_kind"], interrupt
                     )
                     trace.append({"event_id": f"step:{step_id}", "kind": "call"})
                 elif kind == "init":
                     facade, module = scenario_facade(step["target"])
                     args = [evaluate(argument, values, module) for argument in step["arguments"]]
                     values[local(step["binding"])] = await invoke_facade(
-                        facade, args, {}, strategy["symbol"], "sync"
+                        facade, args, {}, strategy["symbol"], "sync", interrupt
                     )
                     trace.append({"event_id": f"step:{step_id}", "kind": "init"})
                 elif kind == "method_call":
@@ -1648,12 +1828,12 @@ async def run_scenario(module_value, strategy, request):
                         for argument in step["arguments"]
                     ]
                     values[local(step["binding"])] = await invoke_facade(
-                        method, args, {}, strategy["symbol"], step["callable_kind"]
+                        method, args, {}, strategy["symbol"], step["callable_kind"], interrupt
                     )
                     trace.append({"event_id": f"step:{step_id}", "kind": "method_call"})
                 elif kind == "spawn":
                     if len(workers) >= scenario["lifecycle_limit"]:
-                        raise AssertionError(f"{scenario['id']}: worker limit exceeded")
+                        raise AssertionError(f"{scenario_id}: worker limit exceeded")
                     function, module = scenario_facade(step["target"])
                     args = [evaluate(argument, values, module) for argument in step["arguments"]]
                     task = asyncio.create_task(function(*args))
@@ -1661,32 +1841,32 @@ async def run_scenario(module_value, strategy, request):
                     trace.append({"event_id": f"step:{step_id}", "kind": "spawn"})
                 elif kind == "tick":
                     if ticks >= scenario["lifecycle_limit"]:
-                        raise AssertionError(f"{scenario['id']}: lifecycle tick limit exceeded")
+                        raise AssertionError(f"{scenario_id}: lifecycle tick limit exceeded")
                     ticks += 1
                     await asyncio.sleep(0)
                     trace.append({"event_id": f"step:{step_id}", "kind": "tick"})
                 elif kind == "cancel":
                     worker = workers.get(local(step["worker"]))
                     if worker is None or worker["awaited"] or worker["cancelled"] or worker["task"].done():
-                        raise AssertionError(f"{scenario['id']}: terminal worker cancellation")
+                        raise AssertionError(f"{scenario_id}: terminal worker cancellation")
                     worker["task"].cancel()
                     worker["cancelled"] = True
                     trace.append({"event_id": f"step:{step_id}", "kind": "cancel"})
                 elif kind == "await":
                     worker = workers.get(local(step["worker"]))
                     if worker is None or worker["awaited"]:
-                        raise AssertionError(f"{scenario['id']}: terminal worker await")
+                        raise AssertionError(f"{scenario_id}: terminal worker await")
                     worker["awaited"] = True
                     try:
                         result = await await_worker(
-                            worker, scenario["limits"]["scenario_timeout_ms"] / 1000, strategy["symbol"]
+                            worker, limits["scenario_timeout_ms"] / 1000, strategy["symbol"]
                         )
                     except asyncio.CancelledError:
                         if not step["cancelled"]:
-                            raise AssertionError(f"{scenario['id']}: worker was cancelled unexpectedly")
+                            raise AssertionError(f"{scenario_id}: worker was cancelled unexpectedly")
                     else:
                         if step["cancelled"]:
-                            raise AssertionError(f"{scenario['id']}: expected cancelled worker")
+                            raise AssertionError(f"{scenario_id}: expected cancelled worker")
                         values[local(step["result"])] = result
                     trace.append({"event_id": f"step:{step_id}", "kind": "await"})
                 elif kind == "data":
@@ -1695,9 +1875,31 @@ async def run_scenario(module_value, strategy, request):
                         step["expression"], values, assertion_module
                     )
                     trace.append({"event_id": f"step:{step_id}", "kind": "data"})
+                elif kind == "unwrap_result":
+                    observed = evaluate(step["value"], values, assertion_module)
+                    if type(observed) is not cott_runtime.Ok:
+                        raise AssertionError(
+                            f"{scenario_id}: unwrap step:{step_id} observed {type(observed).__name__}, not Ok"
+                        )
+                    # The live payload object itself: identity and ABI state are preserved.
+                    values[local(step["binding"])] = observed.value
+                    trace.append({"event_id": f"step:{step_id}", "kind": "unwrap_result"})
+                elif kind == "list_item":
+                    observed = evaluate(step["value"], values, assertion_module)
+                    if type(observed) is not cott_runtime.CottList:
+                        raise AssertionError(
+                            f"{scenario_id}: item step:{step_id} observed {type(observed).__name__}, not List"
+                        )
+                    index = step["index"]
+                    if type(index) is not int or not 0 <= index < len(observed):
+                        raise AssertionError(
+                            f"{scenario_id}: item step:{step_id} index {index} is outside a List of length {len(observed)}"
+                        )
+                    values[local(step["binding"])] = observed[index]
+                    trace.append({"event_id": f"step:{step_id}", "kind": "list_item"})
                 elif kind == "assert":
                     if not evaluate(step["expression"], values, assertion_module):
-                        raise AssertionError(f"{scenario['id']}: assertion step:{step_id} failed")
+                        raise AssertionError(f"{scenario_id}: assertion step:{step_id} failed")
                     assertions.append({
                         "assertion_id": f"assert:{step_id}",
                         "span": step["span"],
@@ -1705,34 +1907,36 @@ async def run_scenario(module_value, strategy, request):
                     })
                     trace.append({"event_id": f"step:{step_id}", "kind": "assert"})
                 else:
-                    raise AssertionError(f"{scenario['id']}: unsupported scenario step `{kind}`")
+                    raise AssertionError(f"{scenario_id}: unsupported scenario step `{kind}`")
             live = [worker["task"] for worker in workers.values() if not worker["awaited"]]
             if live:
-                raise AssertionError(f"{scenario['id']}: leaked live workers")
-            audit_fixture_root(root, scenario["limits"])
-            events = [
-                {"event_id": f"fixture:{index}", "kind": event["kind"]}
-                for index, event in enumerate(transcript())
-            ]
-            return {
-                "scenario_id": scenario["id"],
-                "grade": "test observation",
-                "trace": trace,
-                "assertions": assertions,
-                "fixtures": events,
-            }
-    finally:
-        _SCENARIO_FIXTURES = {}
-        for worker in workers.values():
-            if not worker["task"].done():
-                worker["task"].cancel()
-        pending = [worker["task"] for worker in workers.values() if not worker["task"].done()]
-        if pending:
-            await asyncio.wait(pending, timeout=0.1)
-        os.chdir(previous_cwd)
-        if server is not None:
-            server.close()
-        __import__("shutil").rmtree(root, ignore_errors=True)
+                raise AssertionError(f"{scenario_id}: leaked live workers")
+            audit_fixture_root(root, limits, database_roots)
+            runtime_events = [event["kind"] for event in transcript()]
+    except BaseException as error:
+        for problem in await release_scenario(root, previous_cwd, workers, started, limits):
+            error.add_note(f"{scenario_id}: fixture cleanup also failed: {problem}")
+        raise
+    problems = await release_scenario(root, previous_cwd, workers, started, limits)
+    if problems:
+        raise AssertionError(f"{scenario_id}: {'; '.join(problems)}")
+    # Closing joined each socket peer, so its events are final. They follow the runtime
+    # transcript in a fixed order and share its limit; only event kinds are public.
+    kinds = runtime_events + [event["kind"] for helper in socket_helpers for event in helper.events]
+    if len(kinds) > limits["transcript_events"]:
+        raise AssertionError(f"{scenario_id}: fixture transcript exceeds configured limit")
+    return {
+        "scenario_id": scenario_id,
+        "grade": "test observation",
+        "trace": trace,
+        "assertions": assertions,
+        "fixtures": [
+            {"event_id": f"fixture:{index}", "kind": kind}
+            for index, kind in enumerate(kinds)
+        ],
+    }
+
+
 async def main():
     request = json.load(__import__("sys").stdin)
     strategies = {strategy["symbol"]: strategy for strategy in request["strategies"]}
@@ -1749,7 +1953,12 @@ async def main():
                 with cott_runtime._cott_observe_contracts() as events:
                     scenarios.append(await run_scenario(module_value, strategy, request))
                 validate_contract_observations(events)
-                scenario_observations.append((strategy["scenario"]["id"], events))
+                # Clause credit joins across network partitions on the host, so the
+                # runner reports each scenario's passed clauses instead of appending them.
+                scenario_observations.append({
+                    "scenario_id": strategy["scenario"]["id"],
+                    "clauses": sorted({(symbol, clause) for symbol, clause, condition in events if condition}),
+                })
     for module_value in request["modules"]:
         for declaration in module_value["declarations"]:
             if declaration["kind"] == "function":
@@ -1823,28 +2032,11 @@ async def main():
                     contracts.extend(evidence(symbol, clauses, observed, grade, reason, request, stats))
                     if observation is not None:
                         lifecycle.append(observation)
-    for scenario_id, events in scenario_observations:
-        passed = {(symbol, clause) for symbol, clause, condition in events if condition}
-        for contract in contracts:
-            symbol, key = contract["symbol"], contract["clause_id"]
-            if (symbol, key) not in passed:
-                continue
-            item = {
-                "grade": "test observation",
-                "mode": request["runtime_validation"],
-                "valid_cases": 1,
-                "reason": None,
-            }
-            if any(obligation["clause_id"] == key for obligation in strategies[symbol].get("obligations", ())):
-                item.update({
-                    "eligible_cases": 1,
-                    "applicable_cases": 1,
-                    "satisfied_cases": 1,
-                    "condition_false_cases": 0,
-                    "first_witness": {"case_id": f"scenario:{scenario_id}"},
-                })
-            contract["evidence"].append(item)
-    print(json.dumps({"contracts": contracts, "lifecycle": lifecycle, "scenarios": scenarios}, sort_keys=True, separators=(",", ":")))
+    print(json.dumps({"contracts": contracts, "lifecycle": lifecycle, "scenarios": scenarios, "scenario_observations": scenario_observations}, sort_keys=True, separators=(",", ":")))
 
 
-asyncio.run(main())
+# Runner.close() still finalizes the loop, but unlike asyncio.run() no SIGINT
+# cancellation shim is installed: a socket fixture interrupt must reach the
+# armed synchronous facade call as KeyboardInterrupt.
+with asyncio.Runner() as runner:
+    runner.get_loop().run_until_complete(main())

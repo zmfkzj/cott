@@ -2992,3 +2992,104 @@ fn emitted_python_scenarios_execute_impl_init_receiver_method_and_nested_dyn() {
         assert!(stderr.contains(expected), "{stderr}");
     }
 }
+
+const SEEDED_SHUFFLE: &str = r#"module demo
+fn shuffled(names: List[Str]) -> List[Str]:
+    ensures result.len == names.len
+    effects [random]
+scenario seeded_order:
+    fixtures:
+        random order:
+            seed: 7
+    call first = shuffled(List("a", "b", "c", "d", "e"))
+    assert first == List("e", "a", "d", "b", "c")
+    call second = shuffled(List("a", "b", "c", "d", "e"))
+    assert second == List("c", "d", "b", "e", "a")
+"#;
+
+/// A random scenario grants one seeded generator whose successive shuffles are reproducible.
+#[test]
+fn emitted_python_random_scenarios_shuffle_with_the_declared_seed() {
+    let run = |body: &str| {
+        let implementation = format!(
+            "import cott_runtime\nfrom cott_runtime import CottList\n\ndef shuffled(names: CottList[str]) -> CottList[str]:\n    values = list(names)\n{body}    return CottList(values=values)\n"
+        );
+        run_emitted_contract_runner(
+            SEEDED_SHUFFLE,
+            &[("demo.shuffled", implementation.as_str())],
+            &["demo.scenario.seeded_order"],
+        )
+    };
+    let Some(output) = run("    cott_runtime._cott_fixture_shuffle(values)\n") else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+    assert_eq!(
+        report["scenarios"][0]["fixtures"],
+        json!([
+            {"event_id": "fixture:0", "kind": "random.shuffle"},
+            {"event_id": "fixture:1", "kind": "random.shuffle"},
+        ])
+    );
+
+    let Some(output) = run("") else {
+        return;
+    };
+    assert!(!output.status.success(), "unshuffled order passed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("assertion step:1 failed"), "{stderr}");
+}
+
+#[test]
+fn random_scenario_seed_reaches_the_strategy_as_an_exact_u64() {
+    use cott::compiler::{SourceFile, parse_project};
+
+    let source = "module demo\nfn shuffled(names: List[Str]) -> List[Str]:\n    effects [random]\nscenario seeded:\n    fixtures:\n        random order:\n            seed: 18446744073709551615\n    call value = shuffled(List(\"a\"))\n";
+    let parsed = parse_project([SourceFile::new("src/demo.cott", source)]).expect("parse");
+    let hir = cott::hir::lower(Path::new("src"), parsed).expect("lower");
+    let ir = cott::ir::render(&hir).expect("canonical IR");
+    let strategies = derive_strategies(&ir, &VerificationConfig::default()).expect("strategies");
+    let scenario = strategies
+        .iter()
+        .find(|strategy| strategy.symbol == "demo.scenario.seeded")
+        .and_then(|strategy| strategy.scenario.as_ref())
+        .expect("random scenario strategy");
+    assert_eq!(scenario.required_effects, ["random"]);
+    assert_eq!(scenario.fixtures[0]["kind"], "random");
+    assert_eq!(scenario.fixtures[0]["seed"].as_u64(), Some(u64::MAX));
+
+    let module: Value = serde_json::from_slice(&ir.modules[0].bytes).expect("module JSON");
+    let index = module["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .position(|declaration| declaration["kind"] == "scenario")
+        .expect("scenario declaration");
+    for seed in [
+        json!(-1),
+        json!(1.5),
+        json!(18_446_744_073_709_551_616u128 as f64),
+    ] {
+        let mut invalid = module.clone();
+        invalid["declarations"][index]["fixtures"][0]["seed"] = seed.clone();
+        assert!(
+            canonical_bytes(&invalid).is_err(),
+            "seed {seed} was accepted"
+        );
+    }
+    let mut seedless = module;
+    seedless["declarations"][index]["fixtures"][0]
+        .as_object_mut()
+        .expect("fixture object")
+        .remove("seed");
+    assert!(
+        canonical_bytes(&seedless).is_err(),
+        "random fixture requires its seed"
+    );
+}

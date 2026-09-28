@@ -2647,9 +2647,19 @@ fn render_scenario(
                     "clock fixture has no Dart runtime interception authority",
                 ));
             }
+            Some("random") => {
+                return Err(RenderFailure::unavailable(
+                    "random fixture has no Dart runtime entropy authority",
+                ));
+            }
             Some("failure") => {
                 return Err(RenderFailure::unavailable(
                     "failure fixture has no Dart runtime interception authority",
+                ));
+            }
+            Some("database" | "socket") => {
+                return Err(RenderFailure::unavailable(
+                    "database and socket fixtures have no Dart runtime authority",
                 ));
             }
             Some(other) => {
@@ -3103,6 +3113,38 @@ fn render_scenario(
                 )
                 .unwrap();
                 assertions = assertions.saturating_add(1);
+            }
+            Some("unwrap_result" | "list_item") => {
+                let binding = escape_identifier(local_name(
+                    step.get("binding")
+                        .and_then(Value::as_str)
+                        .ok_or("Dart scenario extraction has no binding")?,
+                ))?;
+                let value = step
+                    .get("value")
+                    .ok_or("Dart scenario extraction has no value")?;
+                let expression =
+                    super::expressions::render_scenario_expression(value, plan, aliases)?;
+                let temporary = format!("_cottExtract{step_id}");
+                writeln!(rendered, "      final {temporary} = {expression};").unwrap();
+                if step["kind"] == "unwrap_result" {
+                    let ty = value.get("type").ok_or("scenario unwrap has no type")?;
+                    let ok = emit::render_consumer_type(plan, &ty["ok"], aliases)?;
+                    let error = emit::render_consumer_type(plan, &ty["error"], aliases)?;
+                    writeln!(rendered, "      if ({temporary} is! cott_runtime.Ok<{ok}, {error}>) throw const _ScenarioAssertionFailure();\n      final {binding} = {temporary}.value;").unwrap();
+                } else {
+                    let index = step
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or("Dart scenario item has no u64 index")?;
+                    let index_value = if index <= i32::MAX as u64 { index } else { 0 };
+                    let condition = if index <= i32::MAX as u64 {
+                        format!("{index} >= {temporary}.length")
+                    } else {
+                        "true".to_owned()
+                    };
+                    writeln!(rendered, "      if ({condition}) throw const _ScenarioAssertionFailure();\n      final {binding} = {temporary}[{index_value}];").unwrap();
+                }
             }
             Some(other) => {
                 return Err(format!("unsupported Dart scenario step `{other}`").into());
@@ -3723,6 +3765,54 @@ runtime_validation = "boundary"
         assert!(
             toe < cott,
             "contract literals must precede synthetic Str candidates"
+        );
+    }
+
+    #[test]
+    fn random_scenario_is_reported_unavailable_instead_of_authorized() {
+        let source = "module demo.main\n\nfn pick(value: Str) -> Str:\n    ensures result == value\n    effects [random]\n\nscenario seeded:\n    fixtures:\n        random order:\n            seed: 7\n    call picked = pick(\"a\")\n    assert picked == \"a\"\n";
+        let parsed = crate::compiler::parse_project([crate::compiler::SourceFile::new(
+            "demo/main.cott",
+            source,
+        )])
+        .expect("parse random fixture");
+        let hir =
+            crate::hir::lower(std::path::Path::new("src"), parsed).expect("lower random fixture");
+        let ir = crate::ir::render(&hir).expect("render random fixture IR");
+        let plan = DartPlan::from_ir(&ir).expect("project random fixture");
+        let config = DartProjectConfig::parse(
+            std::path::Path::new("cott.toml"),
+            r#"[project]
+name = "demo"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart"
+generated = "generated/dart"
+runtime_validation = "boundary"
+"#,
+        )
+        .expect("parse random manifest");
+        let strategies = crate::contract_test::derive_strategies(&plan.ir, &config.verification)
+            .expect("derive random strategies");
+        let program = render(&config, &plan, &strategies, &config.verification)
+            .expect("render random scenario runner");
+        let reason = "random fixture has no Dart runtime entropy authority";
+        assert_eq!(
+            program
+                .unavailable
+                .get("demo.main.scenario.seeded")
+                .map(String::as_str),
+            Some(reason)
+        );
+        assert!(
+            program
+                .unavailable
+                .get("demo.main.pick")
+                .is_some_and(|message| message.contains(reason)),
+            "{:?}",
+            program.unavailable
         );
     }
 }

@@ -1,0 +1,425 @@
+module real.pgcli.database_scenarios
+
+use real.pgcli.connection.{
+    ConnectError,
+    ConnectionParam,
+    ConnectionSpec,
+    Executor,
+    OpenRequest,
+    ReconnectRequest,
+    open_executor,
+    copy_executor,
+    reconnect_executor,
+    close_executor,
+}
+use real.pgcli.completion.{
+    MetadataRefreshError,
+    MetadataRefreshRequest,
+    refresh_completion_metadata,
+}
+use real.pgcli.session.{
+    EvaluateError,
+    Session,
+    SessionSettings,
+    SpecialSetup,
+    TerminalSize,
+    create_special_handle,
+    database_listing,
+    run_init_commands,
+    view_definition_sql,
+    function_definition_sql,
+    evaluate_pgcli_command,
+    execute_pgcli_command,
+    ping_database,
+}
+
+data fixture_open_request: OpenRequest = OpenRequest(
+    spec: ConnectionSpec(
+        database: "postgres",
+        host: "",
+        user: "cott_fixture",
+        port: "",
+        password: "",
+        dsn: db.url("/"),
+        extra: List(),
+    ),
+    application_name: "cott-scenario",
+    force_password_prompt: false,
+    never_password_prompt: true,
+    keyring_enabled: false,
+    explicit_timeout: Option.Some(value: 2),
+    default_timeout: 2,
+    pgpassword: "",
+    pgconnect_timeout: "",
+    dsn_alias: Option.Nothing,
+    explicit_tunnel: Option.Nothing,
+    dsn_tunnels: List(),
+    host_tunnels: List(),
+)
+
+data fixture_invalid_open_request: OpenRequest = OpenRequest(
+    spec: ConnectionSpec(
+        database: "postgres",
+        host: "",
+        user: "cott_fixture",
+        port: "",
+        password: "",
+        dsn: "postgresql:///?cott_invalid_parameter=x",
+        extra: List(ConnectionParam(name: "cott_invalid_parameter", value: "x")),
+    ),
+    application_name: "cott-scenario",
+    force_password_prompt: false,
+    never_password_prompt: true,
+    keyring_enabled: false,
+    explicit_timeout: Option.Some(value: 2),
+    default_timeout: 2,
+    pgpassword: "",
+    pgconnect_timeout: "",
+    dsn_alias: Option.Nothing,
+    explicit_tunnel: Option.Nothing,
+    dsn_tunnels: List(),
+    host_tunnels: List(),
+)
+
+data fixture_session_settings: SessionSettings = SessionSettings(
+    table_format: "csv",
+    expanded_output: false,
+    auto_expand: false,
+    multi_line: false,
+    multiline_mode: "psql",
+    vi_mode: false,
+    explain_mode: false,
+    smart_completion: true,
+    hide_named_query_text: false,
+    verbose_errors: false,
+    output_file: Option.Nothing,
+    log_file: Option.Nothing,
+    row_limit: 0,
+    max_field_width: Option.Nothing,
+    null_string: "<null>",
+    on_error: "STOP",
+    destructive_warning: List(),
+    destructive_warning_restarts_connection: false,
+    destructive_statements_require_transaction: false,
+    force_destructive: false,
+    auto_retry_closed_connection: false,
+    tuples_only: true,
+    less_chatty: true,
+    decimal_format: "d",
+    float_format: "g",
+    column_date_formats: Map(),
+    case_column_headers: false,
+    output_style: Option.Nothing,
+    prompt_format: "> ",
+    prompt_dsn_format: Option.Nothing,
+    dsn_alias: Option.Nothing,
+    scripted: true,
+    completion_refreshing: false,
+)
+
+scenario postgres_connections_queries_and_catalogs_are_real:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "pgclirc" text("[named queries]\n")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    assert executor.dbname == "postgres" and starts_with(executor.server_version, "16.")
+    call copied = copy_executor(executor)
+    unwrap independent = copied
+    assert independent.pid != executor.pid
+    call closed_copy = close_executor(independent)
+    call reconnected = reconnect_executor(
+        executor,
+        ReconnectRequest(database: "postgres", user: "", host: "", port: ""),
+    )
+    unwrap active = reconnected
+    assert active.dbname == "postgres" and active.pid != executor.pid
+    call missing = reconnect_executor(
+        active,
+        ReconnectRequest(database: "cott_missing_database", user: "", host: "", port: ""),
+    )
+    assert missing matches Result.Err(ConnectError.Failed(_))
+    call usable = ping_database(active)
+    assert usable
+    call prepared = run_init_commands(
+        active,
+        List(
+            "create table cott_items(value integer)",
+            "insert into cott_items values (7), (9)",
+            "create view cott_view as select value from cott_items",
+        ),
+    )
+    assert prepared == Result.Ok(value: ())
+    call listed = database_listing(active)
+    unwrap listing = listed
+    assert starts_with(listing, "List of databases")
+    call view = view_definition_sql(active, "cott_view")
+    unwrap definition = view
+    assert starts_with(definition, "CREATE OR REPLACE VIEW ")
+    call missing_view = view_definition_sql(active, "cott_missing_view")
+    assert missing_view matches Result.Err(EvaluateError.Failed(_))
+    call missing_function = function_definition_sql(active, "cott_missing_function")
+    assert missing_function matches Result.Err(EvaluateError.Failed(_))
+    call invalid_command = run_init_commands(active, List("select cott_missing_column"))
+    assert invalid_command matches Result.Err(EvaluateError.Failed(_))
+    call refreshed = refresh_completion_metadata(
+        active,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    unwrap catalog = refreshed
+    call configured = create_special_handle(
+        SpecialSetup(timing: false, enable_pager: false, config_path: files.path("pgclirc")),
+    )
+    unwrap special = configured
+    data session: Session = Session(
+        settings: fixture_session_settings,
+        executor: active,
+        special: special,
+        catalog: catalog,
+        last_query: "",
+    )
+    call evaluated = evaluate_pgcli_command(
+        session,
+        "select sum(value) as total from cott_items",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    unwrap evaluation = evaluated
+    assert evaluation.query.successful and evaluation.output == "16"
+    call inserted = execute_pgcli_command(
+        evaluation.session,
+        "insert into cott_items values (11)",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    assert inserted.query.successful and inserted.query.mutated and not inserted.quit
+    call summed = evaluate_pgcli_command(
+        inserted.session,
+        "select sum(value) as total from cott_items",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    unwrap total = summed
+    assert total.query.successful and total.output == "27"
+    call closed = close_executor(active)
+
+scenario postgres_copy_failure_preserves_the_original_connection:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "anchor" text("")
+        failure disconnected:
+            point: database.connect
+            occurrence: 2
+            error: connection_reset
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call failed_copy = copy_executor(executor)
+    assert failed_copy matches Result.Err(ConnectError.Failed(_))
+    call usable = ping_database(executor)
+    assert usable
+    call bad_parameters = open_executor(fixture_invalid_open_request)
+    assert bad_parameters matches Result.Err(ConnectError.Failed(_))
+    call closed = close_executor(executor)
+
+scenario postgres_catalog_failures_preserve_error_categories:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "blocked" text("not a directory")
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call casing = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(
+            casing_file: Option.Some(value: files.path("blocked/casing.txt")),
+            generate_casing_file: true,
+        ),
+    )
+    assert casing matches Result.Err(MetadataRefreshError.CasingFileFailed(_, _))
+    call closed = close_executor(executor)
+    call failed_query = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    assert failed_query matches Result.Err(MetadataRefreshError.QueryFailed(_))
+    call failed_listing = database_listing(executor)
+    assert failed_listing matches Result.Err(EvaluateError.Failed(_))
+
+scenario postgres_evaluation_interrupts_are_real_signals:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "pgclirc" text("[named queries]\n")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+        failure stopped:
+            point: database.read
+            occurrence: 2
+            error: interrupted
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call refreshed = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    unwrap catalog = refreshed
+    call configured = create_special_handle(
+        SpecialSetup(timing: false, enable_pager: false, config_path: files.path("pgclirc")),
+    )
+    unwrap special = configured
+    data session: Session = Session(
+        settings: fixture_session_settings,
+        executor: executor,
+        special: special,
+        catalog: catalog,
+        last_query: "",
+    )
+    call evaluated = evaluate_pgcli_command(
+        session,
+        "select 1",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    assert evaluated matches Result.Err(EvaluateError.Interrupted)
+    call closed = close_executor(executor)
+
+scenario postgres_evaluation_failure_is_not_a_success:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "pgclirc" text("[named queries]\n")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+        failure stopped:
+            point: database.read
+            occurrence: 2
+            error: permission_denied
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call refreshed = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    unwrap catalog = refreshed
+    call configured = create_special_handle(
+        SpecialSetup(timing: false, enable_pager: false, config_path: files.path("pgclirc")),
+    )
+    unwrap special = configured
+    data session: Session = Session(
+        settings: fixture_session_settings,
+        executor: executor,
+        special: special,
+        catalog: catalog,
+        last_query: "",
+    )
+    call evaluated = evaluate_pgcli_command(
+        session,
+        "select 1",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    assert evaluated matches Result.Err(EvaluateError.Failed(_))
+    call closed = close_executor(executor)
+
+scenario postgres_evaluation_reports_closed_connections:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "pgclirc" text("[named queries]\n")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call refreshed = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    unwrap catalog = refreshed
+    call configured = create_special_handle(
+        SpecialSetup(timing: false, enable_pager: false, config_path: files.path("pgclirc")),
+    )
+    unwrap special = configured
+    data session: Session = Session(
+        settings: fixture_session_settings,
+        executor: executor,
+        special: special,
+        catalog: catalog,
+        last_query: "",
+    )
+    call closed = close_executor(executor)
+    call evaluated = evaluate_pgcli_command(
+        session,
+        "select 1",
+        TerminalSize(columns: 80, rows: 24),
+    )
+    assert evaluated matches Result.Err(EvaluateError.ConnectionLost(_))
+
+scenario postgres_evaluation_reports_unsupported_special_commands:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "pgclirc" text("[named queries]\n")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    call refreshed = refresh_completion_metadata(
+        executor,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    unwrap catalog = refreshed
+    call configured = create_special_handle(
+        SpecialSetup(timing: false, enable_pager: false, config_path: files.path("pgclirc")),
+    )
+    unwrap special = configured
+    data session: Session = Session(
+        settings: fixture_session_settings,
+        executor: executor,
+        special: special,
+        catalog: catalog,
+        last_query: "",
+    )
+    call evaluated = evaluate_pgcli_command(session, "\\do", TerminalSize(columns: 80, rows: 24))
+    assert evaluated matches Result.Err(EvaluateError.NotImplemented)
+    call closed = close_executor(executor)
+
+scenario caller_virtual_database_flag_refuses_catalog_queries:
+    fixtures:
+        database db:
+            backend: postgres
+        fs files:
+            file "anchor" text("")
+    call opened = open_executor(fixture_open_request)
+    unwrap executor = opened
+    data declared_virtual: Executor = Executor(
+        connection: executor.connection,
+        tunnel: executor.tunnel,
+        params: executor.params,
+        dbname: executor.dbname,
+        user: executor.user,
+        host: executor.host,
+        port: executor.port,
+        pid: executor.pid,
+        superuser: executor.superuser,
+        server_version: executor.server_version,
+        virtual_database: true,
+    )
+    call refused = refresh_completion_metadata(
+        declared_virtual,
+        MetadataRefreshRequest(casing_file: Option.Nothing, generate_casing_file: false),
+    )
+    assert refused matches Result.Err(MetadataRefreshError.VirtualDatabase)
+    call still_open = ping_database(executor)
+    assert still_open
+    call closed = close_executor(executor)

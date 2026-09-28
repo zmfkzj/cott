@@ -1,9 +1,9 @@
 import contextlib
+import threading
 from typing import Any, Final, cast
 
-from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
-
-from real.harlequin.adapters_types import Connection, ConnectionRequest, QueryError, QueryError_Failed, SettingValue_Flag, SettingValue_Text
+from cott_runtime import CottContractViolation, CottList, Err, Nothing, Ok, Result, Some, U64, _cott_fixture_database
+from real.harlequin.adapters_types import AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_Postgres, AdapterKind_Sqlite, AdapterKind_Trino, Connection, ConnectionRequest, QueryError, QueryError_Failed, SettingValue_Flag, SettingValue_Text
 from real.harlequin.catalog import normalize_catalog
 from real.harlequin.catalog_types import CatalogEntry, CatalogKind, CatalogKind_Column, CatalogKind_Database, CatalogKind_Other, CatalogKind_Schema, CatalogKind_Table, CatalogKind_TemporaryTable, CatalogKind_View
 
@@ -16,36 +16,123 @@ def _fail(message: str) -> Result[CottList[CatalogEntry], QueryError]:
     return Err(error=QueryError_Failed(title=_TITLE, message=message))
 
 
+def _adapter_name(kind: AdapterKind) -> str:
+    if isinstance(kind, AdapterKind_DuckDb):
+        return "DuckDb"
+    if isinstance(kind, AdapterKind_Sqlite):
+        return "Sqlite"
+    if isinstance(kind, AdapterKind_Postgres):
+        return "Postgres"
+    if isinstance(kind, AdapterKind_MySql):
+        return "MySql"
+    if isinstance(kind, AdapterKind_Odbc):
+        return "Odbc"
+    if isinstance(kind, AdapterKind_BigQuery):
+        return "BigQuery"
+    if isinstance(kind, AdapterKind_Trino):
+        return "Trino"
+    if isinstance(kind, AdapterKind_Databricks):
+        return "Databricks"
+    if isinstance(kind, AdapterKind_Adbc):
+        return "Adbc"
+    if isinstance(kind, AdapterKind_Cassandra):
+        return "Cassandra"
+    if isinstance(kind, AdapterKind_NebulaGraph):
+        return "NebulaGraph"
+    return "Chdb"
+
+
+def _session(connection: Connection) -> dict[str, object] | None:
+    handle = connection.session
+    if handle.tag != _TAG:
+        return None
+    raw = handle.unwrap()
+    if not isinstance(raw, dict):
+        return None
+    payload = cast(dict[str, object], raw)
+    if set(payload) != set(_KEYS.split(",")):
+        return None
+    adapter = payload["adapter"]
+    request = payload["request"]
+    if not isinstance(adapter, str) or not isinstance(request, ConnectionRequest):
+        return None
+    if adapter != _adapter_name(connection.adapter) or adapter != _adapter_name(request.adapter):
+        return None
+    if connection.read_only != request.read_only or payload["driver"] is None:
+        return None
+    if not isinstance(payload["cleanup"], contextlib.ExitStack):
+        return None
+    if not isinstance(payload["lock"], type(threading.RLock())) or not isinstance(payload["closed"], bool):
+        return None
+    mode = payload["transaction_mode"]
+    if mode is not None and not isinstance(mode, str):
+        return None
+    modes = payload["modes"]
+    active = payload["active"]
+    if not isinstance(modes, list) or not isinstance(active, list):
+        return None
+    if any(not isinstance(label, str) for label in cast(list[object], modes)):
+        return None
+    if mode is not None and mode not in cast(list[str], modes):
+        return None
+    return payload
+
+
+def _boundary() -> None:
+    try:
+        _cott_fixture_database("read")
+    except CottContractViolation as error:
+        if error.message == "fixture adapters are inactive":
+            return
+        cause = error.__cause__
+        if isinstance(cause, OSError):
+            raise cause
+        raise RuntimeError(error.message) from error
+
+
 def _quote(name: str, backtick: bool) -> str:
     if backtick:
         return "`" + name.replace("`", "``") + "`"
     return '"' + name.replace('"', '""') + '"'
 
 
-def _s(value: object) -> str:
-    return "" if value is None else str(value)
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def _rows(raw: Any) -> list[list[object]]:
-    out: list[list[object]] = []
-    for row in raw:
-        item: Any = row
-        out.append([cast(object, v) for v in item])
-    return out
+    result: list[list[object]] = []
+    for row_raw in raw:
+        row: Any = row_raw
+        result.append([cast(object, value) for value in row])
+    return result
 
 
 def _query(adapter: str, driver: Any, sql: str) -> list[list[object]]:
-    if adapter in ("DuckDb", "Sqlite", "Postgres"):
+    if adapter == "DuckDb":
         return _rows(driver.execute(sql).fetchall())
+    if adapter == "Sqlite":
+        sqlite_cursor: Any = driver.execute(sql)
+        try:
+            return _rows(sqlite_cursor.fetchall())
+        finally:
+            sqlite_cursor.close()
     cursor: Any = driver.cursor()
     try:
-        cursor.execute(sql)
+        if adapter == "Postgres":
+            cursor.execute(sql.encode("utf-8"))
+        else:
+            cursor.execute(sql)
         return _rows(cursor.fetchall())
     finally:
         cursor.close()
 
 
-def _text(request: ConnectionRequest, key: str) -> str | None:
+def _setting_text(request: ConnectionRequest, key: str) -> str | None:
     for setting in request.settings:
         value = setting.value
         if setting.name.replace("-", "_") == key and isinstance(value, SettingValue_Text) and value.value != "":
@@ -53,7 +140,7 @@ def _text(request: ConnectionRequest, key: str) -> str | None:
     return None
 
 
-def _flag(request: ConnectionRequest, key: str) -> bool:
+def _setting_flag(request: ConnectionRequest, key: str) -> bool:
     for setting in request.settings:
         value = setting.value
         if setting.name.replace("-", "_") == key and isinstance(value, SettingValue_Flag):
@@ -61,81 +148,79 @@ def _flag(request: ConnectionRequest, key: str) -> bool:
     return False
 
 
-def _kind(name: str) -> CatalogKind:
-    if name == "Database":
-        return CatalogKind_Database()
-    if name == "Schema":
-        return CatalogKind_Schema()
-    if name == "Table":
-        return CatalogKind_Table()
-    if name == "View":
-        return CatalogKind_View()
-    if name == "TemporaryTable":
-        return CatalogKind_TemporaryTable()
-    if name == "Column":
-        return CatalogKind_Column()
-    return CatalogKind_Other()
+def _entry(parent: str | None, depth: U64, label: str, type_label: str, kind: CatalogKind, query_name: str, expandable: bool, loaded: bool, backtick: bool) -> CatalogEntry:
+    identifier = (parent + "." if parent is not None else "") + _quote(label, backtick)
+    return CatalogEntry(id=identifier, parent=Nothing() if parent is None else Some(value=parent), depth=depth, label=label, type_label=type_label, kind=kind, qualified_identifier=identifier, query_name=query_name, expandable=expandable, loaded=loaded)
 
 
-def _duckdb(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _duckdb(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
+    databases: set[str] = set()
     for row in _query("DuckDb", driver, "pragma show_databases"):
-        db = _s(row[0])
-        qid = _quote(db, False)
-        out.append((0, qid, None, db, "db", "Database", qid, True, True))
-    known = {r[1] for r in out}
-    sql = "select catalog_name, schema_name from information_schema.schemata where schema_name not in ('pg_catalog', 'information_schema')"
-    for row in _query("DuckDb", driver, sql):
-        db, sch = _s(row[0]), _s(row[1])
-        parent = _quote(db, False)
-        if parent not in known:
-            continue
-        qid = parent + "." + _quote(sch, False)
-        out.append((1, qid, parent, sch, "sch", "Schema", qid, True, False))
-    return out
+        name = _text(row[0])
+        identifier = _quote(name, False)
+        databases.add(identifier)
+        entries.append(_entry(None, 0, name, "db", CatalogKind_Database(), identifier, False, True, False))
+    for row in _query("DuckDb", driver, "select catalog_name, schema_name from information_schema.schemata where schema_name not in ('pg_catalog', 'information_schema')"):
+        database = _quote(_text(row[0]), False)
+        if database in databases:
+            schema = _text(row[1])
+            name = database + "." + _quote(schema, False)
+            entries.append(_entry(database, 1, schema, "sch", CatalogKind_Schema(), name, True, False, False))
+    return entries
 
 
-def _flat_dbs(adapter: str, driver: Any, sql: str, type_label: str, index: int, backtick: bool) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _flat_databases(adapter: str, driver: Any, sql: str, column: int, backtick: bool) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     for row in _query(adapter, driver, sql):
-        name = _s(row[index])
-        qid = _quote(name, backtick)
-        out.append((0, qid, None, name, type_label, "Database", qid, True, False))
-    return out
+        name = _text(row[column])
+        identifier = _quote(name, backtick)
+        entries.append(_entry(None, 0, name, "db", CatalogKind_Database(), identifier, True, False, backtick))
+    return entries
 
 
-def _postgres(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
-    current = _s(_query("Postgres", driver, "select current_database()")[0][0])
-    path = {_s(r[0]) for r in _query("Postgres", driver, "select unnest(current_schemas(false))")}
+def _postgres(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
+    current = _text(_query("Postgres", driver, "select current_database()")[0][0])
+    search_path = {_text(row[0]) for row in _query("Postgres", driver, "select unnest(current_schemas(false))")}
     for row in _query("Postgres", driver, "select datname from pg_database where not datistemplate"):
-        db = _s(row[0])
-        qid = _quote(db, False)
-        out.append((0, qid, None, db, "db", "Database", qid, db == current, db == current))
-    parent = _quote(current, False)
-    sql = "select nspname from pg_namespace where nspname not like 'pg\\_%' and nspname <> 'information_schema'"
-    for row in _query("Postgres", driver, sql):
-        sch = _s(row[0])
-        qid = parent + "." + _quote(sch, False)
-        out.append((1, qid, parent, sch, "sch", "Schema", qid, True, sch in path))
-    sql = (
+        name = _text(row[0])
+        identifier = _quote(name, False)
+        entries.append(_entry(None, 0, name, "db", CatalogKind_Database(), identifier, False, name == current, False))
+    database = _quote(current, False)
+    schemas: set[str] = set()
+    for row in _query("Postgres", driver, "select nspname from pg_namespace where nspname not like 'pg\\_%' and nspname <> 'information_schema'"):
+        schema = _text(row[0])
+        schemas.add(schema)
+        identifier = database + "." + _quote(schema, False)
+        in_path = schema in search_path
+        entries.append(_entry(database, 1, schema, "sch", CatalogKind_Schema(), identifier, not in_path, in_path, False))
+    relations = (
         "select n.nspname, c.relname, c.relkind::text, c.relpersistence::text from pg_class c "
         "join pg_namespace n on n.oid = c.relnamespace "
         "where c.relkind in ('r', 'p', 'v', 'm', 'f') and n.nspname = any(current_schemas(false))"
     )
-    labels = {"r": ("t", "Table"), "p": ("t", "Table"), "v": ("v", "View"), "m": ("mv", "View"), "f": ("f", "Table")}
-    for row in _query("Postgres", driver, sql):
-        sch, rel, kind, persistence = _s(row[0]), _s(row[1]), _s(row[2]), _s(row[3])
-        label, kname = ("tmp", "TemporaryTable") if persistence == "t" else labels.get(kind, ("t", "Table"))
-        sparent = parent + "." + _quote(sch, False)
-        qid = sparent + "." + _quote(rel, False)
-        query_name = _quote(sch, False) + "." + _quote(rel, False)
-        out.append((2, qid, sparent, rel, label, kname, query_name, True, False))
-    return out
+    for row in _query("Postgres", driver, relations):
+        schema, name, relation_type, persistence = (_text(value) for value in row[:4])
+        if schema not in schemas:
+            continue
+        if persistence == "t":
+            label, kind = "tmp", CatalogKind_TemporaryTable()
+        elif relation_type == "v":
+            label, kind = "v", CatalogKind_View()
+        elif relation_type == "m":
+            label, kind = "mv", CatalogKind_View()
+        elif relation_type == "f":
+            label, kind = "f", CatalogKind_Table()
+        else:
+            label, kind = "t", CatalogKind_Table()
+        schema_id = database + "." + _quote(schema, False)
+        entries.append(_entry(schema_id, 2, name, label, kind, _quote(schema, False) + "." + _quote(name, False), True, False, False))
+    return entries
 
 
-def _odbc(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _odbc(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     seen: set[str] = set()
     cursor: Any = driver.cursor()
     try:
@@ -143,99 +228,95 @@ def _odbc(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, b
     finally:
         cursor.close()
     for row in rows:
-        cat, sch = _s(row[0]), _s(row[1])
-        cid = _quote(cat, False)
-        if cid not in seen:
-            seen.add(cid)
-            out.append((0, cid, None, cat, "db", "Database", cid, True, True))
-        sid = cid + "." + _quote(sch, False)
-        if sid not in seen:
-            seen.add(sid)
-            out.append((1, sid, cid, sch, "sch", "Schema", sid, True, False))
-    return out
+        catalog, schema = _text(row[0]), _text(row[1])
+        database_id = _quote(catalog, False)
+        if database_id not in seen:
+            seen.add(database_id)
+            entries.append(_entry(None, 0, catalog, "db", CatalogKind_Database(), database_id, False, True, False))
+        schema_id = database_id + "." + _quote(schema, False)
+        if schema_id not in seen:
+            seen.add(schema_id)
+            entries.append(_entry(database_id, 1, schema, "sch", CatalogKind_Schema(), schema_id, True, False, False))
+    return entries
 
 
-def _bigquery(driver: Any, request: ConnectionRequest) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
-    project = _s(cast(object, driver.project))
-    location = (_text(request, "location") or "US").lower()
-    seen: set[str] = set()
-    for ds_raw in driver.list_datasets():
-        ds: Any = ds_raw
-        name = _s(cast(object, ds.dataset_id))
-        qid = _quote(name, True)
-        seen.add(qid)
-        out.append((0, qid, None, name, "ds", "Database", qid, True, True))
+def _bigquery(driver: Any, request: ConnectionRequest) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
+    project = _text(cast(object, driver.project))
+    location = _setting_text(request, "location") or "US"
+    datasets: set[str] = set()
+    for dataset_raw in driver.list_datasets():
+        dataset: Any = dataset_raw
+        name = _text(cast(object, dataset.dataset_id))
+        identifier = _quote(name, True)
+        datasets.add(identifier)
+        entries.append(_entry(None, 0, name, "ds", CatalogKind_Database(), identifier, False, True, True))
+    prefix = _quote(project, True) + "." + _quote("region-" + location.lower(), True) + ".INFORMATION_SCHEMA."
     sql = (
-        "select table_schema, table_name, column_name, data_type from "
-        + _quote(project, True) + ".`region-" + location + "`.INFORMATION_SCHEMA.COLUMNS"
+        "select t.table_schema, t.table_name, t.table_type, c.column_name, c.data_type from "
+        + prefix + "TABLES t left join " + prefix + "COLUMNS c on "
+        "c.table_schema = t.table_schema and c.table_name = t.table_name"
     )
-    job: Any = driver.query(sql, location=location)
-    for row in _rows(job.result()):
-        sch, table, column, dtype = _s(row[0]), _s(row[1]), _s(row[2]), _s(row[3])
-        sid = _quote(sch, True)
-        if sid not in seen:
+    seen: set[str] = set()
+    for row in _rows(driver.query(sql, location=location).result()):
+        schema, name, table_type, column, data_type = (_text(value) for value in row[:5])
+        dataset_id = _quote(schema, True)
+        if dataset_id not in datasets:
             continue
-        tid = sid + "." + _quote(table, True)
-        if tid not in seen:
-            seen.add(tid)
-            out.append((1, tid, sid, table, "t", "Table", tid, True, True))
-        cid = tid + "." + _quote(column, True)
-        out.append((2, cid, tid, column, dtype, "Column", _quote(column, True), False, True))
-    return out
+        table_id = dataset_id + "." + _quote(name, True)
+        if table_id not in seen:
+            seen.add(table_id)
+            view = "VIEW" in table_type.upper()
+            kind: CatalogKind = CatalogKind_View() if view else CatalogKind_Table()
+            entries.append(_entry(dataset_id, 1, name, "v" if view else "t", kind, table_id, False, True, True))
+        if column != "":
+            entries.append(_entry(table_id, 2, column, data_type, CatalogKind_Column(), _quote(column, True), False, True, True))
+    return entries
 
 
-def _trino(driver: Any, request: ConnectionRequest) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    configured = _text(request, "catalog")
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
-    for row in _query("Trino", driver, "show catalogs"):
-        name = _s(row[0])
-        if name in ("jmx", "memory", "system") or (configured is not None and name != configured):
-            continue
-        qid = _quote(name, False)
-        out.append((0, qid, None, name, "c", "Database", qid, True, False))
-    return out
-
-
-def _add_column_tree(out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]], seen: set[str], row: list[object], backtick: bool) -> None:
-    cat, sch, table, ttype, column, dtype = (_s(v) for v in row[:6])
-    ids: list[str] = []
-    levels = (
-        (cat, "catalog", "Database"),
-        (sch, "s", "Schema"),
-        (table, ttype, "View" if "VIEW" in ttype.upper() else "Table"),
-    )
-    for depth, (name, label, kname) in enumerate(levels):
-        if name == "":
-            return
-        parent = ids[-1] if ids else None
-        qid = (parent + "." if parent else "") + _quote(name, backtick)
-        ids.append(qid)
-        if qid not in seen:
-            seen.add(qid)
-            out.append((depth, qid, parent, name, label, kname, qid, True, True))
+def _databricks_row(entries: list[CatalogEntry], seen: set[str], row: list[object]) -> None:
+    catalog, schema, table, table_type, column, data_type = (_text(value) for value in row[:6])
+    if catalog == "":
+        return
+    catalog_id = _quote(catalog, True)
+    if catalog_id not in seen:
+        seen.add(catalog_id)
+        entries.append(_entry(None, 0, catalog, "catalog", CatalogKind_Database(), catalog_id, False, True, True))
+    if schema == "":
+        return
+    schema_id = catalog_id + "." + _quote(schema, True)
+    if schema_id not in seen:
+        seen.add(schema_id)
+        entries.append(_entry(catalog_id, 1, schema, "s", CatalogKind_Schema(), schema_id, False, True, True))
+    if table == "":
+        return
+    table_id = schema_id + "." + _quote(table, True)
+    if table_id not in seen:
+        seen.add(table_id)
+        kind: CatalogKind = CatalogKind_View() if "VIEW" in table_type.upper() else CatalogKind_Table()
+        entries.append(_entry(schema_id, 2, table, table_type, kind, table_id, False, True, True))
     if column != "":
-        cid = ids[-1] + "." + _quote(column, backtick)
-        if cid not in seen:
-            seen.add(cid)
-            out.append((3, cid, ids[-1], column, dtype, "Column", _quote(column, backtick), False, True))
+        column_id = table_id + "." + _quote(column, True)
+        if column_id not in seen:
+            seen.add(column_id)
+            entries.append(_entry(table_id, 3, column, data_type, CatalogKind_Column(), _quote(column, True), False, True, True))
 
 
-def _databricks(driver: Any, request: ConnectionRequest) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _databricks(driver: Any, request: ConnectionRequest) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     seen: set[str] = set()
     for row in _query("Databricks", driver, "select catalog_name from system.information_schema.catalogs"):
-        _add_column_tree(out, seen, [row[0], "", "", "", "", ""], True)
+        _databricks_row(entries, seen, [row[0], "", "", "", "", ""])
     for row in _query("Databricks", driver, "select catalog_name, schema_name from system.information_schema.schemata"):
-        _add_column_tree(out, seen, [row[0], row[1], "", "", "", ""], True)
+        _databricks_row(entries, seen, [row[0], row[1], "", "", "", ""])
     sql = (
         "select t.table_catalog, t.table_schema, t.table_name, t.table_type, c.column_name, c.full_data_type "
         "from system.information_schema.tables t left join system.information_schema.columns c "
         "on c.table_catalog = t.table_catalog and c.table_schema = t.table_schema and c.table_name = t.table_name"
     )
     for row in _query("Databricks", driver, sql):
-        _add_column_tree(out, seen, row, True)
-    if not _flag(request, "skip_legacy_indexing"):
+        _databricks_row(entries, seen, row)
+    if not _setting_flag(request, "skip_legacy_indexing"):
         cursor: Any = driver.cursor()
         try:
             cursor.tables(catalog_name="hive_metastore")
@@ -244,14 +325,14 @@ def _databricks(driver: Any, request: ConnectionRequest) -> list[tuple[int, str,
             columns = _rows(cursor.fetchall())
         finally:
             cursor.close()
-        types: dict[tuple[str, str], str] = {}
+        table_types: dict[tuple[str, str], str] = {}
         for row in tables:
-            types[(_s(row[1]), _s(row[2]))] = _s(row[3])
-            _add_column_tree(out, seen, [row[0], row[1], row[2], row[3], "", ""], True)
+            table_types[(_text(row[1]), _text(row[2]))] = _text(row[3])
+            _databricks_row(entries, seen, [row[0], row[1], row[2], row[3], "", ""])
         for row in columns:
-            ttype = types.get((_s(row[1]), _s(row[2])), "TABLE")
-            _add_column_tree(out, seen, [row[0], row[1], row[2], ttype, row[3], row[5]], True)
-    return out
+            table_type = table_types.get((_text(row[1]), _text(row[2])), "TABLE")
+            _databricks_row(entries, seen, [row[0], row[1], row[2], table_type, row[3], row[5]])
+    return entries
 
 
 def _as_list(value: object) -> list[object]:
@@ -266,113 +347,121 @@ def _as_dict(value: object) -> dict[str, object]:
     return {}
 
 
-def _adbc(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _adbc(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     reader: Any = driver.adbc_get_objects()
-    objects = _as_list(cast(object, reader.read_all().to_pylist()))
-    for cat_raw in objects:
-        cat = _as_dict(cat_raw)
-        cname = _s(cat.get("catalog_name"))
-        if cname in ("template0", "template1"):
+    try:
+        catalogs = _as_list(cast(object, reader.read_all().to_pylist()))
+    finally:
+        reader.close()
+    for raw_catalog in catalogs:
+        catalog = _as_dict(raw_catalog)
+        name = _text(catalog.get("catalog_name"))
+        if name in ("template0", "template1"):
             continue
-        cid = _quote(cname, False)
-        out.append((0, cid, None, cname, "db", "Database", cid, True, True))
-        for sch_raw in _as_list(cat.get("catalog_db_schemas")):
-            sch = _as_dict(sch_raw)
-            sname = _s(sch.get("db_schema_name"))
-            sid = cid + "." + _quote(sname, False)
-            out.append((1, sid, cid, sname, "s", "Schema", sid, True, True))
-            for tab_raw in _as_list(sch.get("db_schema_tables")):
-                tab = _as_dict(tab_raw)
-                tname = _s(tab.get("table_name"))
-                view = _s(tab.get("table_type")).upper() == "VIEW"
-                tid = sid + "." + _quote(tname, False)
-                qn = _quote(sname, False) + "." + _quote(tname, False)
-                out.append((2, tid, sid, tname, "v" if view else "t", "View" if view else "Table", qn, True, True))
-                for col_raw in _as_list(tab.get("table_columns")):
-                    col = _as_dict(col_raw)
-                    colname = _s(col.get("column_name"))
-                    colid = tid + "." + _quote(colname, False)
-                    out.append((3, colid, tid, colname, _s(col.get("xdbc_type_name")), "Column", _quote(colname, False), False, True))
-    return out
+        catalog_id = _quote(name, False)
+        entries.append(_entry(None, 0, name, "db", CatalogKind_Database(), catalog_id, False, True, False))
+        for raw_schema in _as_list(catalog.get("catalog_db_schemas")):
+            schema = _as_dict(raw_schema)
+            schema_name = _text(schema.get("db_schema_name"))
+            schema_id = catalog_id + "." + _quote(schema_name, False)
+            entries.append(_entry(catalog_id, 1, schema_name, "s", CatalogKind_Schema(), schema_id, False, True, False))
+            for raw_table in _as_list(schema.get("db_schema_tables")):
+                table = _as_dict(raw_table)
+                table_name = _text(table.get("table_name"))
+                view = _text(table.get("table_type")).upper() == "VIEW"
+                table_id = schema_id + "." + _quote(table_name, False)
+                query_name = _quote(schema_name, False) + "." + _quote(table_name, False)
+                kind: CatalogKind = CatalogKind_View() if view else CatalogKind_Table()
+                entries.append(_entry(schema_id, 2, table_name, "v" if view else "t", kind, query_name, False, True, False))
+                for raw_column in _as_list(table.get("table_columns")):
+                    column = _as_dict(raw_column)
+                    column_name = _text(column.get("column_name"))
+                    entries.append(_entry(table_id, 3, column_name, _text(column.get("xdbc_type_name")), CatalogKind_Column(), _quote(column_name, False), False, True, False))
+    return entries
 
 
-def _cassandra(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _cassandra(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     keyspaces: Any = driver.cluster.metadata.keyspaces
-    for ks_name_raw, ks_raw in keyspaces.items():
-        ks: Any = ks_raw
-        ksname = _s(cast(object, ks_name_raw))
-        kid = _quote(ksname, False)
-        out.append((0, kid, None, ksname, "ks", "Database", kid, True, True))
-        groups: list[tuple[Any, str, str]] = [(ks.tables, "t", "Table"), (ks.views, "v", "View")]
-        for group, label, kname in groups:
-            for rel_name_raw, rel_raw in group.items():
-                rel: Any = rel_raw
-                rname = _s(cast(object, rel_name_raw))
-                rid = kid + "." + _quote(rname, False)
-                out.append((1, rid, kid, rname, label, kname, rid, True, True))
-                for col_name_raw, col_raw in rel.columns.items():
-                    col: Any = col_raw
-                    cname = _s(cast(object, col_name_raw))
-                    cid = rid + "." + _quote(cname, False)
-                    out.append((2, cid, rid, cname, _s(cast(object, col.cql_type)), "Column", _quote(cname, False), False, True))
-    return out
+    for name_raw, keyspace_raw in keyspaces.items():
+        keyspace: Any = keyspace_raw
+        name = _text(cast(object, name_raw))
+        keyspace_id = _quote(name, False)
+        entries.append(_entry(None, 0, name, "ks", CatalogKind_Database(), keyspace_id, False, True, False))
+        groups: list[tuple[Any, str, CatalogKind]] = [(keyspace.tables, "t", CatalogKind_Table()), (keyspace.views, "v", CatalogKind_View())]
+        for group, type_label, kind in groups:
+            for relation_raw_name, relation_raw in group.items():
+                relation: Any = relation_raw
+                relation_name = _text(cast(object, relation_raw_name))
+                relation_id = keyspace_id + "." + _quote(relation_name, False)
+                entries.append(_entry(keyspace_id, 1, relation_name, type_label, kind, relation_id, False, True, False))
+                for column_raw_name, column_raw in relation.columns.items():
+                    column: Any = column_raw
+                    column_name = _text(cast(object, column_raw_name))
+                    data_type = _text(cast(object, column.cql_type))
+                    entries.append(_entry(relation_id, 2, column_name, data_type, CatalogKind_Column(), _quote(column_name, False), False, True, False))
+    return entries
 
 
 def _nebula_rows(session: Any, statement: str) -> list[list[str]]:
-    result: Any = session.execute(statement)
-    if not bool(cast(object, result.is_succeeded())):
-        raise RuntimeError(_s(cast(object, result.error_msg())))
-    size = cast(object, result.row_size())
-    count = size if isinstance(size, int) else 0
-    out: list[list[str]] = []
+    response: Any = session.execute(statement)
+    if not bool(cast(object, response.is_succeeded())):
+        raise RuntimeError(_text(cast(object, response.error_msg())))
+    count_raw: object = cast(object, response.row_size())
+    count = count_raw if isinstance(count_raw, int) and not isinstance(count_raw, bool) else 0
+    rows: list[list[str]] = []
     for index in range(count):
-        values: Any = result.row_values(index)
-        out.append([_s(cast(object, v.as_string())) if bool(cast(object, v.is_string())) else _s(cast(object, v)) for v in values])
-    return out
+        values: Any = response.row_values(index)
+        row: list[str] = []
+        for value_raw in values:
+            value: Any = value_raw
+            raw: object = cast(object, value.as_string()) if bool(cast(object, value.is_string())) else cast(object, value)
+            row.append(_text(raw))
+        rows.append(row)
+    return rows
 
 
-def _nebula(driver: Any) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _nebula(driver: Any) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
     for row in _nebula_rows(driver, "SHOW SPACES"):
         space = row[0]
-        sid = _quote(space, False)
-        out.append((0, sid, None, space, "space", "Database", sid, True, True))
-        for kind, label in (("TAGS", "tag"), ("EDGES", "edge")):
-            for item in _nebula_rows(driver, "USE `" + space + "`; SHOW " + kind):
-                name = item[0]
-                iid = sid + "." + _quote(name, False)
-                out.append((1, iid, sid, name, label, "Other", _quote(name, False), True, True))
-                desc = "USE `" + space + "`; DESC " + kind[:-1] + " `" + name + "`"
-                for field in _nebula_rows(driver, desc):
-                    fid = iid + "." + _quote(field[0], False)
-                    out.append((2, fid, iid, field[0], field[1], "Column", _quote(field[0], False), False, True))
-    return out
+        space_id = _quote(space, False)
+        entries.append(_entry(None, 0, space, "space", CatalogKind_Database(), space_id, False, True, False))
+        _nebula_rows(driver, "USE " + _quote(space, True))
+        for command, type_label, singular in (("TAGS", "tag", "TAG"), ("EDGES", "edge", "EDGE")):
+            for relation in _nebula_rows(driver, "SHOW " + command):
+                name = relation[0]
+                relation_id = space_id + "." + _quote(name, False)
+                entries.append(_entry(space_id, 1, name, type_label, CatalogKind_Other(), _quote(name, False), False, True, False))
+                for field in _nebula_rows(driver, "DESC " + singular + " " + _quote(name, True)):
+                    column = field[0]
+                    entries.append(_entry(relation_id, 2, column, field[1], CatalogKind_Column(), _quote(column, False), False, True, False))
+    return entries
 
 
-def _chdb(driver: Any, request: ConnectionRequest) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
-    show_system = _flag(request, "show_system")
-    out: list[tuple[int, str, str | None, str, str, str, str, bool, bool]] = []
+def _chdb(driver: Any, request: ConnectionRequest) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
+    show_system = _setting_flag(request, "show_system")
     for row in _query("Chdb", driver, "select name from system.databases"):
-        name = _s(row[0])
+        name = _text(row[0])
         if not show_system and name in ("system", "INFORMATION_SCHEMA", "information_schema"):
             continue
-        qid = _quote(name, True)
-        out.append((0, qid, None, name, "db", "Database", qid, True, False))
-    return out
+        identifier = _quote(name, True)
+        entries.append(_entry(None, 0, name, "db", CatalogKind_Database(), identifier, True, False, True))
+    return entries
 
 
-def _collect(adapter: str, driver: Any, request: ConnectionRequest) -> list[tuple[int, str, str | None, str, str, str, str, bool, bool]]:
+def _collect(adapter: str, driver: Any, request: ConnectionRequest) -> list[CatalogEntry]:
     if adapter == "DuckDb":
         return _duckdb(driver)
     if adapter == "Sqlite":
-        return _flat_dbs("Sqlite", driver, "pragma database_list", "db", 1, False)
+        return _flat_databases("Sqlite", driver, "pragma database_list", 1, False)
     if adapter == "Postgres":
         return _postgres(driver)
     if adapter == "MySql":
         sql = "select schema_name from information_schema.schemata where schema_name not in ('sys', 'information_schema', 'performance_schema', 'mysql')"
-        return _flat_dbs("MySql", driver, sql, "db", 0, True)
+        return _flat_databases("MySql", driver, sql, 0, True)
     if adapter == "Odbc":
         return _odbc(driver)
     if adapter == "BigQuery":
@@ -390,51 +479,36 @@ def _collect(adapter: str, driver: Any, request: ConnectionRequest) -> list[tupl
     return _chdb(driver, request)
 
 
-def _to_entry(row: tuple[int, str, str | None, str, str, str, str, bool, bool]) -> CatalogEntry:
-    depth, eid, parent, label, type_label, kind, query_name, expandable, loaded = row
-    return CatalogEntry(
-        id=eid,
-        parent=Nothing() if parent is None else Some(value=parent),
-        depth=depth,
-        label=label,
-        type_label=type_label,
-        kind=_kind(kind),
-        qualified_identifier=eid,
-        query_name=query_name,
-        expandable=expandable,
-        loaded=loaded,
-    )
-
-
-def _sort_key(row: tuple[int, str, str | None, str, str, str, str, bool, bool]) -> tuple[int, str, str]:
-    return (row[0], row[3].casefold(), row[3])
+def _trino(driver: Any, request: ConnectionRequest) -> list[CatalogEntry]:
+    entries: list[CatalogEntry] = []
+    selected = _setting_text(request, "catalog")
+    for row in _query("Trino", driver, "show catalogs"):
+        name = _text(row[0])
+        if name in ("jmx", "memory", "system") or (selected is not None and selected != name):
+            continue
+        identifier = _quote(name, False)
+        entries.append(_entry(None, 0, name, "c", CatalogKind_Database(), identifier, True, False, False))
+    return entries
 
 
 def load_catalog(connection: Connection) -> Result[CottList[CatalogEntry], QueryError]:
-    handle = connection.session
-    if handle.tag != _TAG:
-        return _fail("The connection handle is not a Harlequin session.")
-    raw = handle.unwrap()
-    if not isinstance(raw, dict):
-        return _fail("The connection handle is malformed.")
-    payload = cast(dict[str, object], raw)
-    if set(payload.keys()) != set(_KEYS.split(",")):
-        return _fail("The connection handle is malformed.")
-    adapter = payload["adapter"]
-    lock = payload["lock"]
-    request = payload["request"]
-    if not isinstance(adapter, str) or not isinstance(lock, contextlib.AbstractContextManager) or not isinstance(request, ConnectionRequest):
-        return _fail("The connection handle is malformed.")
-    guard = cast(contextlib.AbstractContextManager[object], lock)
-    with guard:
-        if payload["closed"] is not False:
-            return _fail("The connection is closed.")
-        driver: Any = payload["driver"]
-        try:
-            rows = _collect(adapter, driver, request)
-        except Exception as error:
-            return _fail(str(error))
-    if adapter != "Odbc":
-        rows.sort(key=lambda r: _sort_key(r))
-    entries = CottList(values=[_to_entry(r) for r in rows])
-    return Ok(value=normalize_catalog(entries))
+    payload = _session(connection)
+    if payload is None:
+        return _fail("The connection handle is not a valid Harlequin session.")
+    guard = cast(contextlib.AbstractContextManager[object], payload["lock"])
+    try:
+        with guard:
+            if payload["closed"] is True:
+                return _fail("The connection is closed.")
+            _boundary()
+            driver: Any = payload["driver"]
+            request = cast(ConnectionRequest, payload["request"])
+            adapter = cast(str, payload["adapter"])
+            entries = _collect(adapter, driver, request)
+            if adapter != "Odbc":
+                entries.sort(key=lambda entry: (entry.depth, entry.label.casefold(), entry.label))
+            return Ok(value=normalize_catalog(CottList(values=entries)))
+    except KeyboardInterrupt:
+        return _fail("interrupted")
+    except Exception as error:
+        return _fail(str(error))

@@ -6,8 +6,7 @@ import socket
 import struct
 from typing import Final, cast
 
-from cott_runtime import CottList, Err, FrozenMap, Nothing, Ok, Result, Some
-
+from cott_runtime import CottList, Err, FrozenMap, Ok, Option, Result, Some
 from real.harlequin.hsql import session_socket_path
 from real.harlequin.hsql_types import HSQL_PROTOCOL_VERSION, HsqlError, HsqlError_Connection, HsqlError_Interrupted, HsqlResponse
 
@@ -21,17 +20,17 @@ _CANCEL: Final[int] = 7
 _MAX_FRAME_BYTES: Final[int] = 67108864
 
 
-def _connection_error(message: str) -> Result[HsqlResponse, HsqlError]:
+def _connection_error(message: str) -> Err[HsqlError]:
     return Err(error=HsqlError_Connection(message=message))
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes | None:
     received = bytearray()
     while len(received) < size:
-        part = sock.recv(size - len(received))
-        if not part:
+        chunk = sock.recv(size - len(received))
+        if not chunk:
             return None
-        received.extend(part)
+        received.extend(chunk)
     return bytes(received)
 
 
@@ -49,14 +48,17 @@ def _read_frame(sock: socket.socket) -> tuple[int, bytes] | None:
 
 
 def _send_frame(sock: socket.socket, kind: int, payload: bytes) -> None:
+    if len(payload) > _MAX_FRAME_BYTES:
+        raise ValueError("session frame exceeds 64 MiB")
     sock.sendall(struct.pack("!BI", kind, len(payload)))
-    sock.sendall(payload)
+    if payload:
+        sock.sendall(payload)
 
 
-def _cancel_request(path: str, request_id: str) -> None:
+def _cancel_request(path: pathlib.Path, request_id: str) -> None:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as other:
-            other.connect(path)
+            other.connect(str(path))
             hello = _read_frame(other)
             if hello is not None and hello[0] == _HELLO:
                 _send_frame(other, _CANCEL, request_id.encode("utf-8"))
@@ -64,7 +66,7 @@ def _cancel_request(path: str, request_id: str) -> None:
         return
 
 
-def _exchange(sock: socket.socket, path: str, name: str, arguments: CottList[str], cwd: pathlib.Path, stdin_text: Some[str] | Nothing, environment: FrozenMap[str, str], stdout_tty: bool, stderr_tty: bool) -> Result[HsqlResponse, HsqlError]:
+def _exchange(sock: socket.socket, path: pathlib.Path, name: str, arguments: CottList[str], cwd: pathlib.Path, stdin_text: Option[str], environment: FrozenMap[str, str], stdout_tty: bool, stderr_tty: bool) -> Result[HsqlResponse, HsqlError]:
     closed = f"session '{name}' closed the connection"
     request_id: str | None = None
     try:
@@ -121,17 +123,17 @@ def _exchange(sock: socket.socket, path: str, name: str, arguments: CottList[str
         if request_id is not None:
             _cancel_request(path, request_id)
         return Err(error=HsqlError_Interrupted())
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError, ValueError):
         return _connection_error(closed)
 
 
-def send_session_request(name: str, arguments: CottList[str], cwd: pathlib.Path, stdin_text: Some[str] | Nothing, environment: FrozenMap[str, str], stdout_tty: bool, stderr_tty: bool) -> Result[HsqlResponse, HsqlError]:
-    path = str(session_socket_path(name, environment, os.getuid()))
+def send_session_request(name: str, arguments: CottList[str], cwd: pathlib.Path, stdin_text: Option[str], environment: FrozenMap[str, str], stdout_tty: bool, stderr_tty: bool) -> Result[HsqlResponse, HsqlError]:
+    path = session_socket_path(name, environment, os.getuid())
     missing = f"no session named '{name}' is running. Start one with `hsql --serve {name} ...`."
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             try:
-                sock.connect(path)
+                sock.connect(str(path))
             except OSError:
                 return _connection_error(missing)
             return _exchange(sock, path, name, arguments, cwd, stdin_text, environment, stdout_tty, stderr_tty)

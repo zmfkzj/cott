@@ -1,13 +1,9 @@
-from typing import Final, cast
-
 import click
 
 from real.pgcli.connection import executor_transaction_status
 from real.pgcli.connection_types import TransactionStatus_Active, TransactionStatus_InTransaction
 from real.pgcli.session import execute_pgcli_command
 from real.pgcli.session_types import QuitDecision, Session, TerminalSize
-
-_PROMPT: Final[str] = "A transaction is ongoing. Choose `c` to COMMIT, `r` to ROLLBACK, `a` to abort exit, `force` to exit anyway."
 
 
 def confirm_quit_with_transaction(session: Session, screen: TerminalSize) -> QuitDecision:
@@ -17,7 +13,10 @@ def confirm_quit_with_transaction(session: Session, screen: TerminalSize) -> Qui
 
     while True:
         try:
-            answer = str(cast(object, click.prompt(_PROMPT, default="a"))).lower()
+            answer = str(click.prompt(
+                "A transaction is ongoing. Choose `c` to COMMIT, `r` to ROLLBACK, `a` to abort exit, `force` to exit anyway.",
+                default="a",
+            )).lower()
         except click.Abort:
             click.echo()
             answer = "a"

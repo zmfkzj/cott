@@ -68,20 +68,25 @@ the rejected options above with one input per conditional rejection, playlist
 range expansion, format filtering and sorting, thumbnail/metadata/subtitle plans,
 output-path rendering and sanitization, archive planning, fragment and
 post-processing plans, JSON rendering and update channels. Automatic cases never
-run effectful functions. The current coverage classifier can still mark a clause
-`observed` from a contract satisfiability/reachability proof; that is not evidence
-that the implementation executed.
+run effectful functions. Static satisfiability/reachability proofs remain in
+their separate report and never make a clause `observed`; execution coverage
+requires actual runtime or test observations in the recorded invocation scope.
 
-The strict policy selects 119 clauses across 24 callables, including selection,
+The strict policy selects 118 clauses across 24 callables, including selection,
 validation, output-path safety, extraction, archive persistence, both transfer
 APIs and `execute`. No `unobserved`, `trust_declaration` or `unknown` is allowed.
-Sol regeneration completed and real `verify` resolved 29 of the previous 51
-violations. The remaining 22 are trust declarations on `execute` (20) and
-`select_playlist` (2), whose random effect still lacks a scenario fixture backend.
-The artifact verification record has `verified=true` and `current == last_verified`,
-but its strict policy remains **failed**, so it is not deployable.
-Totals are 119 observed, 49 trust declarations, 0 unknown and 0 unobserved.
-Missing evidence is not waived to make the command pass.
+Sol regeneration and real `verify` now pass all selected clauses (exit 0).
+Of the original 51 violations, 50 have actual observations; the remaining
+`execute` allowance for `ExtractorMissing` was removed with explicit approval
+because its fixed registry contains only an enabled generic extractor.
+That removal tightens `execute` and is not counted as an observation;
+`choose_extractor` retains the error for caller-supplied disabled registries.
+The current record has `verified=true`, `current == last_verified`, and totals
+of 142 observed, 25 trust declarations, 0 unknown and 0 unobserved.
+The additional facade scenario exercises invalid network flags, reversed playlist
+and format ranges, a zero media byte limit and zero fragment concurrency.
+Two unselected `load_plugins` clauses previously promoted by static proofs now
+remain honest trust declarations; no coverage allowances were added.
 
 The facade scenario `fragments_publish_exact_bodies` now records actual
 `filesystem.remove` events after publishing fragment bodies, including cleanup
@@ -94,10 +99,10 @@ The effectful stages use real files, HTTP and subprocesses. Their duties current
 have no `checked_by` linkage and remain `unverified`: log preparation, config and
 batch loading, declarative plugins, HEAD-only discovery, archive round trip,
 exact transfer bodies, post-processing order and verified update installation.
-The composition roots `execute` and `run` additionally include `random` and
-`process.exit` effects with no scenario fixture backend. New scenario evidence
-or fixture capabilities are needed where the current contract cannot observe a
-selected obligation; external regression results do not satisfy this policy.
+The seeded random fixture exercises `select_playlist` and `execute` without
+changing global random state. The CLI `run` still declares `process.exit`, for
+which no scenario fixture backend exists. External regression results and
+unlinked prose requirements remain separate from the passing clause policy.
 
 ```sh
 cott requirements --project examples/real/yt-dlp --format json

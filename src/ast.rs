@@ -345,12 +345,43 @@ pub enum ScenarioFixtureConfig {
         start_ms: ScenarioInteger,
         tick_ms: ScenarioInteger,
     },
+    Random {
+        span: Span,
+        seed: ScenarioInteger,
+    },
     Failure {
         span: Span,
         point: ScenarioFailurePoint,
         occurrence: ScenarioInteger,
         error: ScenarioFailureError,
     },
+    /// `database NAME:` with exactly `backend: sqlite|duckdb|postgres`.
+    Database {
+        span: Span,
+        backend: ScenarioDatabaseBackend,
+    },
+    /// `socket NAME:` with exactly `path`, `greeting`, `response` and
+    /// `interrupt_after_request`, in that order.
+    Socket {
+        span: Span,
+        path: String,
+        greeting: ScenarioData,
+        response: ScenarioData,
+        interrupt_after_request: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioDatabaseBackend {
+    pub span: Span,
+    pub kind: ScenarioDatabaseBackendKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScenarioDatabaseBackendKind {
+    Sqlite,
+    Duckdb,
+    Postgres,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -425,6 +456,13 @@ pub enum ScenarioFailurePointKind {
     HttpConnect,
     HttpRead,
     ClockRead,
+    DatabaseConnect,
+    DatabaseRead,
+    DatabaseWrite,
+    DatabaseCommit,
+    DatabaseRollback,
+    DatabaseClose,
+    DatabaseCancel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,6 +478,7 @@ pub enum ScenarioFailureErrorKind {
     DiskFull,
     Timeout,
     ConnectionReset,
+    Interrupted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -485,6 +524,21 @@ pub enum ScenarioStep {
         binding: ScenarioBinding,
         ty: Type,
         value: Expr,
+    },
+    /// `unwrap NAME = VALUE`: VALUE must be a `Result`; the step requires the
+    /// observed value to be exactly `Ok` and binds its live payload.
+    Unwrap {
+        span: Span,
+        binding: ScenarioBinding,
+        value: Expr,
+    },
+    /// `item NAME = VALUE at INDEX`: VALUE must be a `List`; the step binds the
+    /// live element at INDEX and fails the scenario when INDEX is out of range.
+    Item {
+        span: Span,
+        binding: ScenarioBinding,
+        value: Expr,
+        index: ScenarioInteger,
     },
 }
 

@@ -297,3 +297,10 @@ scenario execute_renders_received_response:
     assert bad_method matches Result.Err(PostingError.InvalidRequest(_))
     call dropped = execute(List("GET", service.url("/drop")))
     assert dropped matches Result.Err(PostingError.NetworkFailed(_))
+
+scenario execute_observes_argument_count_rejection:
+    fixtures:
+        http service:
+            route "/unused" -> response(status: 200, body: text("unused"), encoding: "utf-8")
+    call refused = execute(List())
+    assert refused matches Result.Err(PostingError.InvalidArguments(_))

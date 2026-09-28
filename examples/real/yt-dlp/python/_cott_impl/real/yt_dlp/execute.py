@@ -6,31 +6,29 @@ from real.yt_dlp_types import CliInput, DownloadPlan, ExecutionReport, Execution
 
 
 def _batch_arguments(path: Path, out: list[CliInput]) -> MediaError | None:
-    match load_batch_urls(path, CottList(values=["#"])):
-        case Err(error=error):
-            return error
-        case Ok(value=urls):
-            for url in urls:
-                out.append(CliInput(kind=InputKind_Argument(), value=url))
-            return None
+    loaded = load_batch_urls(path, CottList(values=["#"]))
+    if isinstance(loaded, Err):
+        return loaded.error
+    for url in loaded.value:
+        out.append(CliInput(kind=InputKind_Argument(), value=url))
+    return None
 
 
 def _expand_config(path: Path, out: list[CliInput]) -> MediaError | None:
-    match load_config(path):
-        case Err(error=config_error):
-            return config_error
-        case Ok(value=loaded):
-            for nested in loaded:
-                match nested.kind:
-                    case InputKind_Argument():
-                        out.append(CliInput(kind=InputKind_Argument(), value=nested.value))
-                    case InputKind_BatchFile():
-                        nested_error: MediaError | None = _batch_arguments(Path(nested.value), out)
-                        if nested_error is not None:
-                            return nested_error
-                    case InputKind_ConfigFile():
-                        return MediaError_InvalidInput(message="nested config files are not supported")
-            return None
+    loaded = load_config(path)
+    if isinstance(loaded, Err):
+        return loaded.error
+    for entry in loaded.value:
+        match entry.kind:
+            case InputKind_Argument():
+                out.append(entry)
+            case InputKind_BatchFile():
+                failure: MediaError | None = _batch_arguments(Path(entry.value), out)
+                if failure is not None:
+                    return failure
+            case InputKind_ConfigFile():
+                return MediaError_InvalidInput(message="nested config files are not supported")
+    return None
 
 
 def _expand_inputs(request: ExecutionRequest) -> Result[CottList[CliInput], MediaError]:
@@ -39,7 +37,7 @@ def _expand_inputs(request: ExecutionRequest) -> Result[CottList[CliInput], Medi
         failure: MediaError | None = None
         match entry.kind:
             case InputKind_Argument():
-                out.append(CliInput(kind=InputKind_Argument(), value=entry.value))
+                out.append(entry)
             case InputKind_BatchFile():
                 failure = _batch_arguments(Path(entry.value), out)
             case InputKind_ConfigFile():
@@ -60,22 +58,13 @@ def _download_item(request: ExecutionRequest, item: MediaItem) -> MediaError | N
     transferred = transfer_fragments(fragments.value, request.fragments)
     if isinstance(transferred, Err):
         return transferred.error
-    if len(request.post_processing.kinds) == 0:
-        return None
-    tools = plan_post_processing(item, request.post_processing)
-    if isinstance(tools, Err):
-        return tools.error
-    processed = run_post_processing(tools.value)
-    if isinstance(processed, Err):
-        return processed.error
-    return None
-
-
-def _download(request: ExecutionRequest, plan: DownloadPlan) -> MediaError | None:
-    for item in plan.items:
-        failure: MediaError | None = _download_item(request, item)
-        if failure is not None:
-            return failure
+    if len(request.post_processing.kinds) != 0:
+        tools = plan_post_processing(item, request.post_processing)
+        if isinstance(tools, Err):
+            return tools.error
+        processed = run_post_processing(tools.value)
+        if isinstance(processed, Err):
+            return processed.error
     return None
 
 
@@ -89,15 +78,13 @@ def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     routed = select_geo_route(validated.value)
     if isinstance(routed, Err):
         return Err(error=routed.error)
-    network = routed.value
     authenticated = resolve_authentication(request.authentication)
     if isinstance(authenticated, Err):
         return Err(error=authenticated.error)
-    authentication = authenticated.value
     workarounds = validate_workarounds(request.workarounds)
     if isinstance(workarounds, Err):
         return Err(error=workarounds.error)
-    if Path(request.presentation.log_file) != Path("."):
+    if request.presentation.log_file != Path("."):
         logged = configure_presentation(request.presentation)
         if isinstance(logged, Err):
             return Err(error=logged.error)
@@ -105,31 +92,29 @@ def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     expanded = _expand_inputs(request)
     if isinstance(expanded, Err):
         return Err(error=expanded.error)
-    resolved = resolve_inputs(expanded.value, CottList(values=[]))
+    empty_config: CottList[CliInput] = CottList(values=[])
+    resolved = resolve_inputs(expanded.value, empty_config)
     if isinstance(resolved, Err):
         return Err(error=resolved.error)
-    urls: list[str] = []
-    for url in resolved.value:
-        urls.append(url)
-    if len(request.shortcut.query) > 0:
+    urls: list[str] = list(resolved.value)
+    if request.shortcut.query:
         shortcut = build_shortcut_url(request.shortcut)
         if isinstance(shortcut, Err):
             return Err(error=shortcut.error)
         urls.append(shortcut.value)
-    if len(urls) == 0:
+    if not urls:
         return Err(error=MediaError_InvalidInput(message="no input URLs supplied"))
 
     extractors = discover_extractors()
     discovered: list[MediaItem] = []
-    for target in urls:
-        chosen = choose_extractor(target, extractors)
+    for url in urls:
+        chosen = choose_extractor(url, extractors)
         if isinstance(chosen, Err):
             return Err(error=chosen.error)
-        extraction = extract_media(target, chosen.value, authentication, network)
+        extraction = extract_media(url, chosen.value, authenticated.value, routed.value)
         if isinstance(extraction, Err):
             return Err(error=extraction.error)
-        for found in extraction.value:
-            discovered.append(found)
+        discovered.extend(extraction.value)
 
     playlist = select_playlist(CottList(values=discovered), request.playlist)
     if isinstance(playlist, Err):
@@ -142,7 +127,7 @@ def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
         return Err(error=filtered.error)
     selected: CottList[MediaItem] = filtered.value
 
-    archive_enabled: bool = Path(request.archive.path) != Path(".")
+    archive_enabled: bool = request.archive.path != Path(".")
     archive_entries: CottList[str] = CottList(values=[])
     if archive_enabled:
         read = read_download_archive(request.archive)
@@ -150,20 +135,18 @@ def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
             return Err(error=read.error)
         archive_entries = read.value
     plan: DownloadPlan = plan_downloads(selected, archive_entries, request.archive.break_on_existing)
-
     simulated: bool
     match request.simulation:
         case SimulationMode_Download():
             simulated = False
-            download_error: MediaError | None = _download(request, plan)
-            if download_error is not None:
-                return Err(error=download_error)
+            for item in plan.items:
+                failure = _download_item(request, item)
+                if failure is not None:
+                    return Err(error=failure)
             if archive_enabled and (len(plan.items) > 0 or request.archive.force_write_archive):
                 written = write_download_archive(request.archive.path, plan.items)
                 if isinstance(written, Err):
                     return Err(error=written.error)
         case SimulationMode_Simulate() | SimulationMode_SkipDownload() | SimulationMode_PrintOnly():
             simulated = True
-
-    rendered: str = render_items(selected, request.json_mode)
-    return Ok(value=ExecutionReport(selected=selected, downloads=plan, rendered=rendered, simulated=simulated))
+    return Ok(value=ExecutionReport(selected=selected, downloads=plan, rendered=render_items(selected, request.json_mode), simulated=simulated))

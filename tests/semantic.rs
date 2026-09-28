@@ -2337,12 +2337,6 @@ fn rejects_duplicate_and_incompatible_scenario_fixture_authority() {
             0,
         ),
         (
-            "module acceptance\nfn query() -> Str:\n    effects [database.read]\nscenario unsupported:\n    call value = query()\n",
-            "scenario effect has no supported fixture backend",
-            "database.read",
-            0,
-        ),
-        (
             "module acceptance\nscenario unused:\n    fixtures:\n        fs files:\n            file \"input\" text(\"x\")\n    tick\n",
             "scenario fixture grants unused authority",
             "fs files",
@@ -2351,6 +2345,46 @@ fn rejects_duplicate_and_incompatible_scenario_fixture_authority() {
     ] {
         assert_semantic_error_at(source_text, message, token, occurrence);
     }
+}
+
+#[test]
+fn random_scenario_authority_requires_one_valid_seeded_fixture() {
+    let shuffle =
+        "module acceptance\nfn shuffle(names: List[Str]) -> List[Str]:\n    effects [random]\n";
+    for (scenario, message, token, occurrence) in [
+        (
+            "scenario missing:\n    call value = shuffle(List(\"a\"))\n",
+            "scenario required effect is missing a compatible fixture",
+            "random",
+            0,
+        ),
+        (
+            "scenario overflow:\n    fixtures:\n        random order:\n            seed: 18446744073709551616\n    call value = shuffle(List(\"a\"))\n",
+            "random fixture seed must be an unsigned 64-bit integer",
+            "18446744073709551616",
+            0,
+        ),
+        (
+            "scenario twice:\n    fixtures:\n        random first:\n            seed: 1\n        random second:\n            seed: 2\n    call value = shuffle(List(\"a\"))\n",
+            "scenario declares more than one random fixture",
+            "random second",
+            0,
+        ),
+        (
+            "scenario clock_only:\n    fixtures:\n        clock clock:\n            start_ms: 0\n            tick_ms: 1\n    call value = shuffle(List(\"a\"))\n",
+            "scenario required effect is missing a compatible fixture",
+            "random",
+            0,
+        ),
+    ] {
+        assert_semantic_error_at(&format!("{shuffle}{scenario}"), message, token, occurrence);
+    }
+    assert_semantic_error_at(
+        "module acceptance\nscenario unused:\n    fixtures:\n        random order:\n            seed: 7\n    tick\n",
+        "scenario fixture grants unused authority",
+        "random order",
+        0,
+    );
 }
 
 #[test]
@@ -2625,4 +2659,37 @@ fn complete_errors_lower_to_the_compiler_annotation_only_when_opted_in() {
     forged["annotations"] = serde_json::json!([{"argument": null, "name": "cott.complete_errors", "span": forged["span"]}]);
     forged["contract"]["clauses"][1]["when"] = serde_json::Value::Null;
     assert!(cott::ir::complete_errors(&forged).is_err());
+}
+
+#[test]
+fn database_fixture_authority_requires_a_matching_backend_and_closed_projection() {
+    let prefix =
+        "module acceptance\nfn query(url: Str) -> Str:\n    effects [database.read, network]\n";
+    let valid = format!(
+        "{prefix}scenario private:\n    fixtures:\n        database db:\n            backend: postgres\n    call output = query(db.url(\"/\"))\n"
+    );
+    let valid = lower_project([source("src/acceptance.cott", &valid)]);
+    let HirDeclaration::Scenario(scenario) = &valid.modules[0].declarations[1] else {
+        panic!("database scenario was not retained");
+    };
+    assert_eq!(
+        scenario
+            .required_effects
+            .iter()
+            .map(|effect| effect.key.as_str())
+            .collect::<Vec<_>>(),
+        ["database.read", "network"]
+    );
+    for scenario in [
+        "scenario missing:\n    call output = query(\"unavailable\")\n",
+        "scenario wrong:\n    fixtures:\n        database db:\n            backend: sqlite\n    call output = query(db.url(\"/\"))\n",
+        "scenario duplicate:\n    fixtures:\n        database first:\n            backend: postgres\n        database second:\n            backend: postgres\n    call output = query(first.url(\"/\"))\n",
+        "scenario mixed:\n    fixtures:\n        database db:\n            backend: postgres\n        http service:\n            route \"/x\" -> response(status: 200, body: text(\"ok\"), encoding: \"utf-8\")\n    call output = query(db.url(\"/\"))\n",
+    ] {
+        let text = format!("{prefix}{scenario}");
+        assert!(
+            !lower_diagnostics([source("src/acceptance.cott", &text)]).is_empty(),
+            "invalid database capability accepted: {scenario}"
+        );
+    }
 }

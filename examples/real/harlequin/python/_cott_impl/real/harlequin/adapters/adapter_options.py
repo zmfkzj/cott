@@ -1,8 +1,27 @@
 from typing import Final
 
 from cott_runtime import CottList, Nothing, Some
-
-from real.harlequin.adapters_types import AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_Postgres, AdapterKind_Sqlite, AdapterKind_Trino, AdapterOption, OptionKind, OptionKind_Choice, OptionKind_FilePath, OptionKind_Flag, OptionKind_Repeated, OptionKind_Text
+from real.harlequin.adapters_types import (
+    AdapterKind,
+    AdapterKind_Adbc,
+    AdapterKind_BigQuery,
+    AdapterKind_Cassandra,
+    AdapterKind_Databricks,
+    AdapterKind_DuckDb,
+    AdapterKind_MySql,
+    AdapterKind_NebulaGraph,
+    AdapterKind_Odbc,
+    AdapterKind_Postgres,
+    AdapterKind_Sqlite,
+    AdapterKind_Trino,
+    AdapterOption,
+    OptionKind,
+    OptionKind_Choice,
+    OptionKind_FilePath,
+    OptionKind_Flag,
+    OptionKind_Repeated,
+    OptionKind_Text,
+)
 
 _INIT_DESC: Final[str] = "The path to an initialization script. On startup, Harlequin will execute the commands in the script against the attached database."
 _NO_INIT_DESC: Final[str] = "Start Harlequin without executing the initialization script."
@@ -20,7 +39,7 @@ def _kind(spec: str) -> OptionKind:
     return OptionKind_Choice(choices=CottList(values=spec.split(",")))
 
 
-def _opt(name: str, shorts: str, spec: str, default: str, label: str, description: str, secret: bool) -> AdapterOption:
+def _option(name: str, shorts: str, spec: str, default: str, label: str, description: str, secret: bool) -> AdapterOption:
     return AdapterOption(
         name=name,
         short_decls=CottList(values=shorts.split()),
@@ -152,5 +171,7 @@ def _rows(kind: AdapterKind) -> list[tuple[str, str, str, str, str, str]]:
 
 
 def adapter_options(kind: AdapterKind) -> CottList[AdapterOption]:
-    duckdb = isinstance(kind, AdapterKind_DuckDb)
-    return CottList(values=[_opt(name, shorts, spec, default, label, desc, duckdb and name == "md_token") for (name, shorts, spec, default, label, desc) in _rows(kind)])
+    return CottList(values=[
+        _option(name, shorts, spec, default, label, description, isinstance(kind, AdapterKind_DuckDb) and name == "md_token")
+        for name, shorts, spec, default, label, description in _rows(kind)
+    ])

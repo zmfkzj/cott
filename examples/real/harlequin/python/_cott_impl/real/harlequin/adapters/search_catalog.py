@@ -1,278 +1,116 @@
 import contextlib
+import threading
+from collections.abc import Sequence
 from typing import Any, Final, cast
 
-import psycopg
 from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
-
-from real.harlequin.adapters_types import Connection, ConnectionRequest, QueryError, QueryError_Failed, SettingValue_Text
-from real.harlequin.catalog_types import CatalogEntry, CatalogKind, CatalogKind_Column, CatalogKind_Database, CatalogKind_Schema, CatalogKind_Table, CatalogKind_TemporaryTable, CatalogKind_View
+from real.harlequin.adapters_types import AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_Postgres, AdapterKind_Sqlite, AdapterKind_Trino, Connection, ConnectionRequest, QueryError, QueryError_Failed, SettingValue_Flag, SettingValue_Text
+from real.harlequin.catalog import normalize_catalog
+from real.harlequin.catalog_types import CatalogEntry, CatalogKind, CatalogKind_Column, CatalogKind_Database, CatalogKind_Other, CatalogKind_Schema, CatalogKind_Table, CatalogKind_TemporaryTable, CatalogKind_View
 
 _TAG: Final[str] = "harlequin.session"
 _TITLE: Final[str] = "Harlequin could not search the catalog."
-_KEYS: Final[str] = "adapter,driver,request,cleanup,lock,closed,transaction_mode,modes,active"
-_DEFAULT_LIMIT: Final[int] = 100
-
-_DUCKDB_SQL: Final[str] = """
-with dbs as (select database_name as d from duckdb_databases() where not internal),
-sch as (
-    select database_name as d, schema_name as s from duckdb_schemas()
-    where database_name in (select d from dbs) and schema_name not in ('pg_catalog', 'information_schema')
-),
-rels as (
-    select database_name as d, schema_name as s, table_name as r, case when temporary then 'temp' else 'table' end as k
-    from duckdb_tables()
-    union all
-    select database_name, schema_name, view_name, case when temporary then 'temp' else 'view' end
-    from duckdb_views() where not internal
-),
-rels2 as (select rels.d, rels.s, rels.r, rels.k from rels join sch on rels.d = sch.d and rels.s = sch.s)
-select 0 as lvl, d, null::varchar as s, null::varchar as r, null::varchar as k, null::varchar as col, null::varchar as t
-from dbs where d ilike $1 escape '\\'
-union all
-select 1, d, s, null, null, null, null from sch where s ilike $1 escape '\\'
-union all
-select 2, d, s, r, k, null, null from rels2 where r ilike $1 escape '\\'
-union all
-select 3, c.database_name, c.schema_name, c.table_name, rels2.k, c.column_name, c.data_type
-from duckdb_columns() c join rels2 on c.database_name = rels2.d and c.schema_name = rels2.s and c.table_name = rels2.r
-where c.column_name ilike $1 escape '\\'
-order by 1, 2, 3, 4, 6
-"""
-
-_MYSQL_DBS: Final[str] = """
-select schema_name from information_schema.schemata
-where schema_name not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-and lower(schema_name) like lower(%s) escape '\\\\' order by 1
-"""
-_MYSQL_RELS: Final[str] = """
-select table_schema, table_name, table_type from information_schema.tables
-where table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-and lower(table_name) like lower(%s) escape '\\\\' order by 1, 2
-"""
-_MYSQL_COLS: Final[str] = """
-select c.table_schema, c.table_name, t.table_type, c.column_name, c.column_type
-from information_schema.columns c join information_schema.tables t
-on c.table_schema = t.table_schema and c.table_name = t.table_name
-where c.table_schema not in ('mysql', 'information_schema', 'performance_schema', 'sys')
-and lower(c.column_name) like lower(%s) escape '\\\\' order by 1, 2, 4
-"""
-
-_CHDB_EXCLUDED: Final[str] = "('system', 'INFORMATION_SCHEMA', 'information_schema')"
 
 
-def _fail(title: str, message: str) -> Result[CottList[CatalogEntry], QueryError]:
+def _fail(title: str, message: str) -> Err[QueryError]:
     return Err(error=QueryError_Failed(title=title, message=message))
 
 
+def _adapter_name(adapter: AdapterKind) -> str:
+    if isinstance(adapter, AdapterKind_DuckDb):
+        return "DuckDb"
+    if isinstance(adapter, AdapterKind_Sqlite):
+        return "Sqlite"
+    if isinstance(adapter, AdapterKind_Postgres):
+        return "Postgres"
+    if isinstance(adapter, AdapterKind_MySql):
+        return "MySql"
+    if isinstance(adapter, AdapterKind_Odbc):
+        return "Odbc"
+    if isinstance(adapter, AdapterKind_BigQuery):
+        return "BigQuery"
+    if isinstance(adapter, AdapterKind_Trino):
+        return "Trino"
+    if isinstance(adapter, AdapterKind_Databricks):
+        return "Databricks"
+    if isinstance(adapter, AdapterKind_Adbc):
+        return "Adbc"
+    if isinstance(adapter, AdapterKind_Cassandra):
+        return "Cassandra"
+    if isinstance(adapter, AdapterKind_NebulaGraph):
+        return "NebulaGraph"
+    return "Chdb"
+
+
 def _display(adapter: str) -> str:
-    names: dict[str, str] = {
-        "DuckDb": "DuckDB",
-        "Sqlite": "SQLite",
-        "Postgres": "Postgres",
-        "MySql": "MySQL",
-        "Odbc": "ODBC",
-        "Adbc": "ADBC",
-        "Chdb": "chDB",
-    }
-    return names.get(adapter, adapter)
+    if adapter == "DuckDb":
+        return "DuckDB"
+    if adapter == "Sqlite":
+        return "SQLite"
+    if adapter == "MySql":
+        return "MySQL"
+    if adapter == "Chdb":
+        return "chDB"
+    if adapter == "Odbc":
+        return "ODBC"
+    if adapter == "Adbc":
+        return "ADBC"
+    return adapter
 
 
-def _like_pattern(term: str) -> str:
-    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+def _pattern(term: str) -> str:
+    return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def _quote(name: str, quote: str) -> str:
-    return quote + name.replace(quote, quote + quote) + quote
+def _quote(name: str, mark: str) -> str:
+    return mark + name.replace(mark, mark + mark) + mark
 
 
 def _cell(value: object) -> str:
-    if value is None:
-        return ""
     if isinstance(value, bytes):
         return value.decode("utf-8", "replace")
-    return str(value)
+    return "" if value is None else str(value)
 
 
 def _rows(raw: object) -> list[list[str]]:
+    source: Sequence[object]
+    if isinstance(raw, list):
+        source = cast(list[object], raw)
+    elif isinstance(raw, tuple):
+        source = cast(tuple[object, ...], raw)
+    else:
+        raise TypeError("Database metadata did not return rows.")
     result: list[list[str]] = []
-    if not isinstance(raw, (list, tuple)):
-        return result
-    for row in list(cast(list[object], raw)):
-        if isinstance(row, (list, tuple)):
-            result.append([_cell(item) for item in list(cast(list[object], row))])
+    for item in source:
+        cells: Sequence[object]
+        if isinstance(item, list):
+            cells = cast(list[object], item)
+        elif isinstance(item, tuple):
+            cells = cast(tuple[object, ...], item)
+        else:
+            raise TypeError("Database metadata contained a non-row value.")
+        result.append([_cell(value) for value in cells])
     return result
 
 
-def _column_label(data_type: str) -> str:
-    t = data_type.lower()
-    if t.endswith("[]") or t.startswith(("list", "array")):
-        return "[]"
-    if t.startswith(("struct", "map", "json", "tuple", "object")):
-        return "{}"
-    if t.startswith(("bool", "tinyint(1)")):
-        return "t/f"
-    if t.startswith(("decimal", "numeric", "real", "double", "float")):
-        return "#.#"
-    if "int" in t:
-        return "#"
-    if t.startswith("timestamp") or t.startswith("datetime"):
-        return "ts"
-    if t.startswith("date"):
-        return "d"
-    if t.startswith("time"):
-        return "t"
-    if t.startswith("interval"):
-        return "|-|"
-    if t.startswith("uuid"):
-        return "uid"
-    if t.startswith(("blob", "bytea", "binary", "varbinary", "bit")):
-        return "0b"
-    if t.startswith(("varchar", "char", "text", "string", "character", "nvarchar", "enum", "fixedstring", "lowcardinality(string")) or "string" in t:
-        return "s"
-    return "?" if t == "" else t[:3]
+def _sqlite_rows(driver: Any, sql: str, parameters: tuple[object, ...]) -> list[list[str]]:
+    cursor: Any = driver.execute(sql, parameters)
+    try:
+        return _rows(cast(object, cursor.fetchall()))
+    finally:
+        cursor.close()
 
 
-def _relation_kind(raw: str) -> str:
-    r = raw.lower()
-    if "temp" in r:
-        return "temp"
-    if "view" in r:
-        return "view"
-    return "table"
+def _postgres_rows(driver: Any, sql: str, parameters: tuple[object, ...]) -> list[list[str]]:
+    cursor: Any = driver.cursor()
+    try:
+        cursor.execute(sql.encode("utf-8"), parameters)
+        return _rows(cast(object, cursor.fetchall()))
+    finally:
+        cursor.close()
 
 
-def _kind(name: str) -> CatalogKind:
-    if name == "db":
-        return CatalogKind_Database()
-    if name == "sch":
-        return CatalogKind_Schema()
-    if name == "view":
-        return CatalogKind_View()
-    if name == "temp":
-        return CatalogKind_TemporaryTable()
-    if name == "col":
-        return CatalogKind_Column()
-    return CatalogKind_Table()
-
-
-def _type_label(kind: str, data_type: str) -> str:
-    labels: dict[str, str] = {"db": "db", "sch": "sch", "table": "t", "view": "v", "temp": "tmp"}
-    if kind == "col":
-        return _column_label(data_type)
-    return labels.get(kind, "")
-
-
-def _add_path(entries: dict[str, CatalogEntry], order: list[str], segments: list[tuple[str, str, str]], quote: str) -> None:
-    parent: str | None = None
-    parts: list[str] = []
-    for depth, (label, kind, data_type) in enumerate(segments):
-        quoted = _quote(label, quote)
-        parts.append(quoted)
-        ident = ".".join(parts)
-        if ident not in entries:
-            expandable = kind != "col"
-            entries[ident] = CatalogEntry(
-                id=ident,
-                parent=Nothing() if parent is None else Some(value=parent),
-                depth=depth,
-                label=label,
-                type_label=_type_label(kind, data_type),
-                kind=_kind(kind),
-                qualified_identifier=ident,
-                query_name=quoted,
-                expandable=expandable,
-                loaded=not expandable,
-            )
-            order.append(ident)
-        parent = ident
-
-
-def _search_duckdb(driver: Any, pattern: str, entries: dict[str, CatalogEntry], order: list[str]) -> None:
-    rows = _rows(cast(object, driver.execute(_DUCKDB_SQL, [pattern]).fetchall()))
-    for row in rows:
-        if len(row) < 7:
-            continue
-        level = row[0]
-        segments: list[tuple[str, str, str]] = [(row[1], "db", "")]
-        if level in ("1", "2", "3"):
-            segments.append((row[2], "sch", ""))
-        if level in ("2", "3"):
-            segments.append((row[3], _relation_kind(row[4]), ""))
-        if level == "3":
-            segments.append((row[5], "col", row[6]))
-        _add_path(entries, order, segments, '"')
-
-
-def _sqlite_like(driver: Any, value: str, pattern: str) -> bool:
-    rows = _rows(cast(object, driver.execute("select ? like ? escape '\\'", (value, pattern)).fetchall()))
-    return bool(rows) and rows[0][0] == "1"
-
-
-def _search_sqlite(driver: Any, pattern: str, entries: dict[str, CatalogEntry], order: list[str]) -> None:
-    dbs = [row[0] for row in _rows(cast(object, driver.execute("select name from pragma_database_list order by seq").fetchall())) if row]
-    for db in dbs:
-        if _sqlite_like(driver, db, pattern):
-            _add_path(entries, order, [(db, "db", "")], '"')
-        schema = _quote(db, '"') + ".sqlite_schema"
-        rel_sql = (
-            f"select name, type from {schema} where type in ('table', 'view') "
-            "and name not like 'sqlite\\_%' escape '\\' and name like ? escape '\\' order by name"
-        )
-        for row in _rows(cast(object, driver.execute(rel_sql, (pattern,)).fetchall())):
-            kind = "temp" if db == "temp" and row[1] == "table" else _relation_kind(row[1])
-            _add_path(entries, order, [(db, "db", ""), (row[0], kind, "")], '"')
-        col_sql = (
-            f"select r.name, r.type, c.name, c.type from {schema} r join pragma_table_info(r.name, ?) c "
-            "where r.type in ('table', 'view') and r.name not like 'sqlite\\_%' escape '\\' "
-            "and c.name like ? escape '\\' order by r.name, c.cid"
-        )
-        for row in _rows(cast(object, driver.execute(col_sql, (db, pattern)).fetchall())):
-            kind = "temp" if db == "temp" and row[1] == "table" else _relation_kind(row[1])
-            _add_path(entries, order, [(db, "db", ""), (row[0], kind, ""), (row[2], "col", row[3])], '"')
-
-
-def _search_postgres(conn: psycopg.Connection[tuple[object, ...]], pattern: str, entries: dict[str, CatalogEntry], order: list[str]) -> None:
-    db_row = conn.execute("select current_database(), current_database() ilike %s escape '\\'", (pattern,)).fetchone()
-    if db_row is None:
-        return
-    db = _cell(db_row[0])
-    if db_row[1] is True:
-        _add_path(entries, order, [(db, "db", "")], '"')
-    schemas = conn.execute(
-        "select schema_name from information_schema.schemata where catalog_name = current_database() "
-        "and schema_name <> 'information_schema' and left(schema_name, 3) <> 'pg_' "
-        "and schema_name ilike %s escape '\\' order by 1",
-        (pattern,),
-    ).fetchall()
-    for row in _rows(schemas):
-        _add_path(entries, order, [(db, "db", ""), (row[0], "sch", "")], '"')
-    rels = conn.execute(
-        "select table_schema, table_name, table_type from information_schema.tables "
-        "where table_catalog = current_database() and table_schema <> 'information_schema' "
-        "and left(table_schema, 3) <> 'pg_' and table_name ilike %s escape '\\' order by 1, 2",
-        (pattern,),
-    ).fetchall()
-    for row in _rows(rels):
-        _add_path(entries, order, [(db, "db", ""), (row[0], "sch", ""), (row[1], _relation_kind(row[2]), "")], '"')
-    cols = conn.execute(
-        "select c.table_schema, c.table_name, t.table_type, c.column_name, c.data_type "
-        "from information_schema.columns c join information_schema.tables t "
-        "on c.table_catalog = t.table_catalog and c.table_schema = t.table_schema and c.table_name = t.table_name "
-        "where c.table_catalog = current_database() and c.table_schema <> 'information_schema' "
-        "and left(c.table_schema, 3) <> 'pg_' and c.column_name ilike %s escape '\\' order by 1, 2, 4",
-        (pattern,),
-    ).fetchall()
-    for row in _rows(cols):
-        _add_path(
-            entries,
-            order,
-            [(db, "db", ""), (row[0], "sch", ""), (row[1], _relation_kind(row[2]), ""), (row[3], "col", row[4])],
-            '"',
-        )
-
-
-def _mysql_query(driver: Any, sql: str, pattern: str) -> list[list[str]]:
+def _mysql_rows(driver: Any, sql: str, pattern: str) -> list[list[str]]:
     cursor: Any = driver.cursor()
     try:
         cursor.execute(sql, (pattern,))
@@ -281,63 +119,320 @@ def _mysql_query(driver: Any, sql: str, pattern: str) -> list[list[str]]:
         cursor.close()
 
 
-def _search_mysql(driver: Any, pattern: str, entries: dict[str, CatalogEntry], order: list[str]) -> None:
-    for row in _mysql_query(driver, _MYSQL_DBS, pattern):
-        _add_path(entries, order, [(row[0], "db", "")], "`")
-    for row in _mysql_query(driver, _MYSQL_RELS, pattern):
-        _add_path(entries, order, [(row[0], "db", ""), (row[1], _relation_kind(row[2]), "")], "`")
-    for row in _mysql_query(driver, _MYSQL_COLS, pattern):
-        _add_path(
-            entries, order, [(row[0], "db", ""), (row[1], _relation_kind(row[2]), ""), (row[3], "col", row[4])], "`"
-        )
-
-
-def _chdb_limit(request: ConnectionRequest) -> int:
-    for setting in request.settings:
-        if setting.name.replace("-", "_") == "catalog_search_limit":
-            value = setting.value
-            if isinstance(value, SettingValue_Text) and value.value.strip().isdigit():
-                return max(int(value.value.strip()), 1)
-    return _DEFAULT_LIMIT
-
-
-def _chdb_query(driver: Any, active: list[object], sql: str) -> list[list[str]]:
+def _chdb_rows(driver: Any, active: list[object], sql: str) -> list[list[str]]:
     cursor: Any = driver.cursor()
-    active.append(cast(object, cursor))
+    executing: object = cast(object, cursor)
+    active.append(executing)
     try:
         cursor.execute(sql)
         return _rows(cast(object, cursor.fetchall()))
     finally:
-        active.remove(cast(object, cursor))
+        active.remove(executing)
         cursor.close()
 
 
-def _search_chdb(driver: Any, active: list[object], term: str, pattern: str, limit: int, entries: dict[str, CatalogEntry], order: list[str]) -> None:
-    lit = "'" + term.replace("\\", "\\\\").replace("'", "\\'") + "'"
-    like = "'" + pattern.replace("\\", "\\\\").replace("'", "\\'") + "'"
-    dbs_sql = (
-        f"select name from system.databases where name not in {_CHDB_EXCLUDED} "
-        f"and positionCaseInsensitive(name, {lit}) > 0 and name ilike {like} order by name limit {limit}"
-    )
-    rels_sql = (
-        f"select database, name, if(is_temporary, 'temp', engine) from system.tables "
-        f"where database not in {_CHDB_EXCLUDED} and positionCaseInsensitive(name, {lit}) > 0 and name ilike {like} "
-        f"order by database, name limit {limit}"
-    )
-    cols_sql = (
-        f"select c.database, c.table, if(t.is_temporary, 'temp', t.engine), c.name, c.type "
-        f"from system.columns c join system.tables t on c.database = t.database and c.table = t.name "
-        f"where c.database not in {_CHDB_EXCLUDED} and positionCaseInsensitive(c.name, {lit}) > 0 and c.name ilike {like} "
-        f"order by c.database, c.table, c.position limit {limit}"
-    )
-    for row in _chdb_query(driver, active, dbs_sql):
-        _add_path(entries, order, [(row[0], "db", "")], "`")
-    for row in _chdb_query(driver, active, rels_sql):
-        _add_path(entries, order, [(row[0], "db", ""), (row[1], _relation_kind(row[2]), "")], "`")
-    for row in _chdb_query(driver, active, cols_sql):
-        _add_path(
-            entries, order, [(row[0], "db", ""), (row[1], _relation_kind(row[2]), ""), (row[3], "col", row[4])], "`"
-        )
+def _duck_type(data_type: str) -> str:
+    raw = data_type.strip().upper()
+    if raw.endswith("[]"):
+        return "[" + _duck_type(raw[:-2]) + "]"
+    base = raw.split("(", 1)[0].split("[", 1)[0].strip()
+    if base == "SQLNULL":
+        return "\\n"
+    if base == "BOOLEAN":
+        return "t/f"
+    if base in ("TINYINT", "SMALLINT", "INTEGER"):
+        return "#"
+    if base in ("UTINYINT", "USMALLINT", "UINTEGER"):
+        return "u#"
+    if base == "BIGINT":
+        return "##"
+    if base == "UBIGINT":
+        return "u##"
+    if base == "HUGEINT":
+        return "###"
+    if base == "UUID":
+        return "uid"
+    if base in ("FLOAT", "DOUBLE", "DECIMAL", "REAL"):
+        return "#.#"
+    if base == "DATE":
+        return "d"
+    if base in ("TIME_TZ", "TIMESTAMP_TZ", "TIME WITH TIME ZONE", "TIMESTAMP WITH TIME ZONE"):
+        return "ttz"
+    if base.startswith("TIMESTAMP"):
+        return "ts"
+    if base == "TIME":
+        return "t"
+    if base == "VARCHAR":
+        return "s"
+    if base == "BLOB":
+        return "0b"
+    if base == "BIT":
+        return "010"
+    if base == "INTERVAL":
+        return "|-|"
+    if base == "STRUCT":
+        return "{}"
+    if base == "MAP":
+        return "{m}"
+    return "?"
+
+
+def _sqlite_type(data_type: str) -> str:
+    base = data_type.strip().upper().split("(", 1)[0].strip()
+    if base == "TEXT":
+        return "s"
+    if base == "INTEGER":
+        return "##"
+    if base in ("REAL", "NUMERIC"):
+        return "#.#"
+    if base == "BLOB":
+        return "b"
+    return "" if base == "" else "?"
+
+
+def _sql_type(data_type: str) -> str:
+    base = data_type.strip().lower()
+    if base.startswith(("bool", "tinyint(1)")):
+        return "t/f"
+    if base.startswith(("decimal", "numeric", "real", "double", "float")):
+        return "#.#"
+    if base.startswith(("tinyint", "smallint", "mediumint", "integer", "bigint", "serial", "number", "int2", "int4", "int8")) or base == "int" or base.startswith(("int(", "int ")):
+        return "#"
+    if base.startswith(("timestamp", "datetime")):
+        return "ts"
+    if base.startswith("date"):
+        return "d"
+    if base.startswith("time"):
+        return "t"
+    if base.startswith(("blob", "binary", "bytea", "varbinary")) or base.endswith("blob"):
+        return "0b"
+    if base.startswith(("varchar", "char", "character", "text", "string", "uuid", "citext", "json")) or base.endswith("text"):
+        return "s"
+    return "?"
+
+
+def _kind(kind: str) -> CatalogKind:
+    if kind == "db":
+        return CatalogKind_Database()
+    if kind == "sch":
+        return CatalogKind_Schema()
+    if kind == "col":
+        return CatalogKind_Column()
+    if kind in ("view", "mv"):
+        return CatalogKind_View()
+    if kind == "temp":
+        return CatalogKind_TemporaryTable()
+    if kind == "dic":
+        return CatalogKind_Other()
+    return CatalogKind_Table()
+
+
+def _label(kind: str, data_type: str, adapter: str) -> str:
+    if kind == "col":
+        if adapter == "DuckDb":
+            return _duck_type(data_type)
+        if adapter == "Sqlite":
+            return _sqlite_type(data_type)
+        if adapter == "Chdb":
+            return data_type
+        return _sql_type(data_type)
+    if kind == "db":
+        return "db"
+    if kind == "sch":
+        return "sch"
+    if kind == "view":
+        return "v"
+    if kind == "temp":
+        return "tmp"
+    if kind == "mv":
+        return "mv"
+    if kind == "dic":
+        return "dic"
+    if kind == "foreign":
+        return "f"
+    return "t"
+
+
+def _add(entries: dict[str, CatalogEntry], path: list[tuple[str, str, str]], mark: str, adapter: str) -> None:
+    parent: str | None = None
+    parts: list[str] = []
+    for depth, (name, kind, data_type) in enumerate(path):
+        quoted = _quote(name, mark)
+        parts.append(quoted)
+        ident = ".".join(parts)
+        if ident not in entries:
+            expandable = kind != "col"
+            query_name = quoted if kind in ("db", "col") else ".".join(parts[-2:])
+            entries[ident] = CatalogEntry(id=ident, parent=Nothing() if parent is None else Some(value=parent), depth=depth, label=name, type_label=_label(kind, data_type, adapter), kind=_kind(kind), qualified_identifier=ident, query_name=query_name, expandable=expandable, loaded=not expandable)
+        parent = ident
+
+
+def _sorted_entries(entries: dict[str, CatalogEntry]) -> list[CatalogEntry]:
+    children: dict[str, list[CatalogEntry]] = {}
+    roots: list[CatalogEntry] = []
+    for entry in entries.values():
+        parent = entry.parent
+        if isinstance(parent, Some):
+            children.setdefault(parent.value, []).append(entry)
+        else:
+            roots.append(entry)
+    roots.sort(key=lambda entry: (entry.label.casefold(), entry.label))
+    stack = list(reversed(roots))
+    ordered: list[CatalogEntry] = []
+    while stack:
+        entry = stack.pop()
+        ordered.append(entry)
+        siblings = children.get(entry.id)
+        if siblings is not None:
+            siblings.sort(key=lambda child: (child.label.casefold(), child.label))
+            stack.extend(reversed(siblings))
+    return ordered
+
+
+def _relation(table_type: str) -> str:
+    lower = table_type.lower()
+    if "temp" in lower:
+        return "temp"
+    if "materialized" in lower:
+        return "mv"
+    if "view" in lower:
+        return "view"
+    if "foreign" in lower:
+        return "foreign"
+    return "table"
+
+
+def _chdb_relation(engine: str) -> str:
+    lower = engine.lower()
+    if lower in ("materializedview", "materialized view"):
+        return "mv"
+    if lower == "view":
+        return "view"
+    if lower == "dictionary":
+        return "dic"
+    return "table"
+
+
+def _duck(driver: Any, pattern: str, entries: dict[str, CatalogEntry]) -> None:
+    sql = """WITH db AS (SELECT database_name d FROM duckdb_databases() WHERE NOT internal),
+sch AS (SELECT database_name d, schema_name s FROM duckdb_schemas() WHERE database_name IN (SELECT d FROM db) AND schema_name NOT IN ('pg_catalog', 'information_schema')),
+rel AS (SELECT database_name d, schema_name s, table_name r, CASE WHEN temporary THEN 'temp' ELSE 'table' END k FROM duckdb_tables() WHERE NOT internal UNION ALL SELECT database_name, schema_name, view_name, 'view' FROM duckdb_views() WHERE NOT internal),
+r AS (SELECT rel.* FROM rel JOIN sch ON rel.d = sch.d AND rel.s = sch.s)
+SELECT 0 lvl, d, NULL::VARCHAR s, NULL::VARCHAR r, NULL::VARCHAR k, NULL::VARCHAR col, NULL::VARCHAR t FROM db WHERE d ILIKE $1 ESCAPE '\\'
+UNION ALL SELECT 1, d, s, NULL, NULL, NULL, NULL FROM sch WHERE s ILIKE $1 ESCAPE '\\'
+UNION ALL SELECT 2, d, s, r, k, NULL, NULL FROM r WHERE r ILIKE $1 ESCAPE '\\'
+UNION ALL SELECT 3, c.database_name, c.schema_name, c.table_name, r.k, c.column_name, c.data_type FROM duckdb_columns() c JOIN r ON c.database_name = r.d AND c.schema_name = r.s AND c.table_name = r.r WHERE c.column_name ILIKE $1 ESCAPE '\\'
+ORDER BY 1, 2, 3, 4, 6"""
+    for row in _rows(cast(object, driver.execute(sql, [pattern]).fetchall())):
+        if len(row) != 7:
+            raise TypeError("DuckDB returned malformed catalog metadata.")
+        path = [(row[1], "db", "")]
+        if row[0] in ("1", "2", "3"):
+            path.append((row[2], "sch", ""))
+        if row[0] in ("2", "3"):
+            path.append((row[3], row[4], ""))
+        if row[0] == "3":
+            path.append((row[5], "col", row[6]))
+        _add(entries, path, '"', "DuckDb")
+
+
+def _sqlite(driver: Any, pattern: str, entries: dict[str, CatalogEntry]) -> None:
+    databases = _sqlite_rows(driver, "SELECT name, lower(name) LIKE lower(?) ESCAPE '\\' FROM pragma_database_list ORDER BY name", (pattern,))
+    for db_row in databases:
+        if len(db_row) != 2:
+            raise TypeError("SQLite returned malformed database metadata.")
+        db = db_row[0]
+        if db_row[1] == "1":
+            _add(entries, [(db, "db", "")], '"', "Sqlite")
+        schema = _quote(db, '"') + ".sqlite_schema"
+        relations = _sqlite_rows(driver, f"SELECT name, type FROM {schema} WHERE type IN ('table', 'view') AND lower(name) LIKE lower(?) ESCAPE '\\' ORDER BY name", (pattern,))
+        for row in relations:
+            if len(row) != 2:
+                raise TypeError("SQLite returned malformed relation metadata.")
+            _add(entries, [(db, "db", ""), (row[0], _relation(row[1]), "")], '"', "Sqlite")
+        columns = _sqlite_rows(driver, f"SELECT r.name, r.type, c.name, c.type FROM {schema} r JOIN pragma_table_info(r.name, ?) c WHERE r.type IN ('table', 'view') AND lower(c.name) LIKE lower(?) ESCAPE '\\' ORDER BY r.name, c.name", (db, pattern))
+        for row in columns:
+            if len(row) != 4:
+                raise TypeError("SQLite returned malformed column metadata.")
+            _add(entries, [(db, "db", ""), (row[0], _relation(row[1]), ""), (row[2], "col", row[3])], '"', "Sqlite")
+
+
+def _postgres(driver: Any, pattern: str, entries: dict[str, CatalogEntry]) -> None:
+    current = _postgres_rows(driver, "SELECT current_database()", ())
+    if len(current) != 1 or len(current[0]) != 1:
+        raise TypeError("Postgres returned no current database.")
+    connected = current[0][0]
+    for row in _postgres_rows(driver, "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname ILIKE %s ESCAPE '\\' ORDER BY datname", (pattern,)):
+        if len(row) != 1:
+            raise TypeError("Postgres returned malformed database metadata.")
+        _add(entries, [(row[0], "db", "")], '"', "Postgres")
+    for row in _postgres_rows(driver, "SELECT nspname FROM pg_namespace WHERE nspname ILIKE %s ESCAPE '\\' ORDER BY nspname", (pattern,)):
+        if len(row) != 1:
+            raise TypeError("Postgres returned malformed schema metadata.")
+        _add(entries, [(connected, "db", ""), (row[0], "sch", "")], '"', "Postgres")
+    relation_sql = """SELECT n.nspname, c.relname, CASE WHEN c.relpersistence = 't' THEN 'temp' WHEN c.relkind = 'v' THEN 'view' WHEN c.relkind = 'm' THEN 'mv' WHEN c.relkind = 'f' THEN 'foreign' ELSE 'table' END
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND c.relname ILIKE %s ESCAPE '\\' ORDER BY n.nspname, c.relname"""
+    for row in _postgres_rows(driver, relation_sql, (pattern,)):
+        if len(row) != 3:
+            raise TypeError("Postgres returned malformed relation metadata.")
+        _add(entries, [(connected, "db", ""), (row[0], "sch", ""), (row[1], row[2], "")], '"', "Postgres")
+    column_sql = """SELECT n.nspname, c.relname, CASE WHEN c.relpersistence = 't' THEN 'temp' WHEN c.relkind = 'v' THEN 'view' WHEN c.relkind = 'm' THEN 'mv' WHEN c.relkind = 'f' THEN 'foreign' ELSE 'table' END, a.attname, format_type(a.atttypid, a.atttypmod)
+FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND a.attnum > 0 AND NOT a.attisdropped AND a.attname ILIKE %s ESCAPE '\\' ORDER BY n.nspname, c.relname, a.attname"""
+    for row in _postgres_rows(driver, column_sql, (pattern,)):
+        if len(row) != 5:
+            raise TypeError("Postgres returned malformed column metadata.")
+        _add(entries, [(connected, "db", ""), (row[0], "sch", ""), (row[1], row[2], ""), (row[3], "col", row[4])], '"', "Postgres")
+
+
+def _mysql(driver: Any, pattern: str, entries: dict[str, CatalogEntry]) -> None:
+    db_sql = "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') AND lower(schema_name) LIKE lower(%s) ESCAPE '\\\\' ORDER BY schema_name"
+    for row in _mysql_rows(driver, db_sql, pattern):
+        if len(row) != 1:
+            raise TypeError("MySQL returned malformed database metadata.")
+        _add(entries, [(row[0], "db", "")], "`", "MySql")
+    relation_sql = """SELECT table_schema, table_name, table_type FROM information_schema.tables
+WHERE table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') AND lower(table_name) LIKE lower(%s) ESCAPE '\\\\' ORDER BY table_schema, table_name"""
+    for row in _mysql_rows(driver, relation_sql, pattern):
+        if len(row) != 3:
+            raise TypeError("MySQL returned malformed relation metadata.")
+        _add(entries, [(row[0], "db", ""), (row[1], _relation(row[2]), "")], "`", "MySql")
+    column_sql = """SELECT c.table_schema, c.table_name, t.table_type, c.column_name, c.data_type FROM information_schema.columns c
+JOIN information_schema.tables t ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+WHERE c.table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') AND lower(c.column_name) LIKE lower(%s) ESCAPE '\\\\' ORDER BY c.table_schema, c.table_name, c.column_name"""
+    for row in _mysql_rows(driver, column_sql, pattern):
+        if len(row) != 5:
+            raise TypeError("MySQL returned malformed column metadata.")
+        _add(entries, [(row[0], "db", ""), (row[1], _relation(row[2]), ""), (row[3], "col", row[4])], "`", "MySql")
+
+
+def _chdb(driver: Any, active: list[object], request: ConnectionRequest, term: str, entries: dict[str, CatalogEntry]) -> None:
+    limit = 100
+    show_system = False
+    for setting in request.settings:
+        if setting.name == "catalog_search_limit" and isinstance(setting.value, SettingValue_Text):
+            limit = max(0, int(setting.value.value))
+        if setting.name == "show_system" and isinstance(setting.value, SettingValue_Flag):
+            show_system = setting.value.value
+    literal = "'" + term.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r") + "'"
+    db_filter = "" if show_system else "name NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND "
+    table_filter = "" if show_system else "database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND "
+    column_filter = "" if show_system else "c.database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND "
+    db_sql = f"SELECT name FROM system.databases WHERE {db_filter}positionCaseInsensitive(name, {literal}) > 0 ORDER BY name LIMIT {limit}"
+    for row in _chdb_rows(driver, active, db_sql):
+        if len(row) != 1:
+            raise TypeError("chDB returned malformed database metadata.")
+        _add(entries, [(row[0], "db", "")], "`", "Chdb")
+    relation_sql = f"SELECT database, name, engine FROM system.tables WHERE {table_filter}positionCaseInsensitive(name, {literal}) > 0 ORDER BY database, name LIMIT {limit}"
+    for row in _chdb_rows(driver, active, relation_sql):
+        if len(row) != 3:
+            raise TypeError("chDB returned malformed relation metadata.")
+        _add(entries, [(row[0], "db", ""), (row[1], _chdb_relation(row[2]), "")], "`", "Chdb")
+    column_sql = f"SELECT c.database, c.table, t.engine, c.name, c.type FROM system.columns c JOIN system.tables t ON c.database = t.database AND c.table = t.name WHERE {column_filter}positionCaseInsensitive(c.name, {literal}) > 0 ORDER BY c.database, c.table, c.position LIMIT {limit}"
+    for row in _chdb_rows(driver, active, column_sql):
+        if len(row) != 5:
+            raise TypeError("chDB returned malformed column metadata.")
+        _add(entries, [(row[0], "db", ""), (row[1], _chdb_relation(row[2]), ""), (row[3], "col", row[4])], "`", "Chdb")
 
 
 def search_catalog(connection: Connection, term: str) -> Result[CottList[CatalogEntry], QueryError]:
@@ -348,41 +443,47 @@ def search_catalog(connection: Connection, term: str) -> Result[CottList[Catalog
     if not isinstance(raw, dict):
         return _fail(_TITLE, "The connection handle is malformed.")
     payload = cast(dict[str, object], raw)
-    if set(payload.keys()) != set(_KEYS.split(",")):
+    if len(payload) != 9 or any(key not in payload for key in ("adapter", "driver", "request", "cleanup", "lock", "closed", "transaction_mode", "modes", "active")):
         return _fail(_TITLE, "The connection handle is malformed.")
     adapter = payload["adapter"]
     lock = payload["lock"]
-    active_raw = payload["active"]
     request = payload["request"]
+    active_raw = payload["active"]
+    modes = payload["modes"]
     if (
         not isinstance(adapter, str)
-        or not isinstance(lock, contextlib.AbstractContextManager)
-        or not isinstance(payload["closed"], bool)
-        or not isinstance(active_raw, list)
+        or not isinstance(lock, type(threading.RLock()))
         or not isinstance(request, ConnectionRequest)
+        or not isinstance(active_raw, list)
+        or not isinstance(payload["closed"], bool)
+        or not isinstance(payload["cleanup"], contextlib.ExitStack)
+        or not isinstance(modes, list)
+        or (payload["transaction_mode"] is not None and not isinstance(payload["transaction_mode"], str))
+        or payload["driver"] is None
     ):
         return _fail(_TITLE, "The connection handle is malformed.")
+    if any(not isinstance(mode, str) for mode in cast(list[object], modes)) or adapter != _adapter_name(connection.adapter) or request.adapter != connection.adapter:
+        return _fail(_TITLE, "The connection handle is malformed.")
     active = cast(list[object], active_raw)
-    if adapter not in ("DuckDb", "Sqlite", "Postgres", "MySql", "Chdb"):
-        return _fail(_TITLE, f"The {_display(adapter)} adapter does not support catalog search.")
-    pattern = _like_pattern(term)
-    entries: dict[str, CatalogEntry] = {}
-    order: list[str] = []
     with cast(contextlib.AbstractContextManager[object], lock):
-        if payload["closed"] is True:
+        if payload["closed"]:
             return _fail(_TITLE, "The connection is closed.")
+        if adapter not in ("DuckDb", "Sqlite", "Postgres", "MySql", "Chdb"):
+            return _fail(_TITLE, f"The {_display(adapter)} adapter does not support catalog search.")
         driver: Any = payload["driver"]
+        entries: dict[str, CatalogEntry] = {}
+        pattern = _pattern(term)
         try:
             if adapter == "DuckDb":
-                _search_duckdb(driver, pattern, entries, order)
+                _duck(driver, pattern, entries)
             elif adapter == "Sqlite":
-                _search_sqlite(driver, pattern, entries, order)
+                _sqlite(driver, pattern, entries)
             elif adapter == "Postgres":
-                _search_postgres(cast(psycopg.Connection[tuple[object, ...]], driver), pattern, entries, order)
+                _postgres(driver, pattern, entries)
             elif adapter == "MySql":
-                _search_mysql(driver, pattern, entries, order)
+                _mysql(driver, pattern, entries)
             else:
-                _search_chdb(driver, active, term, pattern, _chdb_limit(request), entries, order)
+                _chdb(driver, active, request, term, entries)
         except Exception as error:
             return _fail(f"{_display(adapter)} raised an error searching the catalog:", str(error))
-    return Ok(value=CottList(values=[entries[ident] for ident in order]))
+    return Ok(value=normalize_catalog(CottList(values=_sorted_entries(entries))))

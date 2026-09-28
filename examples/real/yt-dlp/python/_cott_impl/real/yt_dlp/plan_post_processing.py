@@ -48,9 +48,9 @@ def plan_post_processing(item: MediaItem, request: PostProcessRequest) -> Result
         case Some(value=tool):
             if tool.executable == "":
                 return Err(error=MediaError_ExternalToolMissing(name=tool.executable))
-            if Path(tool.input) == Path("."):
+            if tool.input == Path("."):
                 return Err(error=MediaError_InvalidInput(message="external tool input must not be the current directory"))
-            if Path(tool.output) == Path("."):
+            if tool.output == Path("."):
                 return Err(error=MediaError_InvalidInput(message="external tool output must not be the current directory"))
             if tool.timeout_ms == 0:
                 return Err(error=MediaError_InvalidInput(message="external tool timeout_ms must be nonzero"))

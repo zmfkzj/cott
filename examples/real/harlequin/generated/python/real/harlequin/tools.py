@@ -260,7 +260,7 @@ any files." and returns 0. Always returns 0."""
     theme_names = _cott_normalize_f32_abi(theme_names, CottList[str], path="$.theme_names")
     keymap_names = _cott_normalize_f32_abi(keymap_names, CottList[str], path="$.keymap_names")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/tools/run_config_wizard.py", "b7bca069c53f0a4d537620f7b5d2d478cb7fd20c6a698d947a89661748d10ff4", "run_config_wizard", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.tools.run_config_wizard")
+        _implementation = _cott_load("_cott_impl/real/harlequin/tools/run_config_wizard.py", "3bf3e665373a1d8232522560d3d1204a73fa4d362707d08603d0e7ed9917a933", "run_config_wizard", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.tools.run_config_wizard")
         _result = _implementation(explicit_path, default_path, descriptors, theme_names, keymap_names)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

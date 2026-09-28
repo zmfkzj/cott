@@ -16,25 +16,16 @@ def _container_matches(wanted: FormatContainer, fmt: FormatDescriptor) -> bool:
             return isinstance(fmt.container, FormatContainer_Worst)
 
 
-def _any_container_matches(containers: CottList[FormatContainer], fmt: FormatDescriptor) -> bool:
-    for wanted in containers:
-        if _container_matches(wanted, fmt):
-            return True
-    return False
-
-
 def filter_formats(formats: CottList[FormatDescriptor], request: FormatRequest) -> Result[CottList[FormatDescriptor], MediaError]:
-    if request.max_file_size != 0 and request.min_file_size > request.max_file_size:
+    if request.max_file_size != 0 and request.max_file_size < request.min_file_size:
         return Err(error=MediaError_InvalidInput(message="min_file_size exceeds max_file_size"))
     selected: list[FormatDescriptor] = []
     for fmt in formats:
-        if fmt.file_size < request.min_file_size:
+        if fmt.file_size < request.min_file_size or (request.max_file_size != 0 and fmt.file_size > request.max_file_size):
             continue
-        if request.max_file_size != 0 and fmt.file_size > request.max_file_size:
-            continue
-        if len(request.containers) > 0 and not _any_container_matches(request.containers, fmt):
+        if len(request.containers) != 0 and not any(_container_matches(wanted, fmt) for wanted in request.containers):
             continue
         selected.append(fmt)
-    if len(selected) == 0:
+    if not selected:
         return Err(error=MediaError_FormatUnavailable(selector=request.selector))
     return Ok(value=CottList(values=selected))

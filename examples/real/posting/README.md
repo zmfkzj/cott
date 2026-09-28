@@ -46,12 +46,12 @@ composed `execute` output and error propagation. `cott requirements` reports bot
 requirements as `observed` for the current snapshot: bounded scenario evidence, not proof.
 
 The strict coverage policy selects all 23 formal clauses across the five callables.
-The latest `emit python` and `verify` run passed with `selected=23` and no policy
+The latest regeneration and `verify` run passed with `selected=23` and no policy
 violations; none of `unobserved`, `trust_declaration` or `unknown` is allowed.
-Selection does not establish execution: the current compiler also classifies
-contract `proved` evidence as `observed` (including `execute`'s argument-count
-error), and the non-GET/HEAD postconditions can hold vacuously in GET scenarios.
-This policy does not close the observation gaps listed below.
+The `execute` argument-count rejection is now exercised by an actual empty-argument
+facade call. Static proofs remain separate and cannot satisfy execution coverage.
+The non-GET/HEAD postconditions can still hold vacuously in GET scenarios;
+bounded observation does not establish every branch or close the gaps below.
 
 Not observed by Cott evidence:
 

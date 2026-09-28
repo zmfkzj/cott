@@ -1,6 +1,16 @@
 import cott_runtime
 from cott_runtime import Result
-from real.yt_dlp_types import Authentication, AuthenticationKind_Anonymous, AuthenticationKind_BrowserCookies, AuthenticationKind_Cookies, AuthenticationKind_Credentials, AuthenticationKind_Netrc, MediaError, MediaError_AuthenticationFailed, MediaError_CookieFailure
+from real.yt_dlp_types import (
+    Authentication,
+    AuthenticationKind_Anonymous,
+    AuthenticationKind_BrowserCookies,
+    AuthenticationKind_Cookies,
+    AuthenticationKind_Credentials,
+    AuthenticationKind_Netrc,
+    MediaError,
+    MediaError_AuthenticationFailed,
+    MediaError_CookieFailure,
+)
 
 
 def resolve_authentication(request: Authentication) -> Result[Authentication, MediaError]:

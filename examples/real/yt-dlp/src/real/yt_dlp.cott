@@ -1294,6 +1294,9 @@ fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     Require at least one resulting URL, otherwise return InvalidInput.
     Discover descriptors through discover_extractors. For each URL in order
     call choose_extractor and extract_media; concatenate their actual items.
+    That fixed registry has no disabled descriptors, so this pipeline never
+    returns ExtractorMissing. choose_extractor retains that error for callers
+    that supply their own disabled registries.
     Apply select_playlist, then resolve_live_media, then filter_video to these
     items using their respective request settings.
     
@@ -1339,7 +1342,6 @@ fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     error MediaError.InvalidRange
     error MediaError.CookieFailure
     error MediaError.GeoRestricted
-    error MediaError.ExtractorMissing
     error MediaError.UnsupportedUrl
     error MediaError.InvalidTemplate
     error MediaError.ArchiveFailure
@@ -1640,6 +1642,127 @@ data small_buffer_fragments: FragmentPolicy = FragmentPolicy(
     file_access_retries: 0,
     continue_download: false,
     part_files: true,
+)
+
+# Loopback-backed execution request; a using scenario declares `files` and `service`.
+data http_media_request: ExecutionRequest = ExecutionRequest(
+    inputs: List(CliInput(kind: InputKind.Argument, value: service.url("/media/clip.mp4"))),
+    network: NetworkPolicy(
+        proxy_mode: ProxyMode.Direct,
+        proxy: "",
+        socket_timeout_ms: 5000,
+        source_address: "",
+        force_ipv4: false,
+        force_ipv6: false,
+        geo_mode: GeoBypassMode.Default,
+        geo_country: "",
+        geo_ip_block: "",
+    ),
+    authentication: Authentication(
+        kind: AuthenticationKind.Anonymous,
+        username: "",
+        password: "",
+        netrc_location: files.path("netrc"),
+        cookie_file: files.path("netrc"),
+        browser: "",
+        profile: "",
+    ),
+    playlist: PlaylistRequest(
+        mode: PlaylistMode.Playlist,
+        ranges: List(),
+        start: 0,
+        end: 0,
+        items: "",
+        reverse: false,
+        random: false,
+    ),
+    live: LiveRequest(mode: LiveMode.Default, wait_for_video_ms: 0, concurrent_fragments: 1),
+    video_filter: VideoFilterRequest(
+        date_after: "",
+        date_before: "",
+        min_views: 0,
+        max_views: 0,
+        age_limit: 0,
+        match_filter: "",
+        reject_live: false,
+        include_ads: true,
+    ),
+    shortcut: ShortcutRequest(kind: ShortcutKind.Url, query: "", limit: 1),
+    formats: FormatRequest(
+        selector: "",
+        containers: List(),
+        sort_fields: List(),
+        merge_output_format: "",
+        min_file_size: 0,
+        max_file_size: 1024,
+        prefer_free_formats: false,
+    ),
+    subtitles: SubtitleRequest(
+        mode: SubtitleMode.None,
+        languages: List(),
+        formats: List(),
+        convert_format: "",
+        embed: false,
+    ),
+    thumbnails: ThumbnailRequest(write: false, formats: List(), convert_format: "", embed: false),
+    metadata: MetadataRequest(
+        write_info_json: false,
+        write_description: false,
+        write_comments: false,
+        write_playlist_metadata: false,
+        embed: false,
+    ),
+    output: OutputRequest(
+        template: "%(id)s.%(ext)s",
+        home: files.path("home"),
+        temp: files.path("temp"),
+        output: files.path("downloads"),
+        missing_placeholder: "NA",
+        restrict_filenames: false,
+        windows_filenames: false,
+        trim_filename_bytes: 0,
+    ),
+    archive: ArchiveRequest(
+        path: files.path("archive.txt"),
+        break_on_existing: false,
+        force_write_archive: false,
+    ),
+    fragments: FragmentPolicy(
+        concurrent_fragments: 1,
+        buffer_size: 65536,
+        chunk_size: 0,
+        rate_limit_bytes_per_second: 0,
+        retries: 0,
+        fragment_retries: 0,
+        file_access_retries: 0,
+        continue_download: false,
+        part_files: true,
+    ),
+    post_processing: PostProcessRequest(
+        kinds: List(),
+        audio_format: "",
+        video_format: "",
+        sponsorblock_categories: List(),
+        external_tool: Option.Nothing,
+    ),
+    simulation: SimulationMode.Simulate,
+    json_mode: JsonMode.Single,
+    update: UpdateRequest(policy: UpdatePolicy.Never, channel: "", target: files.path("updater")),
+    presentation: PresentationRequest(
+        level: LogLevel.Info,
+        progress: false,
+        newline_progress: false,
+        color: false,
+        dump_pages: false,
+        write_pages: false,
+        log_file: files.path("run.log"),
+    ),
+    workarounds: WorkaroundPolicy(
+        certificate: CertificatePolicy.Verify,
+        force_generic_extractor: false,
+        legacy_server_connect: false,
+        extractor_args: List(),
+    ),
 )
 
 scenario nested_request_values:
@@ -2920,3 +3043,759 @@ scenario output_paths_reject_unusable_names:
         ),
     )
     assert unnamed matches Result.Err(MediaError.PathFailure(_, _))
+
+scenario execute_reports_actual_simulated_and_downloaded_media:
+    fixtures:
+        fs files:
+            file "archive.txt" text("")
+            file "downloads/previous.txt" text("")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+        random order:
+            seed: 7
+    data base: ExecutionRequest = http_media_request
+    call simulated = execute(base)
+    assert simulated matches Result.Ok(report) => (report.simulated and report.selected == List(MediaItem(url: service.url("/media/clip.mp4"), id: "clip", title: "clip.mp4", ext: "mp4", playlist_index: 1)) and report.downloads.items == report.selected and (not report.downloads.stopped_on_archive) and starts_with(report.rendered, "[{\"url\":"))
+    call simulated_archive = read_download_archive(base.archive)
+    assert simulated_archive == Result.Ok(value: List())
+    call downloaded = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: SimulationMode.Download,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert downloaded matches Result.Ok(report) => ((not report.simulated) and report.selected.len == 1 and report.downloads.items == report.selected)
+    call downloaded_archive = read_download_archive(base.archive)
+    assert downloaded_archive == Result.Ok(value: List("clip"))
+    call downloaded_body = read_download_archive(
+        ArchiveRequest(
+            path: files.path("downloads/clip.mp4"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert downloaded_body == Result.Ok(value: List("one", "two"))
+
+scenario execute_rejects_unsupported_settings_before_discovery:
+    fixtures:
+        fs files:
+            file "archive.txt" text("")
+            file "downloads/previous.txt" text("")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+        random order:
+            seed: 7
+    data base: ExecutionRequest = http_media_request
+    call no_urls = execute(
+        ExecutionRequest(
+            inputs: List(),
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert no_urls matches Result.Err(MediaError.InvalidInput(_))
+    call netrc = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: Authentication(
+                kind: AuthenticationKind.Netrc,
+                username: "",
+                password: "",
+                netrc_location: files.path("netrc"),
+                cookie_file: files.path("netrc"),
+                browser: "",
+                profile: "",
+            ),
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert netrc matches Result.Err(MediaError.AuthenticationFailed(_))
+    call cookies = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: Authentication(
+                kind: AuthenticationKind.Cookies,
+                username: "",
+                password: "",
+                netrc_location: files.path("netrc"),
+                cookie_file: files.path("netrc"),
+                browser: "",
+                profile: "",
+            ),
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert cookies matches Result.Err(MediaError.CookieFailure(_))
+    call invalid_shortcut = execute(
+        ExecutionRequest(
+            inputs: List(),
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: ShortcutRequest(kind: ShortcutKind.Url, query: "not a url", limit: 1),
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert invalid_shortcut == Result.Err(error: MediaError.InvalidShortcut(value: "not a url"))
+    call insecure = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: WorkaroundPolicy(
+                certificate: CertificatePolicy.Insecure,
+                force_generic_extractor: false,
+                legacy_server_connect: false,
+                extractor_args: List(),
+            ),
+        ),
+    )
+    assert insecure matches Result.Err(MediaError.CertificateFailure(_))
+    call legacy_tls = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: WorkaroundPolicy(
+                certificate: CertificatePolicy.Verify,
+                force_generic_extractor: false,
+                legacy_server_connect: true,
+                extractor_args: List(),
+            ),
+        ),
+    )
+    assert legacy_tls matches Result.Err(MediaError.WorkaroundRejected(_))
+    call country = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: NetworkPolicy(
+                proxy_mode: ProxyMode.Direct,
+                proxy: "",
+                socket_timeout_ms: 5000,
+                source_address: "",
+                force_ipv4: false,
+                force_ipv6: false,
+                geo_mode: GeoBypassMode.Country,
+                geo_country: "US",
+                geo_ip_block: "",
+            ),
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert country matches Result.Err(MediaError.GeoRestricted(_))
+
+scenario execute_propagates_discovery_and_selection_failures:
+    fixtures:
+        fs files:
+            file "archive.txt" text("")
+            file "downloads/previous.txt" text("")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+            route "/missing.mp4" -> response(status: 404, body: text("gone"), encoding: "utf-8")
+            route "/loop" -> redirect(status: 302, location: "/loop")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+        random order:
+            seed: 7
+    data base: ExecutionRequest = http_media_request
+    call unsupported = execute(
+        ExecutionRequest(
+            inputs: List(
+                CliInput(kind: InputKind.Argument, value: "ftp://example.invalid/clip.mp4"),
+            ),
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert unsupported == Result.Err(error: MediaError.UnsupportedUrl)
+    call missing = execute(
+        ExecutionRequest(
+            inputs: List(CliInput(kind: InputKind.Argument, value: service.url("/missing.mp4"))),
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert missing == Result.Err(error: MediaError.HttpStatus(status: 404))
+    call looping = execute(
+        ExecutionRequest(
+            inputs: List(CliInput(kind: InputKind.Argument, value: service.url("/loop"))),
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert looping matches Result.Err(MediaError.NetworkFailure(_))
+    call inverted_range = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: PlaylistRequest(
+                mode: PlaylistMode.Playlist,
+                ranges: List(PlaylistRange(first: 3, last: 1)),
+                start: 0,
+                end: 0,
+                items: "",
+                reverse: false,
+                random: false,
+            ),
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert inverted_range == Result.Err(error: MediaError.InvalidRange)
+    call nothing_live = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: PlaylistRequest(
+                mode: PlaylistMode.Playlist,
+                ranges: List(),
+                start: 0,
+                end: 0,
+                items: "5",
+                reverse: false,
+                random: false,
+            ),
+            live: LiveRequest(
+                mode: LiveMode.Wait,
+                wait_for_video_ms: 1000,
+                concurrent_fragments: 1,
+            ),
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert nothing_live == Result.Err(error: MediaError.RetryExhausted(attempts: 1))
+
+scenario execute_propagates_archive_and_download_failures:
+    fixtures:
+        fs files:
+            file "archive.txt" text("")
+            file "downloads/previous.txt" text("")
+            file "blocker" text("regular file, not a directory")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+        random order:
+            seed: 7
+    data base: ExecutionRequest = http_media_request
+    call missing_archive = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: ArchiveRequest(
+                path: files.path("missing/archive.txt"),
+                break_on_existing: false,
+                force_write_archive: false,
+            ),
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: base.simulation,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert missing_archive matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("missing/archive.txt")
+    call bad_template = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: OutputRequest(
+                template: "%(bad",
+                home: files.path("home"),
+                temp: files.path("temp"),
+                output: files.path("downloads"),
+                missing_placeholder: "NA",
+                restrict_filenames: false,
+                windows_filenames: false,
+                trim_filename_bytes: 0,
+            ),
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: SimulationMode.Download,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert bad_template == Result.Err(error: MediaError.InvalidTemplate)
+    call temporary_collision = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: OutputRequest(
+                template: "%(id)s",
+                home: files.path("home"),
+                temp: files.path("downloads/clip"),
+                output: files.path("downloads"),
+                missing_placeholder: "NA",
+                restrict_filenames: false,
+                windows_filenames: false,
+                trim_filename_bytes: 0,
+            ),
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: SimulationMode.Download,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert temporary_collision matches Result.Err(MediaError.PathFailure(failed, _)) => failed == files.path("downloads/clip")
+    call blocked_output = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: base.formats,
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: OutputRequest(
+                template: "%(id)s.%(ext)s",
+                home: files.path("home"),
+                temp: files.path("temp"),
+                output: files.path("blocker"),
+                missing_placeholder: "NA",
+                restrict_filenames: false,
+                windows_filenames: false,
+                trim_filename_bytes: 0,
+            ),
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: SimulationMode.Download,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert blocked_output matches Result.Err(MediaError.OutputFailure(_))
+    call oversized = execute(
+        ExecutionRequest(
+            inputs: base.inputs,
+            network: base.network,
+            authentication: base.authentication,
+            playlist: base.playlist,
+            live: base.live,
+            video_filter: base.video_filter,
+            shortcut: base.shortcut,
+            formats: FormatRequest(
+                selector: "",
+                containers: List(),
+                sort_fields: List(),
+                merge_output_format: "",
+                min_file_size: 0,
+                max_file_size: 4,
+                prefer_free_formats: false,
+            ),
+            subtitles: base.subtitles,
+            thumbnails: base.thumbnails,
+            metadata: base.metadata,
+            output: base.output,
+            archive: base.archive,
+            fragments: base.fragments,
+            post_processing: base.post_processing,
+            simulation: SimulationMode.Download,
+            json_mode: base.json_mode,
+            update: base.update,
+            presentation: base.presentation,
+            workarounds: base.workarounds,
+        ),
+    )
+    assert oversized == Result.Err(error: MediaError.SizeLimit)
+    call untouched_archive = read_download_archive(base.archive)
+    assert untouched_archive == Result.Ok(value: List())
+
+scenario playlist_selection_rejects_then_shuffles_with_seeded_order:
+    fixtures:
+        random order:
+            seed: 7
+    data clips: List[MediaItem] = List(clip_one, clip_two, clip_three)
+    call inverted_range = select_playlist(
+        clips,
+        PlaylistRequest(
+            mode: PlaylistMode.Playlist,
+            ranges: List(PlaylistRange(first: 3, last: 1)),
+            start: 0,
+            end: 0,
+            items: "",
+            reverse: false,
+            random: false,
+        ),
+    )
+    assert inverted_range == Result.Err(error: MediaError.InvalidRange)
+    call bad_selector = select_playlist(
+        clips,
+        PlaylistRequest(
+            mode: PlaylistMode.Playlist,
+            ranges: List(),
+            start: 0,
+            end: 0,
+            items: "1,x",
+            reverse: false,
+            random: false,
+        ),
+    )
+    assert bad_selector matches Result.Err(MediaError.InvalidInput(_))
+    call shuffled = select_playlist(
+        clips,
+        PlaylistRequest(
+            mode: PlaylistMode.Playlist,
+            ranges: List(),
+            start: 0,
+            end: 0,
+            items: "",
+            reverse: false,
+            random: true,
+        ),
+    )
+    assert shuffled == Result.Ok(value: List(clip_three, clip_one, clip_two))
+    call reversed_then_shuffled = select_playlist(
+        clips,
+        PlaylistRequest(
+            mode: PlaylistMode.Reverse,
+            ranges: List(),
+            start: 0,
+            end: 0,
+            items: "",
+            reverse: false,
+            random: true,
+        ),
+    )
+    assert reversed_then_shuffled == Result.Ok(value: List(clip_one, clip_three, clip_two))
+
+scenario conditional_rejections_have_actual_facade_observations:
+    fixtures:
+        fs files:
+            file "destination" text("unchanged")
+        http service:
+            route "/unused" -> response(status: 200, body: text("unused"), encoding: "utf-8")
+        clock timer:
+            start_ms: 0
+            tick_ms: 1
+        random order:
+            seed: 7
+    call conflicting_families = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 5000,
+            source_address: "",
+            force_ipv4: true,
+            force_ipv6: true,
+            geo_mode: GeoBypassMode.Default,
+            geo_country: "",
+            geo_ip_block: "",
+        ),
+    )
+    assert conflicting_families matches Result.Err(MediaError.InvalidInput(_))
+    call reversed_bounds = select_playlist(
+        List(clip_one),
+        PlaylistRequest(
+            mode: PlaylistMode.Playlist,
+            ranges: List(),
+            start: 3,
+            end: 2,
+            items: "",
+            reverse: false,
+            random: false,
+        ),
+    )
+    assert reversed_bounds == Result.Err(error: MediaError.InvalidRange)
+    call conflicting_sizes = filter_formats(
+        List(low_video),
+        FormatRequest(
+            selector: "best",
+            containers: List(),
+            sort_fields: List(),
+            merge_output_format: "",
+            min_file_size: 2,
+            max_file_size: 1,
+            prefer_free_formats: false,
+        ),
+    )
+    assert conflicting_sizes matches Result.Err(MediaError.InvalidInput(_))
+    call no_capacity = transfer_media(
+        TransferRequest(
+            url: service.url("/unused"),
+            destination: files.path("destination"),
+            simulate: false,
+            max_bytes: 0,
+        ),
+    )
+    assert no_capacity matches Result.Err(MediaError.InvalidInput(_))
+    call no_workers = transfer_fragments(
+        List(),
+        FragmentPolicy(
+            concurrent_fragments: 0,
+            buffer_size: 4,
+            chunk_size: 0,
+            rate_limit_bytes_per_second: 0,
+            retries: 0,
+            fragment_retries: 0,
+            file_access_retries: 0,
+            continue_download: false,
+            part_files: true,
+        ),
+    )
+    assert no_workers matches Result.Err(MediaError.InvalidInput(_))

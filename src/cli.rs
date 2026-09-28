@@ -6492,9 +6492,6 @@ fn provenance_span(value: &serde_json::Value) -> Result<ProvenanceSpan, String> 
 fn coverage_status(evidence: &[serde_json::Value]) -> CoverageStatus {
     let observed = evidence.iter().any(|entry| {
         matches!(
-            entry.get("status").and_then(serde_json::Value::as_str),
-            Some("proved")
-        ) || matches!(
             entry.get("grade").and_then(serde_json::Value::as_str),
             Some("runtime check" | "test observation")
         )
@@ -6599,15 +6596,6 @@ pub(crate) fn semantic_coverage(
             .cloned()
             .unwrap_or_default();
         insert(entry, payloads)?;
-    }
-    for entry in report
-        .pointer("/contract_proofs/contracts")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|entry| entry.get("clause_id").is_some())
-    {
-        insert(entry, vec![entry.clone()])?;
     }
 
     let mut clauses = clauses
@@ -7174,5 +7162,78 @@ mod init_publication_tests {
         assert!(supports_basedpyright_version("basedpyright 1.39.9"));
         assert!(supports_basedpyright_version("1.40.0"));
         assert!(!supports_basedpyright_version("basedpyright 1.39.8"));
+    }
+}
+
+#[cfg(test)]
+mod coverage_evidence_tests {
+    use super::*;
+    use crate::manifest::{CoveragePolicy, CoverageRule};
+    use serde_json::json;
+
+    fn strict_policy() -> CoveragePolicy {
+        CoveragePolicy {
+            rules: vec![CoverageRule {
+                symbol: "demo.work".to_owned(),
+                clauses: vec!["ensures:1".to_owned()],
+                allow_unobserved: false,
+                allow_trust_declaration: false,
+                allow_unknown: false,
+            }],
+        }
+    }
+
+    fn report(grade: &str, cases: u64, proof: &str) -> serde_json::Value {
+        let span = json!({
+            "start_byte":0,"end_byte":1,"start_line":1,"start_column":1,"end_line":1,"end_column":2
+        });
+        json!({
+            "contract_tests": {"contracts":[{
+                "symbol":"demo.work","clause_id":"ensures:1","span":span,
+                "evidence":[{"grade":grade,"valid_cases":cases,"mode":"boundary","reason":null}]
+            }]},
+            "contract_proofs": {"contracts":[{
+                "symbol":"demo.work","clause_id":"ensures:1","span":span,
+                "kind":"success_reachability","role":"success","status":proof
+            }]}
+        })
+    }
+
+    #[test]
+    fn static_proofs_never_upgrade_or_demote_execution_coverage() {
+        for proof in ["proved", "unknown", "disproved"] {
+            for (grade, expected) in [
+                ("unobserved", CoverageStatus::Unobserved),
+                ("trust declaration", CoverageStatus::TrustDeclaration),
+            ] {
+                let coverage = semantic_coverage(&report(grade, 0, proof), &strict_policy())
+                    .expect("classify execution evidence");
+                assert_eq!(coverage.clauses[0].status, expected, "{proof}: {grade}");
+                assert!(!coverage.policy.passed, "{proof} blessed missing execution");
+                assert_eq!(coverage.summary.observed, 0);
+                assert!(
+                    coverage.clauses[0]
+                        .evidence
+                        .iter()
+                        .all(|entry| entry.get("status").is_none())
+                );
+            }
+            let coverage =
+                semantic_coverage(&report("test observation", 1, proof), &strict_policy())
+                    .expect("classify observed predicate");
+            assert_eq!(coverage.clauses[0].status, CoverageStatus::Observed);
+            assert!(coverage.policy.passed);
+        }
+    }
+
+    #[test]
+    fn a_static_proof_cannot_invent_a_runner_clause_inventory_entry() {
+        let mut proof_only = report("unobserved", 0, "proved");
+        proof_only["contract_tests"]["contracts"] = json!([]);
+        assert!(semantic_coverage(&proof_only, &strict_policy()).is_err());
+        assert_eq!(
+            coverage_status(&[json!({"status":"proved"})]),
+            CoverageStatus::Unobserved
+        );
     }
 }

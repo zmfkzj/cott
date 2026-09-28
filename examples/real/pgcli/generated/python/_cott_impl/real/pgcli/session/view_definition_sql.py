@@ -3,6 +3,7 @@ from typing import LiteralString, cast
 import psycopg
 from psycopg import sql
 
+import cott_runtime
 from cott_runtime import Err, Ok, Result
 from real.pgcli.connection_types import Executor
 from real.pgcli.session_types import EvaluateError, EvaluateError_Failed
@@ -20,22 +21,27 @@ def view_definition_sql(executor: Executor, spec: str) -> Result[str, EvaluateEr
         "JOIN v ON (c.oid = v.v_oid)"
     )
     try:
+        try:
+            cott_runtime._cott_fixture_database("read")
+        except cott_runtime.CottContractViolation as error:
+            if error.message != "fixture adapters are inactive":
+                raise
         with connection.cursor() as cursor:
             cursor.execute(query, (spec,))
             row = cursor.fetchone()
         if row is None:
-            return Err(error=EvaluateError_Failed(message=f"View {spec} does not exist."))
-        if row[2] == "m":
-            template: LiteralString = "CREATE OR REPLACE MATERIALIZED VIEW {name} AS \n{stmt}"
-        else:
-            template = "CREATE OR REPLACE VIEW {name} AS \n{stmt}"
-        definition = cast(LiteralString, str(row[3]))
+            return Err[EvaluateError](error=EvaluateError_Failed(message=f"View {spec} does not exist."))
+        template: LiteralString = (
+            "CREATE OR REPLACE MATERIALIZED VIEW {name} AS \n{stmt}"
+            if row[2] == "m"
+            else "CREATE OR REPLACE VIEW {name} AS \n{stmt}"
+        )
         statement = sql.SQL(template).format(
             name=sql.Identifier(str(row[0]), str(row[1])),
-            stmt=sql.SQL(definition),
+            stmt=sql.SQL(cast(LiteralString, str(row[3]))),
         )
         return Ok(value=statement.as_string(connection))
     except psycopg.ProgrammingError:
-        return Err(error=EvaluateError_Failed(message=f"View {spec} does not exist."))
+        return Err[EvaluateError](error=EvaluateError_Failed(message=f"View {spec} does not exist."))
     except Exception as error:
-        return Err(error=EvaluateError_Failed(message=str(error)))
+        return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))

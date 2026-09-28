@@ -16,13 +16,13 @@ def _archive_error(path: Path, message: str) -> MediaError:
     return MediaError_ArchiveFailure(path=path, message=message)
 
 
-def _encode(path: Path, items: CottList[MediaItem]) -> Result[bytes, MediaError]:
+def _encode_archive(path: Path, items: CottList[MediaItem]) -> Result[bytes, MediaError]:
     if len(items) > _MAX_ITEMS:
         return Err(error=_archive_error(path, "archive has too many entries"))
-    data: bytearray = bytearray()
+    data = bytearray()
     for item in items:
         identifier: str = item.id
-        if identifier == "" or identifier != identifier.strip() or "\r" in identifier or "\n" in identifier:
+        if not identifier or identifier != identifier.strip() or "\r" in identifier or "\n" in identifier:
             return Err(error=_archive_error(path, "invalid archive identifier"))
         if len(data) + len(identifier) + 1 > _MAX_BYTES:
             return Err(error=_archive_error(path, "archive exceeds size limit"))
@@ -37,7 +37,7 @@ def _encode(path: Path, items: CottList[MediaItem]) -> Result[bytes, MediaError]
     return Ok(value=bytes(data))
 
 
-def _platform_safe() -> bool:
+def _safe_archive_platform() -> bool:
     try:
         return (
             os.name == "posix"
@@ -56,15 +56,15 @@ def _platform_safe() -> bool:
         return False
 
 
-def _close(fd: int) -> bool:
+def _close_archive_fd(fd: int) -> bool:
     try:
         os.close(fd)
-    except (OSError, AttributeError, TypeError, RuntimeError):
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
         return False
     return True
 
 
-def _open_parent(path: Path) -> Result[int, MediaError]:
+def _open_archive_parent(path: Path) -> Result[int, MediaError]:
     flags: int = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
         directory: int = os.open("/" if path.is_absolute() else ".", flags)
@@ -75,16 +75,17 @@ def _open_parent(path: Path) -> Result[int, MediaError]:
         try:
             child: int = os.open(component, flags, dir_fd=directory)
         except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
-            _close(directory)
+            if not _close_archive_fd(directory):
+                return Err(error=_archive_error(path, "cannot close archive parent directory"))
             return Err(error=_archive_error(path, "unsafe or inaccessible archive parent directory"))
-        if not _close(directory):
-            _close(child)
+        if not _close_archive_fd(directory):
+            _close_archive_fd(child)
             return Err(error=_archive_error(path, "cannot close archive parent directory"))
         directory = child
     return Ok(value=directory)
 
 
-def _leaf_identity(directory: int, name: str, path: Path) -> Result[tuple[int, int, int] | None, MediaError]:
+def _archive_leaf_identity(directory: int, name: str, path: Path) -> Result[tuple[int, int, int, int, int] | None, MediaError]:
     try:
         info: os.stat_result = os.stat(name, dir_fd=directory, follow_symlinks=False)
     except FileNotFoundError:
@@ -93,10 +94,10 @@ def _leaf_identity(directory: int, name: str, path: Path) -> Result[tuple[int, i
         return Err(error=_archive_error(path, "cannot inspect archive leaf"))
     if not stat.S_ISREG(info.st_mode):
         return Err(error=_archive_error(path, "archive leaf is not a regular file"))
-    return Ok(value=(info.st_dev, info.st_ino, info.st_size))
+    return Ok(value=(info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
 
 
-def _write_all(fd: int, data: bytes) -> bool:
+def _write_archive_bytes(fd: int, data: bytes) -> bool:
     view: memoryview = memoryview(data)
     offset: int = 0
     while offset < len(view):
@@ -110,7 +111,7 @@ def _write_all(fd: int, data: bytes) -> bool:
     return True
 
 
-def _abort(directory: int, temp_name: str, path: Path, error: MediaError) -> Result[Unit, MediaError]:
+def _abort_archive(directory: int, temp_name: str, path: Path, error: MediaError) -> Result[Unit, MediaError]:
     try:
         os.unlink(temp_name, dir_fd=directory)
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
@@ -118,8 +119,8 @@ def _abort(directory: int, temp_name: str, path: Path, error: MediaError) -> Res
     return Err(error=error)
 
 
-def _publish(directory: int, name: str, data: bytes, path: Path) -> Result[Unit, MediaError]:
-    initial: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, name, path)
+def _publish_archive(directory: int, name: str, data: bytes, path: Path) -> Result[Unit, MediaError]:
+    initial: Result[tuple[int, int, int, int, int] | None, MediaError] = _archive_leaf_identity(directory, name, path)
     if isinstance(initial, Err):
         return Err(error=initial.error)
     try:
@@ -134,9 +135,9 @@ def _publish(directory: int, name: str, data: bytes, path: Path) -> Result[Unit,
         return Err(error=_archive_error(path, "cannot create temporary archive file"))
 
     failure: MediaError | None = None
-    temp_identity: tuple[int, int, int] | None = None
+    temp_identity: tuple[int, int, int, int, int] | None = None
     try:
-        if not _write_all(fd, data):
+        if not _write_archive_bytes(fd, data):
             failure = _archive_error(path, "cannot write temporary archive file")
         else:
             os.fchmod(fd, 0o600)
@@ -145,26 +146,26 @@ def _publish(directory: int, name: str, data: bytes, path: Path) -> Result[Unit,
             if not stat.S_ISREG(info.st_mode) or info.st_size != len(data):
                 failure = _archive_error(path, "temporary archive file is incomplete or not regular")
             else:
-                temp_identity = (info.st_dev, info.st_ino, info.st_size)
+                temp_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
         failure = _archive_error(path, "cannot set mode or sync temporary archive file")
-    if not _close(fd):
+    if not _close_archive_fd(fd):
         failure = _archive_error(path, "cannot close temporary archive file")
     if failure is not None:
-        return _abort(directory, temp_name, path, failure)
+        return _abort_archive(directory, temp_name, path, failure)
 
-    staged: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, temp_name, path)
+    staged: Result[tuple[int, int, int, int, int] | None, MediaError] = _archive_leaf_identity(directory, temp_name, path)
     if isinstance(staged, Err):
-        return _abort(directory, temp_name, path, staged.error)
-    current: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, name, path)
+        return _abort_archive(directory, temp_name, path, staged.error)
+    current: Result[tuple[int, int, int, int, int] | None, MediaError] = _archive_leaf_identity(directory, name, path)
     if isinstance(current, Err):
-        return _abort(directory, temp_name, path, current.error)
+        return _abort_archive(directory, temp_name, path, current.error)
     if staged.value != temp_identity or current.value != initial.value:
-        return _abort(directory, temp_name, path, _archive_error(path, "archive target or temporary file changed"))
+        return _abort_archive(directory, temp_name, path, _archive_error(path, "archive target or temporary file changed"))
     try:
         os.replace(temp_name, name, src_dir_fd=directory, dst_dir_fd=directory)
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
-        return _abort(directory, temp_name, path, _archive_error(path, "cannot atomically replace archive"))
+        return _abort_archive(directory, temp_name, path, _archive_error(path, "cannot atomically replace archive"))
     try:
         os.fsync(directory)
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
@@ -172,15 +173,15 @@ def _publish(directory: int, name: str, data: bytes, path: Path) -> Result[Unit,
     return Ok(value=UNIT)
 
 
-def _write_host(path: Path, data: bytes) -> Result[Unit, MediaError]:
-    if not _platform_safe():
+def _write_host_archive(path: Path, data: bytes) -> Result[Unit, MediaError]:
+    if not _safe_archive_platform():
         return Err(error=_archive_error(path, "safe archive filesystem operations are unavailable"))
-    opened: Result[int, MediaError] = _open_parent(path)
+    opened: Result[int, MediaError] = _open_archive_parent(path)
     if isinstance(opened, Err):
         return Err(error=opened.error)
     directory: int = opened.value
-    outcome: Result[Unit, MediaError] = _publish(directory, path.name, data, path)
-    if not _close(directory):
+    outcome: Result[Unit, MediaError] = _publish_archive(directory, path.name, data, path)
+    if not _close_archive_fd(directory):
         return Err(error=_archive_error(path, "cannot close archive parent directory"))
     return outcome
 
@@ -189,14 +190,14 @@ def write_download_archive(path: Path, items: CottList[MediaItem]) -> Result[Uni
     shown: str = str(path)
     if shown in ("", ".", "/") or path.name in ("", ".", "..") or "\x00" in shown or path.anchor not in ("", "/"):
         return Err(error=_archive_error(path, "invalid archive path"))
-    encoded: Result[bytes, MediaError] = _encode(path, items)
+    encoded: Result[bytes, MediaError] = _encode_archive(path, items)
     if isinstance(encoded, Err):
         return Err(error=encoded.error)
     try:
         cott_runtime._cott_fixture_replace(path, encoded.value, create_parents=False)
     except CottContractViolation as violation:
         if violation.message == "fixture adapters are inactive":
-            return _write_host(path, encoded.value)
+            return _write_host_archive(path, encoded.value)
         return Err(error=_archive_error(path, "cannot publish archive in fixture"))
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
         return Err(error=_archive_error(path, "cannot publish archive in fixture"))

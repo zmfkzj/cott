@@ -952,7 +952,7 @@ value=that dict)); every list keeps row order."""
         _expected_error_span = {"end_byte":73374,"end_column":78,"end_line":1082,"start_byte":73301,"start_column":5,"start_line":1082}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/refresh_completion_metadata.py", "879f15034790b005447ebf1bab2f785a07f038731c91245ead4fcc5e18461bdd", "refresh_completion_metadata", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.refresh_completion_metadata")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/refresh_completion_metadata.py", "cef024146757b48d93c3322ea3ac4d04ff7c9d34e659c512b852dc05f099cf92", "refresh_completion_metadata", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.refresh_completion_metadata")
         _result = _implementation(executor, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

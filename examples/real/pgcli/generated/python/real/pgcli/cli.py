@@ -253,7 +253,7 @@ Ctrl-C outside the prompt loop exits 1 after Python's usual
 KeyboardInterrupt message is suppressed; a password is never printed."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/cli/run.py", "85f0236861a1c300a27ae75c1008430e9d212910ebbd1c5b119976bf77e370d8", "run", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.run")
+        _implementation = _cott_load("_cott_impl/real/pgcli/cli/run.py", "9e372ac1dc145e798d7d34be891086b877fa58c10e4b6b3699cdd336339c44ae", "run", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.run")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

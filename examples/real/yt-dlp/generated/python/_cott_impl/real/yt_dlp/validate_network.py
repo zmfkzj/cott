@@ -1,12 +1,13 @@
 import socket
 from urllib.parse import urlsplit
 
-from cott_runtime import Err, Ok, Result
+import cott_runtime
+from cott_runtime import Result
 from real.yt_dlp_types import GeoBypassMode_Country, GeoBypassMode_Default, GeoBypassMode_Disabled, GeoBypassMode_IpBlock, MediaError, MediaError_InvalidInput, NetworkPolicy, ProxyMode_Direct, ProxyMode_Http, ProxyMode_Socks
 
 
 def _invalid(message: str) -> Result[NetworkPolicy, MediaError]:
-    return Err(error=MediaError_InvalidInput(message=message))
+    return cott_runtime.Err(error=MediaError_InvalidInput(message=message))
 
 
 def _ip_version(text: str) -> int:
@@ -86,4 +87,4 @@ def validate_network(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]
         case GeoBypassMode_IpBlock():
             if policy.geo_country or not _valid_ip_block(policy.geo_ip_block):
                 return _invalid("invalid geo IP block")
-    return Ok(value=policy)
+    return cott_runtime.Ok(value=policy)

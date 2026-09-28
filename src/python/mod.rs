@@ -3,5 +3,6 @@
 
 pub use crate::binding;
 pub mod artifact_plan;
+pub mod postgres_fixture;
 pub use crate::python_emit as emit;
 pub use crate::python_runtime as runtime;

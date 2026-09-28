@@ -159,6 +159,35 @@ scenario relative_file:
     );
 }
 
+#[test]
+fn result_and_list_extraction_fail_before_later_scenario_steps() {
+    let implementation = "from cott_runtime import CottList, Err, Ok, Result\nfrom demo_types import WordError, WordError_Empty\n\ndef words(text: str) -> Result[CottList[str], WordError]:\n    pieces = text.split()\n    if not pieces:\n        return Err(error=WordError_Empty())\n    return Ok(value=CottList(values=pieces))\n";
+    for (steps, reason) in [
+        (
+            "    call result = words(\"\")\n    unwrap values = result\n",
+            "unwrap step:1",
+        ),
+        (
+            "    call result = words(\"one\")\n    unwrap values = result\n    item missing = values at 18446744073709551615\n",
+            "item step:2",
+        ),
+    ] {
+        let source = format!(
+            "module demo\n\nenum WordError:\n    Empty\n\nfn words(text: Str) -> Result[List[Str], WordError]:\n    ensures Result.Ok(values) => values.len > 0\n    error WordError.Empty\n    effects []\n\nscenario invalid_extraction:\n{steps}"
+        );
+        let Some(output) = run_scenario(
+            &source,
+            &[("demo.words", implementation)],
+            "demo.scenario.invalid_extraction",
+        ) else {
+            return;
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "invalid extraction was accepted");
+        assert!(stderr.contains(reason), "{stderr}");
+    }
+}
+
 /// Emit boundary-mode Python facades for manifest-bound free functions and
 /// run the compiler's contract runner on one scenario.
 fn run_scenario(source: &str, implementations: &[(&str, &str)], scenario: &str) -> Option<Output> {

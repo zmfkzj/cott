@@ -27,13 +27,13 @@ def load_batch_urls(path: Path, comment_prefixes: CottList[str]) -> Result[CottL
                 return _failure(path, "batch path is not a regular file")
             return _failure(path, "cannot read batch file")
         try:
-            fd: int = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+            fd: int = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW)
         except (FileNotFoundError, NotADirectoryError):
             return _failure(path, "batch file not found")
         except (OSError, ValueError):
             return _failure(path, "cannot open batch file")
         try:
-            with open(fd, "rb", closefd=True) as handle:
+            with os.fdopen(fd, "rb") as handle:
                 status: os.stat_result = os.fstat(handle.fileno())
                 if not stat.S_ISREG(status.st_mode):
                     return _failure(path, "batch path is not a regular file")

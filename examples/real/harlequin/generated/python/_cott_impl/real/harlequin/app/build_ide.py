@@ -57,9 +57,7 @@ def _windows(cells: dict[str, object]) -> dict[str, Window]:
 
 
 def _size(cells: dict[str, object]) -> tuple[int, int]:
-    state = _state(cells)
-    with cast(threading.RLock, state["lock"]):
-        size = _app(cells).output.get_size()
+    size = _app(cells).output.get_size()
     return size.columns, size.rows
 
 
@@ -164,24 +162,21 @@ def _notify(cells: dict[str, object], title: str | None, message: str, severity:
     state = _state(cells)
     with cast(threading.RLock, state["lock"]):
         cast(list[Notification], state["notifications"]).append(note)
-        app = _app(cells)
-    app.invalidate()
+    _app(cells).invalidate()
 
 
 def _open_dialog(cells: dict[str, object], kind: str, model: object) -> None:
     state = _state(cells)
     with cast(threading.RLock, state["lock"]):
         state["dialog"] = (kind, model)
-        app = _app(cells)
-    app.invalidate()
+    _app(cells).invalidate()
 
 
 def _close_dialog(cells: dict[str, object]) -> None:
     state = _state(cells)
     with cast(threading.RLock, state["lock"]):
         state["dialog"] = None
-        app = _app(cells)
-    app.invalidate()
+    _app(cells).invalidate()
 
 
 def _dialog_kind(state: dict[str, object]) -> str | None:

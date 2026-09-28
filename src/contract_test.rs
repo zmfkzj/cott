@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
 use crate::manifest::{RuntimeValidation, VerificationConfig};
+use crate::python::postgres_fixture::PostgresToolchain;
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxError, SandboxSpec, run};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -800,6 +801,7 @@ fn scenario_strategy(
     let lifecycle_limit = u32::try_from(lifecycle_limit)
         .map_err(|_| format!("{context} scenario {id}: lifecycle_limit exceeds u32"))?;
     let mut fixture_ids = BTreeSet::new();
+    let mut random_fixtures = 0usize;
     for (index, fixture) in fixtures.iter().enumerate() {
         let fixture_id = required_string(fixture, "id")
             .map_err(|error| format!("{context} scenario {id} fixture {index}: {error}"))?;
@@ -810,6 +812,34 @@ fn scenario_strategy(
         }
         validate_scenario_fixture(fixture)
             .map_err(|error| format!("{context} scenario {id} fixture {index}: {error}"))?;
+        if fixture.get("kind").and_then(Value::as_str) == Some("random") {
+            random_fixtures += 1;
+            if random_fixtures > 1 {
+                return Err(format!(
+                    "{context} scenario {id}: more than one random fixture"
+                ));
+            }
+        }
+    }
+    let has_http = fixtures
+        .iter()
+        .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("http"));
+    if has_http && fixtures.iter().any(requires_postgres_fixture) {
+        return Err(format!(
+            "{context} scenario {id}: a postgres database fixture cannot share a scenario with \
+             an HTTP fixture"
+        ));
+    }
+    let mut socket_paths = BTreeSet::new();
+    for fixture in &fixtures {
+        if fixture.get("kind").and_then(Value::as_str) == Some("socket")
+            && let Some(path) = fixture.get("path").and_then(Value::as_str)
+            && !socket_paths.insert(path)
+        {
+            return Err(format!(
+                "{context} scenario {id}: duplicate socket fixture path `{path}`"
+            ));
+        }
     }
     let mut step_ids = BTreeSet::new();
     for (index, step) in steps.iter().enumerate() {
@@ -847,6 +877,9 @@ fn scenario_strategy(
     })
 }
 
+/// Path and cross-field checks the closed contract-test schema cannot express.
+/// Exact per-kind fields, database backends, failure points and extraction
+/// steps are enforced by that schema when every strategy is serialized.
 fn validate_scenario_fixture(fixture: &Value) -> Result<(), String> {
     match required_string(fixture, "kind")? {
         "fs" => {
@@ -863,10 +896,41 @@ fn validate_scenario_fixture(fixture: &Value) -> Result<(), String> {
                 }
             }
         }
-        "clock" | "failure" => {}
+        "random" => {
+            required_field(fixture, "seed")?.as_u64().ok_or_else(|| {
+                "random fixture seed must be an unsigned 64-bit integer".to_owned()
+            })?;
+        }
+        "socket" => {
+            if !closed_relative_path(required_string(fixture, "path")?) {
+                return Err("socket fixture path must be a closed relative path".to_owned());
+            }
+        }
+        "clock" | "database" | "failure" => {}
         kind => return Err(format!("unsupported fixture kind `{kind}`")),
     }
     Ok(())
+}
+
+fn requires_postgres_fixture(fixture: &Value) -> bool {
+    fixture.get("kind").and_then(Value::as_str) == Some("database")
+        && fixture.get("backend").and_then(Value::as_str) == Some("postgres")
+}
+
+fn has_fixture_kind(strategy: &ContractTestStrategy, kind: &str) -> bool {
+    strategy.scenario.as_ref().is_some_and(|scenario| {
+        scenario
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some(kind))
+    })
+}
+
+fn requires_postgres(strategy: &ContractTestStrategy) -> bool {
+    strategy
+        .scenario
+        .as_ref()
+        .is_some_and(|scenario| scenario.fixtures.iter().any(requires_postgres_fixture))
 }
 
 fn closed_relative_path(path: &str) -> bool {
@@ -912,7 +976,7 @@ fn invariant_clause_ids(invariants: &[Value], context: &str) -> Result<Vec<Strin
         .collect()
 }
 
-fn unavailable_scenario_evidence(strategies: &[ContractTestStrategy]) -> Vec<Value> {
+fn unavailable_scenario_evidence(strategies: &[&ContractTestStrategy]) -> Vec<Value> {
     strategies
         .iter()
         .filter_map(|strategy| strategy.scenario.as_ref())
@@ -944,6 +1008,12 @@ fn unavailable_scenario_evidence(strategies: &[ContractTestStrategy]) -> Vec<Val
         .collect()
 }
 
+#[derive(Clone, Debug)]
+pub struct ContractTestEvidence {
+    pub report: Value,
+    pub tools: Value,
+}
+
 pub fn execute_contract_tests(
     interpreter: &Path,
     generated_root: &Path,
@@ -952,7 +1022,7 @@ pub fn execute_contract_tests(
     verification: &VerificationConfig,
     runtime_validation: RuntimeValidation,
     scope: Option<&BTreeSet<String>>,
-) -> Result<Value, String> {
+) -> Result<ContractTestEvidence, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let strategies = derive_strategy_entries(ir, verification)?;
     let selected_initializers = scope.map(|scope| {
@@ -985,7 +1055,7 @@ pub fn execute_contract_tests(
         .map_err(|error| error.to_string())?
         .as_nanos();
     let scratch = std::env::temp_dir().join(format!(
-        "cott-contract-test-{}-{nonce}-{}",
+        "cct-{:x}-{nonce:x}-{:x}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -995,30 +1065,161 @@ pub fn execute_contract_tests(
             scratch.display()
         )
     })?;
-    let needs_loopback = strategies.iter().any(|strategy| {
-        strategy.scenario.as_ref().is_some_and(|scenario| {
-            scenario
-                .fixtures
-                .iter()
-                .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("http"))
+    let result = (|| {
+        let mut private = Vec::new();
+        let mut loopback = Vec::new();
+        let mut native = Vec::new();
+        for strategy in &strategies {
+            if has_fixture_kind(strategy, "database") || has_fixture_kind(strategy, "socket") {
+                native.push(strategy);
+            } else if has_fixture_kind(strategy, "http") {
+                loopback.push(strategy);
+            } else {
+                private.push(strategy);
+            }
+        }
+        let needs_postgres = native.iter().any(|strategy| requires_postgres(strategy));
+        let postgres = needs_postgres
+            .then(|| PostgresToolchain::discover(&scratch.join("probe")))
+            .transpose()?;
+        let mut report = empty_contract_report();
+        for (group, network, name) in [
+            (&private, NetworkAccess::Disabled, "p"),
+            (&loopback, NetworkAccess::IsolatedLoopback, "h"),
+        ] {
+            if group.is_empty() {
+                continue;
+            }
+            let part = execute_contract_group(
+                interpreter,
+                generated_root,
+                site_packages,
+                &modules,
+                group,
+                &runtime_validation,
+                &scratch.join(name),
+                network,
+                None,
+            )?;
+            append_contract_report(&mut report, part)?;
+        }
+        // Native SDKs retain module-level allocators and thread pools. Each
+        // scenario gets its own bounded process; live handles persist within
+        // that scenario only, and no evidence is reused between processes.
+        for (index, strategy) in native.into_iter().enumerate() {
+            let group = [strategy];
+            let network = if has_fixture_kind(strategy, "http") {
+                NetworkAccess::IsolatedLoopback
+            } else {
+                NetworkAccess::Disabled
+            };
+            let part = execute_contract_group(
+                interpreter,
+                generated_root,
+                site_packages,
+                &modules,
+                &group,
+                &runtime_validation,
+                &scratch.join(format!("n{index:x}")),
+                network,
+                if requires_postgres(strategy) {
+                    postgres.as_ref()
+                } else {
+                    None
+                },
+            )?;
+            append_contract_report(&mut report, part)?;
+        }
+        join_scenario_observations(&mut report, &strategies, &runtime_validation)?;
+        let mut tools = serde_json::Map::new();
+        if let Some(postgres) = postgres {
+            postgres.revalidate()?;
+            tools.insert(
+                crate::python::postgres_fixture::TOOL_KEY.to_owned(),
+                postgres.identity().clone(),
+            );
+        }
+        Ok(ContractTestEvidence {
+            report,
+            tools: Value::Object(tools),
         })
+    })();
+    let cleanup = fs::remove_dir_all(&scratch).map_err(|error| {
+        format!(
+            "remove contract-test scratch {}: {error}",
+            scratch.display()
+        )
     });
-    let fallback_scope = strategies
-        .iter()
-        .filter(|strategy| strategy.scenario.is_none())
-        .map(|strategy| strategy.symbol.clone())
-        .collect::<BTreeSet<_>>();
-    let fixture_root = scratch.join("fixtures");
-    let request = serde_json::json!({
-        "fixture_root": fixture_root,
-        "modules": modules,
-        "runtime_validation": match runtime_validation {
-            RuntimeValidation::Off => "off",
-            RuntimeValidation::Boundary => "boundary",
-            RuntimeValidation::TestOnly => "test-only",
-        },
-        "strategies": strategies.clone(),
-    });
+    match (result, cleanup) {
+        (Ok(evidence), Ok(())) => Ok(evidence),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+    }
+}
+
+fn append_contract_report(report: &mut Value, mut part: Value) -> Result<(), String> {
+    for key in [
+        "contracts",
+        "lifecycle",
+        "scenarios",
+        "scenario_observations",
+    ] {
+        let entries = part
+            .get_mut(key)
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| format!("contract runner omitted array {key}"))?;
+        report[key]
+            .as_array_mut()
+            .expect("compiler-owned report array")
+            .append(entries);
+    }
+    Ok(())
+}
+
+fn empty_contract_report() -> Value {
+    serde_json::json!({"contracts": [], "lifecycle": [], "scenarios": [], "scenario_observations": []})
+}
+
+fn validation_mode(mode: &RuntimeValidation) -> &'static str {
+    match mode {
+        RuntimeValidation::Off => "off",
+        RuntimeValidation::Boundary => "boundary",
+        RuntimeValidation::TestOnly => "test-only",
+    }
+}
+
+#[derive(Serialize)]
+struct RunnerRequest<'a> {
+    fixture_root: &'a Path,
+    modules: &'a [Value],
+    runtime_validation: &'static str,
+    strategies: &'a [&'a ContractTestStrategy],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    postgres_toolchain: Option<Value>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_contract_group(
+    interpreter: &Path,
+    generated_root: &Path,
+    site_packages: &[PathBuf],
+    modules: &[Value],
+    strategies: &[&ContractTestStrategy],
+    runtime_validation: &RuntimeValidation,
+    scratch: &Path,
+    network: NetworkAccess,
+    postgres: Option<&PostgresToolchain>,
+) -> Result<Value, String> {
+    fs::create_dir(scratch).map_err(|error| format!("create scenario group scratch: {error}"))?;
+    let fixture_root = scratch.join("f");
+    let request = RunnerRequest {
+        fixture_root: &fixture_root,
+        modules,
+        runtime_validation: validation_mode(runtime_validation),
+        strategies,
+        postgres_toolchain: postgres.map(PostgresToolchain::request),
+    };
     let stdin = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
     let mut read_only = vec![
         generated_root
@@ -1026,7 +1227,7 @@ pub fn execute_contract_tests(
             .unwrap_or(generated_root)
             .to_path_buf(),
     ];
-    read_only.extend(site_packages.iter().cloned());
+    read_only.extend_from_slice(site_packages);
     if !interpreter.starts_with("/usr")
         && !interpreter.starts_with("/bin")
         && !interpreter.starts_with("/lib")
@@ -1034,82 +1235,98 @@ pub fn execute_contract_tests(
     {
         read_only.push(environment.to_path_buf());
     }
-    let mut python_paths = vec![generated_root.to_path_buf()];
-    python_paths.extend(site_packages.iter().cloned());
+    let mut python_paths = Vec::new();
+    let mut support_bytes = 0u64;
+    if strategies.iter().any(|strategy| {
+        has_fixture_kind(strategy, "database") || has_fixture_kind(strategy, "socket")
+    }) {
+        let support = scratch.join("support");
+        fs::create_dir(&support)
+            .map_err(|error| format!("create fixture support directory: {error}"))?;
+        for (name, source) in [
+            (
+                "cott-scenario-database.py",
+                include_str!("python/database_fixture.py"),
+            ),
+            (
+                "cott-scenario-socket.py",
+                include_str!("python/socket_fixture.py"),
+            ),
+        ] {
+            fs::write(support.join(name), source)
+                .map_err(|error| format!("stage compiler fixture support {name}: {error}"))?;
+            support_bytes += source.len() as u64;
+        }
+        read_only.push(support.clone());
+        python_paths.push(support);
+    }
+    python_paths.push(generated_root.to_path_buf());
+    python_paths.extend_from_slice(site_packages);
     let python_path = std::env::join_paths(python_paths)
         .map_err(|error| format!("construct contract-test PYTHONPATH: {error}"))?;
-    let result = run(&SandboxSpec {
+    let mut environment = BTreeMap::from([
+        ("HOME".to_owned(), scratch.display().to_string()),
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+        ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
+        // Native numeric pools must fit the existing per-sandbox task/memory
+        // budget rather than sizing themselves from the host's CPU count.
+        ("OPENBLAS_NUM_THREADS".to_owned(), "1".to_owned()),
+        ("OMP_NUM_THREADS".to_owned(), "1".to_owned()),
+        (
+            "PYTHONPATH".to_owned(),
+            python_path.to_string_lossy().into_owned(),
+        ),
+        ("TMPDIR".to_owned(), scratch.display().to_string()),
+    ]);
+    if let Some(postgres) = postgres {
+        read_only.extend_from_slice(postgres.mounts());
+        if let Some(path) = postgres.library_path() {
+            environment.insert("LD_LIBRARY_PATH".to_owned(), path.display().to_string());
+        }
+    }
+    let mut limits = ResourceLimits::contract_test();
+    for scenario in strategies
+        .iter()
+        .filter_map(|strategy| strategy.scenario.as_ref())
+    {
+        limits.writable_bytes = limits.writable_bytes.max(scenario.limits.filesystem_bytes);
+        limits.wall_time = limits
+            .wall_time
+            .max(std::time::Duration::from_millis(u64::from(
+                scenario.limits.scenario_timeout_ms,
+            )));
+    }
+    limits.writable_bytes += support_bytes;
+    let completed = match run(&SandboxSpec {
         program: interpreter.to_path_buf(),
         arguments: vec![
+            "-P".to_owned(),
             "-c".to_owned(),
             include_str!("contract_runner.py").to_owned(),
         ],
         cwd: generated_root.to_path_buf(),
-        environment: BTreeMap::from([
-            ("HOME".to_owned(), scratch.display().to_string()),
-            ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
-            ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
-            ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
-            (
-                "PYTHONPATH".to_owned(),
-                python_path.to_string_lossy().into_owned(),
-            ),
-            ("TMPDIR".to_owned(), scratch.display().to_string()),
-        ]),
+        environment,
         stdin,
         binds: BindMounts {
             read_only,
-            writable: vec![scratch.clone()],
+            writable: vec![scratch.to_path_buf()],
         },
-        network: if needs_loopback {
-            NetworkAccess::IsolatedLoopback
-        } else {
-            NetworkAccess::Disabled
-        },
-        limits: ResourceLimits::contract_test(),
-    });
-    let cleanup = fs::remove_dir_all(&scratch);
-    if let Err(error) = cleanup {
-        return Err(format!(
-            "remove contract-test scratch {}: {error}",
-            scratch.display()
-        ));
-    }
-    let completed = match result {
+        network,
+        limits,
+    }) {
         Ok(completed) => completed,
-        Err(SandboxError::UnsupportedLoopback) if needs_loopback => {
-            let mut report = if fallback_scope.is_empty() {
-                serde_json::json!({"contracts": [], "lifecycle": [], "scenarios": []})
-            } else {
-                execute_contract_tests(
-                    interpreter,
-                    generated_root,
-                    site_packages,
-                    ir,
-                    verification,
-                    runtime_validation,
-                    Some(&fallback_scope),
-                )?
-            };
-            let scenarios = report
-                .get_mut("scenarios")
-                .and_then(Value::as_array_mut)
-                .ok_or("contract-test fallback report has no scenarios array")?;
-            scenarios.extend(unavailable_scenario_evidence(&strategies));
-            return Ok(report);
+        Err(SandboxError::UnsupportedLoopback) if network == NetworkAccess::IsolatedLoopback => {
+            let mut unavailable = empty_contract_report();
+            unavailable["scenarios"] = Value::Array(unavailable_scenario_evidence(strategies));
+            return Ok(unavailable);
         }
         Err(error) => return Err(error.to_string()),
     };
-    if completed.status != Some(0) {
+    if completed.status != Some(0) || !completed.stderr.is_empty() {
         return Err(format!(
             "contract test process exited {:?}: {}",
             completed.status,
-            String::from_utf8_lossy(&completed.stderr).trim()
-        ));
-    }
-    if !completed.stderr.is_empty() {
-        return Err(format!(
-            "contract test process wrote stderr: {}",
             String::from_utf8_lossy(&completed.stderr).trim()
         ));
     }
@@ -1119,6 +1336,115 @@ pub fn execute_contract_tests(
         .find(|line| !line.is_empty())
         .ok_or("contract test process produced no JSON")?;
     serde_json::from_slice(output).map_err(|error| format!("invalid contract-test report: {error}"))
+}
+
+fn join_scenario_observations(
+    report: &mut Value,
+    strategies: &[ContractTestStrategy],
+    mode: &RuntimeValidation,
+) -> Result<(), String> {
+    let order = strategies
+        .iter()
+        .enumerate()
+        .map(|(index, strategy)| (strategy.symbol.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    for scenario in required_array(report, "scenarios")? {
+        let id = required_string(scenario, "scenario_id")?;
+        if !order.contains_key(id) || !seen.insert(id) {
+            return Err(format!("unknown or duplicate scenario evidence {id}"));
+        }
+    }
+    report["scenarios"]
+        .as_array_mut()
+        .ok_or("scenario report must be an array")?
+        .sort_by_key(|scenario| {
+            order
+                .get(scenario["scenario_id"].as_str().unwrap_or(""))
+                .copied()
+        });
+    let mut observations = report
+        .as_object_mut()
+        .ok_or("contract report must be an object")?
+        .remove("scenario_observations")
+        .ok_or("missing scenario observations")?;
+    let observations = observations
+        .as_array_mut()
+        .ok_or("scenario observations must be an array")?;
+    observations.sort_by_key(|observation| {
+        order
+            .get(observation["scenario_id"].as_str().unwrap_or(""))
+            .copied()
+    });
+    let by_symbol = strategies
+        .iter()
+        .map(|strategy| (strategy.symbol.as_str(), strategy))
+        .collect::<BTreeMap<_, _>>();
+    let passed_scenarios = report["scenarios"]
+        .as_array()
+        .ok_or("scenario report must be an array")?
+        .iter()
+        .filter(|scenario| scenario["grade"] == "test observation")
+        .filter_map(|scenario| scenario["scenario_id"].as_str())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let contracts = report["contracts"]
+        .as_array_mut()
+        .ok_or("contract report must be an array")?;
+    let mut observed_scenarios = BTreeSet::new();
+    for observation in observations {
+        let scenario = required_string(observation, "scenario_id")?;
+        if !passed_scenarios.contains(scenario) || !observed_scenarios.insert(scenario.to_owned()) {
+            return Err(format!(
+                "clause evidence references an unobserved scenario {scenario}"
+            ));
+        }
+        let passed = required_array(observation, "clauses")?
+            .iter()
+            .map(|pair| {
+                let pair = pair
+                    .as_array()
+                    .filter(|pair| pair.len() == 2)
+                    .ok_or("scenario observation must be a symbol/clause pair")?;
+                Ok((
+                    pair[0]
+                        .as_str()
+                        .ok_or("scenario observation symbol must be a string")?,
+                    pair[1]
+                        .as_str()
+                        .ok_or("scenario observation clause must be a string")?,
+                ))
+            })
+            .collect::<Result<BTreeSet<_>, &str>>()?;
+        for contract in contracts.iter_mut() {
+            let symbol = required_string(contract, "symbol")?;
+            let clause = required_string(contract, "clause_id")?;
+            if !passed.contains(&(symbol, clause)) {
+                continue;
+            }
+            let mut item = serde_json::json!({
+                "grade":"test observation", "mode":validation_mode(mode), "valid_cases":1, "reason":null
+            });
+            if by_symbol.get(symbol).is_some_and(|strategy| {
+                strategy
+                    .obligations
+                    .iter()
+                    .any(|obligation| obligation.clause_id == clause)
+            }) {
+                item["eligible_cases"] = 1.into();
+                item["applicable_cases"] = 1.into();
+                item["satisfied_cases"] = 1.into();
+                item["condition_false_cases"] = 0.into();
+                item["first_witness"] =
+                    serde_json::json!({"case_id":format!("scenario:{scenario}")});
+            }
+            contract["evidence"]
+                .as_array_mut()
+                .ok_or("contract evidence must be an array")?
+                .push(item);
+        }
+    }
+    Ok(())
 }
 
 fn required_field<'a>(value: &'a Value, field: &str) -> Result<&'a Value, String> {
@@ -1294,7 +1620,7 @@ mod tests {
             lifecycle_limit: 64,
             limits: ScenarioLimits::from_verification(&verification),
         });
-        let evidence = unavailable_scenario_evidence(&[strategy]);
+        let evidence = unavailable_scenario_evidence(&[&strategy]);
         assert_eq!(evidence[0]["grade"], "unobserved");
         assert_eq!(
             evidence[0]["assertions"][0]["reason"],

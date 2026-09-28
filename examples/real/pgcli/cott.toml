@@ -16,6 +16,11 @@ runtime_validation = "boundary"
 rules = "generator.rules"
 timeout_seconds = 3600
 
+[verification.fixtures]
+scenario_timeout_ms = 10000
+filesystem_bytes = 67108864
+filesystem_files = 4096
+
 [[verification.coverage.rules]]
 symbol = "real.pgcli.cli.parse_pgcli_arguments"
 clauses = ["ensures:1", "error:2"]

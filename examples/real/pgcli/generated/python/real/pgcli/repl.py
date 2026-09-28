@@ -292,7 +292,7 @@ less_chatty. Returns the final session."""
     session = _cott_validate_abi(session, Session, path="$.session")
     settings = _cott_validate_abi(settings, ReplSettings, path="$.settings")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/repl/run_pgcli_repl.py", "0f1cc3d68f708524cf7194a3d340a88f446f75fc88f085b717525a500f214425", "run_pgcli_repl", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.repl.run_pgcli_repl")
+        _implementation = _cott_load("_cott_impl/real/pgcli/repl/run_pgcli_repl.py", "aa0a686a4c7672dacc8b45ce15ecfb9533ab292eff5fc908cc84396be9865652", "run_pgcli_repl", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.repl.run_pgcli_repl")
         _result = _implementation(session, settings)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

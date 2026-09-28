@@ -596,7 +596,7 @@ fn verify_in_scratch(
         std::env::current_exe().map_err(|error| format!("resolve compiler executable: {error}"))?;
     let compiler = fs::canonicalize(&compiler)
         .map_err(|error| format!("canonicalize compiler executable: {error}"))?;
-    let tools = json!({
+    let mut tools = json!({
         "basedpyright": tool_record(type_checker, checker_version)?,
         "compiler": tool_record(&compiler, env!("CARGO_PKG_VERSION"))?,
         "python": {
@@ -693,7 +693,7 @@ print(json.dumps(out,sort_keys=True,separators=(',',':')))
         return Err("runtime signature probe omitted a public function".to_owned());
     }
 
-    let contract_report = execute_contract_tests(
+    let contract_evidence = execute_contract_tests(
         interpreter,
         &generated_root,
         &target_site_packages,
@@ -702,6 +702,14 @@ print(json.dumps(out,sort_keys=True,separators=(',',':')))
         config.python.runtime_validation.clone(),
         scope,
     )?;
+    let Value::Object(fixture_tools) = contract_evidence.tools else {
+        return Err("contract fixture tools must be an object".to_owned());
+    };
+    tools
+        .as_object_mut()
+        .expect("compiler-owned tools object")
+        .extend(fixture_tools);
+    let contract_report = contract_evidence.report;
     candidate_guard.keep = true;
     let report = json!({
         "limits": {

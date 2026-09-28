@@ -45,9 +45,11 @@ Evidence는 다음 중 하나다.
 | trust declaration | Cott가 일반적으로 증명하지 않은 채 선언을 받아들였다. |
 
 Struct invariant는 canonical constructor 계약의 일부다. Scenario는 public facade와 닫힌
-filesystem, HTTP, clock, failure fixture만 사용한다. Effectful fixture observation에는
-compiler-owned Linux bubblewrap isolated-loopback sandbox가 필요하다. 격리가 없거나 사용할 수
-없으면 unsandboxed 또는 external-network fallback이 아니라 `unobserved`다. Semantic coverage는
+filesystem, HTTP, clock, random, database, socket, failure fixture만 사용한다.
+Python은 seeded random, 실제 private SQLite/DuckDB/PostgreSQL session과 bounded AF_UNIX peer를
+지원한다. `unwrap`·`item` step은 facade가 반환한 실제 값을 유지하며 가짜 handle을 만들지 않는다.
+HTTP는 isolated loopback, PostgreSQL은 network-disabled sandbox의 private Unix socket을 쓴다.
+지원하지 않는 target capability는 unavailable이며 unsandboxed·host-network fallback은 없다. Semantic coverage는
 Canonical IR clause inventory와 runner evidence를 join하며, manifest coverage rule은 artifact
 certification을 바꾸지 않고 선택한 clause만 gate할 수 있다.
 

@@ -1046,6 +1046,8 @@ with _runtime._cott_fixture_activate(
     root=_fixture_root,
     http_url=None,
     clock=17,
+    random_seed=None,
+    database=False,
     failures={{"clock.read": {{"occurrence": 2, "error": "timeout"}}}},
     transcript_limit=16,
 ):
@@ -1077,6 +1079,8 @@ for label, error_type in (("permission_denied", PermissionError), ("not_found", 
         root=_fixture_root,
         http_url=None,
         clock=None,
+        random_seed=None,
+        database=False,
         failures={{"file.read": {{"occurrence": 2, "error": label}}}},
         transcript_limit=16,
     ):
@@ -1093,6 +1097,8 @@ with _runtime._cott_fixture_activate(
     root=_fixture_root,
     http_url=None,
     clock=None,
+    random_seed=None,
+    database=False,
     failures={{}},
     transcript_limit=16_384,
 ):
@@ -1234,6 +1240,8 @@ def active(failures, action):
         root=root,
         http_url=None,
         clock=None,
+        random_seed=None,
+        database=False,
         failures={point: {"occurrence": 1, "error": "disk_full"} for point in failures},
         transcript_limit=64,
     ):
@@ -1329,6 +1337,116 @@ assert (root / "value.txt").read_bytes() == b"strict"
     assert!(
         output.status.success(),
         "fixture adapter contract failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The random fixture adapter is scenario-private, seeded, bounded and scoped to activation.
+#[test]
+fn fixture_shuffle_uses_only_the_active_seeded_generator() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import random
+from pathlib import Path
+import cott_runtime as _runtime
+from cott_runtime import CottContractViolation
+
+def raised(call):
+    try:
+        call()
+    except CottContractViolation as error:
+        return error
+    raise AssertionError("fixture shuffle did not fail")
+
+def active(seed, action, limit=64):
+    with _runtime._cott_fixture_activate(
+        _runtime._cott_fixture_runner_token(),
+        root=root,
+        http_url=None,
+        clock=None,
+        random_seed=seed,
+        database=False,
+        failures={},
+        transcript_limit=limit,
+    ):
+        return action()
+
+root = Path("fixture-root")
+root.mkdir()
+values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+for argument in (values, "not a list"):
+    inactive = raised(lambda: _runtime._cott_fixture_shuffle(argument))
+    assert inactive.message == "fixture adapters are inactive", inactive.message
+assert values == list(range(10))
+
+random.seed(99)
+global_state = random.getstate()
+expected = random.Random(7)
+first, second = list(range(10)), list(range(10))
+expected.shuffle(first)
+expected.shuffle(second)
+assert first != list(range(10))
+random.setstate(global_state)
+
+def shuffle_twice():
+    one, two = list(range(10)), list(range(10))
+    _runtime._cott_fixture_shuffle(one)
+    _runtime._cott_fixture_shuffle(two)
+    return one, two, _runtime._cott_fixture_transcript()
+
+one, two, events = active(7, shuffle_twice)
+assert (one, two) == (first, second)
+assert events == [{"kind": "random.shuffle", "items": 10}] * 2, events
+assert active(7, shuffle_twice)[:2] == (first, second)
+assert random.getstate() == global_state
+
+unavailable = active(None, lambda: raised(lambda: _runtime._cott_fixture_shuffle([1, 2])))
+assert unavailable.message == "fixture random source is unavailable", unavailable.message
+not_list = active(7, lambda: raised(lambda: _runtime._cott_fixture_shuffle((1, 2))))
+assert not_list.message == "fixture shuffle requires a list", not_list.message
+
+def exhaust():
+    kept = list(range(10))
+    _runtime._cott_fixture_shuffle(list(range(3)))
+    error = raised(lambda: _runtime._cott_fixture_shuffle(kept))
+    return error, kept
+
+limited, kept = active(7, exhaust, limit=1)
+assert limited.message == "fixture transcript limit exceeded", limited.message
+assert kept == list(range(10))
+
+largest = [0, 1, 2]
+active((1 << 64) - 1, lambda: _runtime._cott_fixture_shuffle(largest))
+assert sorted(largest) == [0, 1, 2]
+for seed in (-1, 1 << 64, True, "7", 7.0):
+    invalid = raised(lambda: active(seed, lambda: None))
+    assert invalid.message == "fixture activation limits are invalid", (seed, invalid.message)
+    assert raised(lambda: _runtime._cott_fixture_shuffle([1])).message == "fixture adapters are inactive"
+
+try:
+    active(7, lambda: (_ for _ in ()).throw(RuntimeError("scenario step failed")))
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("scenario failure was swallowed")
+after = raised(lambda: _runtime._cott_fixture_shuffle([1, 2]))
+assert after.message == "fixture adapters are inactive", after.message
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute generated runtime");
+    assert!(
+        output.status.success(),
+        "fixture shuffle contract failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -1589,5 +1707,163 @@ asyncio.run(exercise_async())
         "observer authority regression:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn fixture_database_failure_boundary_preserves_real_connection_state() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import errno
+import sqlite3
+from pathlib import Path
+import cott_runtime as runtime
+
+root = Path("fixture-root")
+root.mkdir()
+
+def active(database, failures):
+    return runtime._cott_fixture_activate(
+        runtime._cott_fixture_runner_token(),
+        root=root,
+        http_url=None,
+        clock=None,
+        random_seed=None,
+        database=database,
+        failures=failures,
+        transcript_limit=16,
+    )
+
+def violation(call):
+    try:
+        call()
+    except runtime.CottContractViolation as error:
+        return error
+    raise AssertionError("database authority boundary accepted an invalid call")
+
+assert violation(lambda: runtime._cott_fixture_database(None)).message == "fixture adapters are inactive"
+with active(False, {}):
+    assert violation(lambda: runtime._cott_fixture_database("read")).message == "fixture database authority is unavailable"
+with active(True, {}):
+    assert violation(lambda: runtime._cott_fixture_database("arbitrary-operation")).message == "fixture database operation is invalid"
+    assert runtime._cott_fixture_transcript() == []
+
+connection = sqlite3.connect(":memory:")
+try:
+    connection.execute("create table item(value integer)")
+    with active(True, {"database.commit": {"occurrence": 2, "error": "disk_full"}}):
+        connection.execute("insert into item values (1)")
+        runtime._cott_fixture_database("commit")
+        connection.commit()
+        connection.execute("insert into item values (2)")
+        try:
+            runtime._cott_fixture_database("commit")
+            connection.commit()
+        except OSError as error:
+            assert error.errno == errno.ENOSPC
+        else:
+            raise AssertionError("configured database failure was not delivered")
+        assert connection.in_transaction
+        connection.rollback()
+        connection.execute("insert into item values (3)")
+        runtime._cott_fixture_database("commit")
+        connection.commit()
+        assert connection.execute("select value from item order by value").fetchall() == [(1,), (3,)]
+        events = runtime._cott_fixture_transcript()
+        assert [event["kind"] for event in events] == ["database.commit", "failure", "database.commit"]
+        assert events[1]["point"] == "database.commit"
+finally:
+    connection.close()
+assert violation(lambda: runtime._cott_fixture_database("commit")).message == "fixture adapters are inactive"
+
+with active(True, {"database.read": {"occurrence": 1, "error": "interrupted"}}):
+    try:
+        runtime._cott_fixture_database("read")
+    except KeyboardInterrupt:
+        interrupted = True
+    else:
+        raise AssertionError("database interrupt did not deliver SIGINT")
+    assert interrupted
+    runtime._cott_fixture_database("read")
+    assert [event["kind"] for event in runtime._cott_fixture_transcript()] == ["failure", "database.read"]
+with active(True, {"file.read": {"occurrence": 1, "error": "interrupted"}}):
+    invalid = violation(lambda: runtime._cott_fixture_read("not-opened"))
+    assert invalid.phase == "fixture"
+assert not (root / "not-opened").exists()
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute database fixture boundaries");
+    assert!(
+        output.status.success(),
+        "database fixture boundary failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_executable_hashing_is_bounded_and_rechecks_bytes() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import hashlib, os, pathlib, resource
+import cott_runtime as runtime
+
+path = pathlib.Path("executable").absolute()
+block = b"\0" * (1024 * 1024)
+expected = hashlib.sha256()
+with path.open("wb") as output:
+    for _ in range(64):
+        output.write(block)
+        expected.update(block)
+with open("/proc/self/statm", encoding="ascii") as status:
+    current = int(status.read().split()[0]) * os.sysconf("SC_PAGE_SIZE")
+soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+limit = current + 16 * 1024 * 1024
+if soft != resource.RLIM_INFINITY:
+    limit = min(limit, soft)
+resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+digest = runtime._cott_regular_file_hash(path, "test executable")
+assert digest == "sha256:" + expected.hexdigest()
+with path.open("r+b") as output:
+    output.write(b"x")
+assert runtime._cott_regular_file_hash(path, "test executable") != digest
+link = path.with_name("symlink")
+link.symlink_to(path)
+try:
+    runtime._cott_regular_file_hash(link, "test executable")
+except runtime.CottContractViolation:
+    pass
+else:
+    raise AssertionError("executable symlink was accepted")
+hardlink = path.with_name("hardlink")
+os.link(path, hardlink)
+try:
+    runtime._cott_regular_file_hash(path, "test executable")
+except runtime.CottContractViolation:
+    pass
+else:
+    raise AssertionError("shared executable inode was accepted")
+"#;
+    let result = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(&temp.path)
+        .output()
+        .expect("execute bounded hashing smoke");
+    assert!(
+        result.status.success(),
+        "runtime executable hashing failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
     );
 }

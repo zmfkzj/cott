@@ -1091,6 +1091,62 @@ fn malformed_context_utf8_and_size_are_rejected() {
 }
 
 #[test]
+fn aggregate_prompt_budget_preserves_individually_bounded_references() {
+    let references = (0..9)
+        .map(|index| {
+            let mut binding = resolved_binding(&format!("app.helper{index}"), "");
+            binding.bytes = vec![b'x'; 1024 * 1024];
+            binding
+        })
+        .collect::<Vec<_>>();
+    let helpers = (0..9)
+        .map(|index| format!("app.helper{index}"))
+        .collect::<Vec<_>>();
+    let mut declarations = vec![json!({
+        "kind": "function", "name": "app.run", "public": true,
+        "doc": format!("Delegate to {}.", helpers.join(", ")),
+        "parameters": [], "return_type": {"kind":"primitive","name":"i32"},
+        "contract": {"clauses":[]}
+    })];
+    declarations.extend(helpers.iter().map(|name| {
+        json!({
+            "kind":"function", "name":name, "public":true, "doc":null,
+            "parameters":[], "return_type":{"kind":"primitive","name":"i32"},
+            "contract":{"clauses":[]}
+        })
+    }));
+    let context = cott::intent::context(
+        &json!({"app":{"declarations":declarations}}),
+        "app.run",
+        b"",
+    )
+    .expect("scoped helper context");
+    let callable = function_callable("app.run");
+    let accepted = render_prompt(
+        &callable,
+        &context,
+        &references[..2],
+        &BTreeMap::new(),
+        None,
+        None,
+        Path::new("implementation.py"),
+    )
+    .expect("aggregate prompt may exceed individual input ceiling");
+    assert!(accepted.len() > 2 * 1024 * 1024);
+    let error = render_prompt(
+        &callable,
+        &context,
+        &references,
+        &BTreeMap::new(),
+        None,
+        None,
+        Path::new("implementation.py"),
+    )
+    .expect_err("aggregate prompt remains bounded");
+    assert!(error.contains("rendered agent prompt exceeds"), "{error}");
+}
+
+#[test]
 fn doc_scanner_requires_closed_ascii_modal_and_facet_pairs() {
     let doc = "é\nMust return the result.\nMust atomically clean up temporary files!\nMustard returns no duty.\nThe timeout is noted.\nMust proceed.";
     let candidates = scan_doc_candidates(doc);

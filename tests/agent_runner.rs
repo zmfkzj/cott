@@ -1206,11 +1206,15 @@ fn preexisting_symlink_target_is_rejected() {
 #[test]
 fn claude_rejects_error_json_result() {
     let (_temp, workspace, scratch, target) = fixture();
+    // Test result validation only after the provider has consumed the prompt;
+    // exiting earlier races the sandbox's stdin writer and can return EPIPE.
     let executable = fake_adapter(
         &workspace,
         "2.1.89",
-        "printf implementation > implementation.py\nprintf '%s' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"no\"}'",
+        "cat > /dev/null\nprintf implementation > implementation.py\nprintf '%s' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"no\"}'",
     );
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
     let Some(result) = run_or_skip(
         AgentKind::Claude,
         executable,
@@ -1221,18 +1225,20 @@ fn claude_rejects_error_json_result() {
     ) else {
         return;
     };
+    let error = result.expect_err("Claude error result must fail");
     assert!(
-        result
-            .expect_err("Claude error result must fail")
-            .contains("claude returned an invalid result")
+        error.contains("claude returned an invalid result"),
+        "{error}"
     );
 }
 
 #[test]
 fn claude_rejects_malformed_and_multiple_version_tokens() {
+    let _lock = _hold_env_lock();
     for version in ["2.1", "2.1.89 extra"] {
         let (_temp, workspace, scratch, target) = fixture();
         let executable = fake_adapter(&workspace, version, "exit 0");
+        let _environment = EnvRestore::controlled(&scratch, &executable);
         let Some(result) = run_or_skip(
             AgentKind::Claude,
             executable,

@@ -63,7 +63,7 @@ def find_adapter(name: str) -> Option[AdapterDescriptor]:
 ignoring ASCII case."""
     name = _cott_normalize_f32_abi(name, str, path="$.name")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/find_adapter.py", "b0f01919c452042f67bfd19a8e6961d9dd962a35025b94a17e0a567aa3ac3f0b", "find_adapter", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.find_adapter")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/find_adapter.py", "4fe3c4bb5e3942fedb0b8cc85a0b5fea764bb3a66b8ca2df8cec18adb56ffd0a", "find_adapter", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.find_adapter")
         _result = _implementation(name)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -181,7 +181,7 @@ Chdb:
   catalog-search-limit | | text | 200 | Catalog Search Limit | The maximum number of catalog search matches per level. Must be an integer of at least 1."""
     kind = _cott_normalize_f32_abi(kind, AdapterKind, path="$.kind")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/adapter_options.py", "bd7d8c83e1b2f7be523c816b378729e769d0ca23085042db99132ae161a52081", "adapter_options", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.adapter_options")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/adapter_options.py", "8419f9e26320e913e897b25d458daa10d4646bb2f2fdd79489eaa5f41f760343", "adapter_options", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.adapter_options")
         _result = _implementation(kind)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -349,7 +349,7 @@ Failed("Harlequin could not connect to chDB.", message)."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/connect.py", "38c61e506e5e88345b19d55107b61f5090b55688f2698f0bdcbb20f3cb4a81a4", "connect", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.connect")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/connect.py", "e7a44ab86bb2999bf6594a72e93f42d33231396e2a5c7b560c2007119b087bcc", "connect", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.connect")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -440,7 +440,7 @@ booleans "t/f", dates "d", timestamps "ts", binary "0b", otherwise "?")."""
     limit = _cott_normalize_f32_abi(limit, Option[U64], path="$.limit")
     continue_on_error = _cott_normalize_f32_abi(continue_on_error, bool, path="$.continue_on_error")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/execute_statements.py", "72fe61e9197ced2a0a898806fd3d8d1770295c1d8040bceaab7ae40f57a4e599", "execute_statements", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.execute_statements")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/execute_statements.py", "2fff1bee4db2f7998632e68c374a8fda7595e9be5021696e889c19d99466db80", "execute_statements", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.execute_statements")
         _result = _implementation(connection, statements, limit, continue_on_error)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -487,7 +487,7 @@ closed afterwards and removed from the session's "active" list."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/fetch_result.py", "6e57eaa3d09761eead34e6c12f29d96710d5e59436fb09a7ad9a2e96b77a415c", "fetch_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.fetch_result")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/fetch_result.py", "b760e982e4f0c0c664e75eb14aa519e9643befc4dd2a9aaa22bbfafbb30959b4", "fetch_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.fetch_result")
         _result = _implementation(connection, executed, limit, viewer_max_rows)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -542,7 +542,7 @@ cancel your queries.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/cancel_queries.py", "28ed62e2833d481fd53b9e506ac39bbf9e2c6561c1d1b8c627f91a17fa644bdb", "cancel_queries", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.cancel_queries")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/cancel_queries.py", "ffad892de99f5bebe95f112843b085e7759372ffa375bb8cdabb08bf39ed7075", "cancel_queries", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.cancel_queries")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -627,7 +627,7 @@ catalog.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/load_catalog.py", "9091a2466cce98fc5e597a2e4afcfaa6f13d77fd61451e6b5eb83c680ddddf74", "load_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.load_catalog")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/load_catalog.py", "058c119170abe76178b54b8ec1a7f32cb9a29334a42c623267f3fc5acb34d834", "load_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.load_catalog")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -698,7 +698,7 @@ An entry of an adapter that loads everything up front has no children to load
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/load_catalog_children.py", "8f3f6a2a6e3076d7d953f591ba0af62dbf463cdb4066999f25f29e664ab8928c", "load_catalog_children", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.load_catalog_children")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/load_catalog_children.py", "f2de976194608c99eb152ed6dda52430d2e2bffb1a401e080b13e5ab32f29ad0", "load_catalog_children", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.load_catalog_children")
         _result = _implementation(connection, parent)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -760,7 +760,7 @@ searching the catalog:", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/search_catalog.py", "9cfd02c0d1fce19723cc2e6cac552bf4091f687060905e6371c0aa88111d5807", "search_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.search_catalog")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/search_catalog.py", "f88163eefde5119cc058ab50164de5eb15f635ef07303c5bb7b9b0e1deeddfd4", "search_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.search_catalog")
         _result = _implementation(connection, term)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -840,7 +840,7 @@ your adapter.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/adapter_completions.py", "0cdba6956e1e94e7af0cff46f484eae456b873d50c92be68b85efc490988ca24", "adapter_completions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.adapter_completions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/adapter_completions.py", "bdf41ad6270cd4d6f4d54260e4b9608baf68faed2fa32b7d179e391afc7e6d8c", "adapter_completions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.adapter_completions")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -887,7 +887,7 @@ cannot validate and returns true. Errors return false."""
     connection = _cott_normalize_f32_abi(connection, Connection, path="$.connection")
     text = _cott_normalize_f32_abi(text, str, path="$.text")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/validate_sql.py", "b726cd6b415ec69130426a93d408f69c99daeb089874e791f867037bc96b5f9d", "validate_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.validate_sql")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/validate_sql.py", "a0ae54c69b9df450b8613de9c68150f26b480e2993ad0ea29551154cc422ef00", "validate_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.validate_sql")
         _result = _implementation(connection, text)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -917,7 +917,7 @@ transaction mode.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/toggle_transaction_mode.py", "bfcb0c2407b127ab7de4a8fb0e32191a8a337ae5af53ee11628b642b3318f645", "toggle_transaction_mode", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.toggle_transaction_mode")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/toggle_transaction_mode.py", "e2956124da0858a30713e10fbd4e1927cb23ba8552ca7628cf580848286f0c93", "toggle_transaction_mode", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.toggle_transaction_mode")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -965,7 +965,7 @@ could not commit the transaction.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/commit_transaction.py", "5cceabf9b7cd5e78f0e328b3189451e3b9edd7e9589fcbe03a44c22f5e9931b7", "commit_transaction", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.commit_transaction")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/commit_transaction.py", "df5089644f884f42334ee8a351b3ddff0577c9b09001106fdc4ed645d7521de5", "commit_transaction", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.commit_transaction")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1013,7 +1013,7 @@ could not roll back the transaction.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/rollback_transaction.py", "ed1e4f86c2f6306939e0faf8e69af7415072d66f9f5609ffc25c683bd1ecc2fb", "rollback_transaction", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.rollback_transaction")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/rollback_transaction.py", "90849abcbf2e1a0e27533bf53b4ecc42e237509157a77103cb30e3cde249bb4b", "rollback_transaction", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.rollback_transaction")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1063,7 +1063,7 @@ Interaction Error", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/run_scalar_query.py", "26da61fbdc99d9ec0800a45d579ff7f12bb011918cabb922c2ed44b79ca66262", "run_scalar_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.run_scalar_query")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/run_scalar_query.py", "2d254fff5a3537cba077ec85e71de2df12c59f5519b1db5a63599eef1d869f54", "run_scalar_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.run_scalar_query")
         _result = _implementation(connection, sql)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1112,7 +1112,7 @@ connection.", message))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/close_connection.py", "add573241dbfc194b0d467c43fe98133eb07fcc1d13002b8c4e39545cc368df8", "close_connection", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.close_connection")
+        _implementation = _cott_load("_cott_impl/real/harlequin/adapters/close_connection.py", "71972e6a7e8359e34f71f09f61a82edafb6286db9797a486e56d76228515cea6", "close_connection", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.adapters.close_connection")
         _result = _implementation(connection)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1232,12 +1232,12 @@ pg_get_viewdef('{qi}'::regclass, true)", ...)."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.adapters.plan_interaction"
         if _error.span is None:
-            _error.span = {"end_byte":54156,"end_column":1,"end_line":931,"start_byte":51709,"start_column":1,"start_line":889}
+            _error.span = {"end_byte":54157,"end_column":1,"end_line":932,"start_byte":51709,"start_column":1,"start_line":889}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.adapters.plan_interaction", phase="implementation-call", span={"end_byte":54156,"end_column":1,"end_line":931,"start_byte":51709,"start_column":1,"start_line":889}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.adapters.plan_interaction", phase="implementation-call", span={"end_byte":54157,"end_column":1,"end_line":932,"start_byte":51709,"start_column":1,"start_line":889}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.adapters.plan_interaction", phase="implementation-call", span={"end_byte":54156,"end_column":1,"end_line":931,"start_byte":51709,"start_column":1,"start_line":889}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.adapters.plan_interaction", phase="implementation-call", span={"end_byte":54157,"end_column":1,"end_line":932,"start_byte":51709,"start_column":1,"start_line":889}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Option[InteractionPlan], path="$.return")
     _result = _cott_wrap_async_protocol(_result, Option[InteractionPlan], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result

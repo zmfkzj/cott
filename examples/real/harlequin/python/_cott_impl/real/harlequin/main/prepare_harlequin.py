@@ -84,7 +84,7 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
     if isinstance(scanned.adapter, Some):
         adapter_name = scanned.adapter.value
     else:
-        requested = scanned.profile if isinstance(scanned.profile, Some) else merged.default_profile
+        requested: Option[str] = scanned.profile if isinstance(scanned.profile, Some) else merged.default_profile
         if isinstance(requested, Some) and requested.value != "None":
             for candidate in merged.profiles:
                 if candidate.name == requested.value:

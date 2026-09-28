@@ -928,3 +928,238 @@ fn plan_interaction(
     """
 
     effects []
+
+data fixture_sqlite_request: ConnectionRequest = ConnectionRequest(
+    adapter: AdapterKind.Sqlite,
+    conn_str: List(":memory:"),
+    read_only: false,
+    settings: List(),
+)
+
+scenario sqlite_session_retains_rows_and_transactions:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    assert connection.adapter == AdapterKind.Sqlite and not connection.read_only
+    call executed = execute_statements(
+        connection,
+        List(
+            "create table cott_items(value integer)",
+            "insert into cott_items values (7), (9)",
+            "select value from cott_items order by value",
+        ),
+        Option.Nothing,
+        false,
+    )
+    assert executed.len == 3
+    item selected = executed at 2
+    call fetched = fetch_result(connection, selected, Option.Nothing, Option.Nothing)
+    unwrap rows = fetched
+    assert rows.fetched_row_count == 2 and rows.row_count == 2
+    item created = executed at 0
+    call no_rows = fetch_result(connection, created, Option.Nothing, Option.Nothing)
+    assert no_rows matches Result.Err(QueryError.Failed(_, _))
+    call changed = toggle_transaction_mode(connection)
+    unwrap manual = changed
+    assert manual.connection_id == connection.connection_id
+    call pending = execute_statements(
+        manual,
+        List("insert into cott_items values (11)"),
+        Option.Nothing,
+        false,
+    )
+    assert pending.len == 1
+    call rolled_back = rollback_transaction(manual)
+    assert rolled_back == Result.Ok(value: ())
+    call kept = run_scalar_query(manual, "select count(*) from cott_items")
+    assert kept == Result.Ok(value: Option.Some(value: "2"))
+    call pending_again = execute_statements(
+        manual,
+        List("insert into cott_items values (13)"),
+        Option.Nothing,
+        false,
+    )
+    assert pending_again.len == 1
+    call committed = commit_transaction(manual)
+    assert committed == Result.Ok(value: ())
+    call persisted = run_scalar_query(manual, "select count(*) from cott_items")
+    assert persisted == Result.Ok(value: Option.Some(value: "3"))
+    call closed = close_connection(manual)
+    assert closed == Result.Ok(value: ())
+
+scenario connection_errors_keep_their_declared_kinds:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+    call unsupported = connect(
+        ConnectionRequest(
+            adapter: AdapterKind.Odbc,
+            conn_str: List("unused"),
+            read_only: true,
+            settings: List(),
+        ),
+    )
+    assert unsupported matches Result.Err(ConnectionError.ReadOnlyUnsupported(_))
+    call invalid = connect(
+        ConnectionRequest(
+            adapter: AdapterKind.Sqlite,
+            conn_str: List(":memory:"),
+            read_only: true,
+            settings: List(AdapterSetting(name: "mode", value: SettingValue.Text(value: "rw"))),
+        ),
+    )
+    assert invalid matches Result.Err(ConnectionError.InvalidOption(_, _))
+    call failed = connect(
+        ConnectionRequest(
+            adapter: AdapterKind.Sqlite,
+            conn_str: List("missing/parent.sqlite"),
+            read_only: false,
+            settings: List(),
+        ),
+    )
+    assert failed matches Result.Err(ConnectionError.Failed(_, _))
+
+scenario database_commit_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.commit
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call changed = toggle_transaction_mode(connection)
+    unwrap manual = changed
+    call prepared = execute_statements(
+        manual,
+        List("create table pending(value integer)"),
+        Option.Nothing,
+        false,
+    )
+    assert prepared.len == 1
+    call failed = commit_transaction(manual)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(manual)
+    assert closed == Result.Ok(value: ())
+
+scenario database_rollback_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.rollback
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call changed = toggle_transaction_mode(connection)
+    unwrap manual = changed
+    call prepared = execute_statements(
+        manual,
+        List("create table pending(value integer)"),
+        Option.Nothing,
+        false,
+    )
+    assert prepared.len == 1
+    call failed = rollback_transaction(manual)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(manual)
+    assert closed == Result.Ok(value: ())
+
+scenario database_close_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.close
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call failed = close_connection(connection)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+
+scenario database_cancel_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.cancel
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call failed = cancel_queries(connection)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(connection)
+    assert closed == Result.Ok(value: ())
+
+scenario database_write_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.write
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call failed = toggle_transaction_mode(connection)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(connection)
+    assert closed == Result.Ok(value: ())
+
+scenario database_read_failures_are_observed:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.read
+            occurrence: 1
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call failed = load_catalog(connection)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(connection)
+    assert closed == Result.Ok(value: ())
+
+scenario catalog_child_read_failure_uses_a_real_catalog_parent:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "anchor" text("")
+        failure denied:
+            point: database.read
+            occurrence: 2
+            error: connection_reset
+    call opened = connect(fixture_sqlite_request)
+    unwrap connection = opened
+    call loaded = load_catalog(connection)
+    unwrap catalog = loaded
+    item parent = catalog at 0
+    assert parent.label == "main"
+    call failed = load_catalog_children(connection, parent)
+    assert failed matches Result.Err(QueryError.Failed(_, _))
+    call closed = close_connection(connection)
+    assert closed == Result.Ok(value: ())

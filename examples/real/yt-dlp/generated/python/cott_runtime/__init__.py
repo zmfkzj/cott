@@ -15,6 +15,8 @@ import json as _json
 import math as _math
 import os as _os
 import platform as _platform
+import random as _random
+import signal as _signal
 import stat as _stat
 import struct as _struct
 import sys as _sys
@@ -1022,6 +1024,8 @@ class _CottFixtureState:
     root: _Path
     http_url: str | None
     clock: int | None
+    random: _random.Random | None
+    database: bool
     failures: dict[str, tuple[int, str]]
     transcript_limit: int
     transcript: list[dict[str, object]]
@@ -1053,6 +1057,18 @@ def _cott_fixture_maybe_fail(state: _CottFixtureState, point: str) -> None:
         return
     state.failures[point] = (0, error)
     _cott_fixture_record(state, "failure", point=point, error=error)
+    if error == "interrupted":
+        if (
+            not state.database
+            or not point.startswith("database.")
+            or _threading.current_thread() is not _threading.main_thread()
+            or _signal.getsignal(_signal.SIGINT) is not _signal.default_int_handler
+            or not hasattr(_signal, "pthread_sigmask")
+            or _signal.SIGINT in _signal.pthread_sigmask(_signal.SIG_BLOCK, [])
+        ):
+            raise CottContractViolation("fixture interrupt requires an active main-thread database boundary", phase="fixture")
+        _signal.raise_signal(_signal.SIGINT)
+        raise CottContractViolation("fixture SIGINT was not delivered", phase="fixture")
     code = {
         "permission_denied": _errno.EACCES,
         "not_found": _errno.ENOENT,
@@ -1072,6 +1088,8 @@ def _cott_fixture_activate(
     root: object,
     http_url: object,
     clock: object,
+    random_seed: object,
+    database: object,
     failures: object,
     transcript_limit: object,
 ) -> Iterator[_CottFixtureContext]:
@@ -1079,7 +1097,13 @@ def _cott_fixture_activate(
         raise CottContractViolation("fixture activation is runner-only", phase="fixture")
     if getattr(_COTT_FIXTURE_STATE, "value", None) is not None:
         raise CottContractViolation("fixture activation is already active", phase="fixture")
-    if (clock is not None and type(clock) is not int) or type(transcript_limit) is not int or not 0 < transcript_limit <= _COTT_FIXTURE_TRANSCRIPT_LIMIT:
+    if (
+        (clock is not None and type(clock) is not int)
+        or (random_seed is not None and (type(random_seed) is not int or not 0 <= random_seed < 1 << 64))
+        or type(database) is not bool
+        or type(transcript_limit) is not int
+        or not 0 < transcript_limit <= _COTT_FIXTURE_TRANSCRIPT_LIMIT
+    ):
         raise CottContractViolation("fixture activation limits are invalid", phase="fixture")
     if http_url is not None:
         if type(http_url) is not str:
@@ -1118,6 +1142,8 @@ def _cott_fixture_activate(
         root=fixture_root,
         http_url=http_url,
         clock=clock,
+        random=None if random_seed is None else _random.Random(random_seed),
+        database=database,
         failures={point: (value["occurrence"], value["error"]) for point, value in failures.items()},
         transcript_limit=transcript_limit,
         transcript=[],
@@ -1269,6 +1295,27 @@ def _cott_fixture_now() -> int:
     _cott_fixture_maybe_fail(state, "clock.read")
     _cott_fixture_record(state, "clock.read")
     return state.clock
+
+
+def _cott_fixture_shuffle(values: list[Any]) -> None:
+    state = _cott_fixture_state()
+    if state.random is None:
+        raise CottContractViolation("fixture random source is unavailable", phase="fixture")
+    if type(values) is not list:
+        raise CottContractViolation("fixture shuffle requires a list", phase="fixture")
+    _cott_fixture_record(state, "random.shuffle", items=len(values))
+    state.random.shuffle(values)
+
+
+def _cott_fixture_database(operation: str) -> None:
+    state = _cott_fixture_state()
+    if not state.database:
+        raise CottContractViolation("fixture database authority is unavailable", phase="fixture")
+    if type(operation) is not str or operation not in ("connect", "read", "write", "commit", "rollback", "close", "cancel"):
+        raise CottContractViolation("fixture database operation is invalid", phase="fixture")
+    point = "database." + operation
+    _cott_fixture_maybe_fail(state, point)
+    _cott_fixture_record(state, point)
 
 
 def _cott_fixture_fail(point: object) -> None:
@@ -1529,6 +1576,23 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+
+def _cott_regular_file_hash(path: _Path, label: str) -> str:
+    try:
+        if path.resolve(strict=True) != path:
+            raise _cott_violation(f"{label} contains a symlink")
+        descriptor = _os.open(path, _os.O_RDONLY | _os.O_NOFOLLOW)
+        with _os.fdopen(descriptor, "rb") as source:
+            metadata = _os.fstat(source.fileno())
+            if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise _cott_violation(f"{label} is not a regular file")
+            return "sha256:" + _hashlib.file_digest(source, "sha256").hexdigest()
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to hash {label}: {error}") from error
+
+
 def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
     try:
         resolved = path.resolve(strict=True)
@@ -1599,8 +1663,7 @@ def _cott_validate_python_tools(tools: object) -> None:
         except (OSError, TypeError, ValueError) as error:
             raise _cott_violation(f"invalid Python executable provenance: {error}") from error
         executable_hash = _cott_expected_digest(recorded.get("content_hash"), "Python executable hash")
-        executable = _cott_regular_file_bytes(runtime_executable, "Python executable")
-        if _cott_sha256(executable) != executable_hash:
+        if _cott_regular_file_hash(runtime_executable, "Python executable") != executable_hash:
             raise _cott_violation("Python executable hash mismatch")
     runtime = tools.get("runtime")
     if type(runtime) is not dict or runtime.get("abi") != _COTT_RUNTIME_ABI or runtime.get("version") != _COTT_RUNTIME_VERSION:

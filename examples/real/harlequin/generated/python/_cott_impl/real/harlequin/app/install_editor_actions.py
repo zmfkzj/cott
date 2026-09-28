@@ -51,8 +51,7 @@ def _context(s: dict[str, object]) -> IdeContext:
 
 
 def _invalidate(s: dict[str, object]) -> None:
-    app = cast(Application[object], s["app"])
-    app.invalidate()
+    cast(Application[None], s["app"]).invalidate()
 
 
 def _notify(s: dict[str, object], title: str | None, message: str, severity: str) -> None:
@@ -107,8 +106,8 @@ def _complete(s: dict[str, object], document: Document, complete_event: Complete
         candidates = cast(CompletionSet, s["completions"])
     if candidates.tag != "harlequin.completions":
         return []
-    matches = complete(candidates, buffer_identifiers(document.text), prefix, 50)
-    return [Completion(text=item.value, start_position=-len(prefix), display=item.label, display_meta=item.type_label) for item in matches]
+    found = complete(candidates, buffer_identifiers(document.text), prefix, 50)
+    return [Completion(text=item.value, start_position=-len(prefix), display=item.label, display_meta=item.type_label) for item in found]
 
 
 def _completer(s: dict[str, object]) -> Completer:
@@ -224,7 +223,7 @@ def _move(s: dict[str, object], op: str, select: bool) -> None:
         elif op == "right":
             buffer.cursor_right()
         elif op in ("page_up", "page_down"):
-            app = cast(Application[object], s["app"])
+            app = cast(Application[None], s["app"])
             info = app.layout.current_window.render_info
             rows = info.window_height if info is not None else cast(Callable[[], tuple[int, int]], s["size"])()[1]
             count = max(rows - 1, 1)
@@ -239,22 +238,19 @@ def _move(s: dict[str, object], op: str, select: bool) -> None:
 
 def _scroll(s: dict[str, object], down: bool) -> None:
     with _lock(s):
-        window = cast(Application[object], s["app"]).layout.current_window
+        window = cast(Application[None], s["app"]).layout.current_window
         info = window.render_info
         if info is None:
             return
         buffer = _active(s)
         if down:
-            if window.vertical_scroll < info.content_height - info.window_height:
-                if info.cursor_position.y <= info.configured_scroll_offsets.top:
-                    buffer.cursor_down()
-                window.vertical_scroll += 1
-        elif window.vertical_scroll > 0:
-            first_height = info.get_height_for_line(info.first_visible_line())
-            cursor_up = info.cursor_position.y - (info.window_height - 1 - first_height - info.configured_scroll_offsets.bottom)
-            for _ in range(max(0, cursor_up)):
+            window.vertical_scroll = min(window.vertical_scroll + 1, max(buffer.document.line_count - info.window_height, 0))
+            if buffer.document.cursor_position_row < window.vertical_scroll:
+                buffer.cursor_down()
+        else:
+            window.vertical_scroll = max(window.vertical_scroll - 1, 0)
+            if buffer.document.cursor_position_row >= window.vertical_scroll + info.window_height:
                 buffer.cursor_up()
-            window.vertical_scroll -= 1
     _invalidate(s)
 
 
@@ -333,14 +329,13 @@ def _find(s: dict[str, object], cells: dict[str, object]) -> None:
             _input(s, InputPurpose_Find())
             return
         buffer = _active(s)
-        anchor, cursor = _anchor(buffer), buffer.cursor_position
-        offset = max(anchor, cursor) if anchor != cursor else cursor + 1
+        cursor = buffer.cursor_position
         first: re.Match[str] | None = None
         match: re.Match[str] | None = None
         for found in re.finditer(re.escape(query), buffer.text, re.IGNORECASE):
             if first is None:
                 first = found
-            if found.start() >= offset:
+            if found.start() > cursor:
                 match = found
                 break
         if match is None:
@@ -405,7 +400,7 @@ def _input_key(s: dict[str, object], cells: dict[str, object], key: str, text: s
     _invalidate(s)
 
 
-def _run_editor(s: dict[str, object], app: Application[object], buffer: Buffer, text: str, command: CottList[str]) -> None:
+def _run_editor(s: dict[str, object], app: Application[None], buffer: Buffer, text: str, command: CottList[str]) -> None:
     result = edit_externally(text, command)
     with _lock(s):
         if isinstance(result, Err):
@@ -420,7 +415,7 @@ def _run_editor(s: dict[str, object], app: Application[object], buffer: Buffer, 
     app.invalidate()
 
 
-def _external(s: dict[str, object], app: Application[object]) -> None:
+def _external(s: dict[str, object], app: Application[None]) -> None:
     resolved = resolve_editor(_context(s).environment)
     if isinstance(resolved, Err):
         error = resolved.error
@@ -443,7 +438,7 @@ def _copy(s: dict[str, object], cut: bool) -> None:
             return
         copied = copy_to_clipboard(text)
         if isinstance(copied, Err):
-            app = cast(Application[object], s["app"])
+            app = cast(Application[None], s["app"])
             app.output.write_raw(osc52_sequence(text))
             app.output.flush()
         if cut:
@@ -519,15 +514,14 @@ def _finish(s: dict[str, object], cells: dict[str, object], stop: threading.Even
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         save_buffer_cache(paths.cache_dir / f"recovered-{stamp}-{os.getpid()}.json", cache)
     else:
-        saved = save_buffer_cache(paths.buffer_cache, cache)
-        if isinstance(saved, Ok):
-            remove_file(cast(Path, cells["recovery"]))
+        save_buffer_cache(paths.buffer_cache, cache)
+        remove_file(cast(Path, cells["recovery"]))
 
 
 def _restore(s: dict[str, object], cache: BufferCache) -> None:
     entries: list[dict[str, object]] = []
     for state in cache.buffers:
-        buffer = Buffer(multiline=True, completer=_completer(s), complete_while_typing=True)
+        buffer = _active(s) if not entries else Buffer(multiline=True, completer=_completer(s), complete_while_typing=True)
         _set(buffer, state.text, state.anchor, state.cursor)
         entries.append({"title": f"Tab {len(entries) + 1}", "buffer": buffer})
     if entries:
@@ -566,13 +560,13 @@ def install_editor_actions(session: IdeSession) -> Unit:
     if not isinstance(raw, dict):
         raise ValueError(_MALFORMED)
     s = cast(dict[str, object], raw)
-    if not isinstance(s.get("context"), IdeContext) or not isinstance(s.get("lock"), contextlib.AbstractContextManager):
+    if not isinstance(s.get("context"), IdeContext) or not isinstance(s.get("buffers"), list):
         raise ValueError(_MALFORMED)
     stop = threading.Event()
     cells: dict[str, object] = {"search": "", "last": None, "recovery": _context(s).paths.cache_dir / f"recovery-{os.getpid()}.json"}
     worker = threading.Thread(target=lambda: _checkpoint(s, cells, stop), daemon=True)
     with _lock(s):
-        app = cast(Application[object], s["app"])
+        app = cast(Application[None], s["app"])
         for entry in _entries(s):
             buffer = cast(Buffer, entry["buffer"])
             buffer.completer = _completer(s)

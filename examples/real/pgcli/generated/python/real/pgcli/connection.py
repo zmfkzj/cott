@@ -394,7 +394,7 @@ Executor.tunnel holds the started forwarder."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/open_executor.py", "04564fc2f54ab942f12ec60aad9ffecb18914dcb6143f5cda3711296aab441f9", "open_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.open_executor")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/open_executor.py", "66b3abe0fa983bab9a227c95b8b48ee79eb4146d7b3edbcf3a31060a44185ab9", "open_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.open_executor")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -450,7 +450,7 @@ old connection open and usable."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/reconnect_executor.py", "d8079c1cb95f2db46e360dfb23c7f945fa00adddc3890b16e02ee4aa959c27d1", "reconnect_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.reconnect_executor")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/reconnect_executor.py", "d93300d28d5d0efcf2f795d4189ddfe4ad3b28cbb6fe51471d0ad395a0cb3195", "reconnect_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.reconnect_executor")
         _result = _implementation(executor, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -497,7 +497,7 @@ session is untouched. A failure is Failed(message: str(error))."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/copy_executor.py", "53ab78071974e12006f1f9af190ab3860c3c70348f6cbb1a616a679a999b5bd3", "copy_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.copy_executor")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/copy_executor.py", "2f8caec4e58c39a024709fadad7bcd2158d92b54da20eefffd5209ecf0ecbc70", "copy_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.copy_executor")
         _result = _implementation(executor)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -539,7 +539,7 @@ def close_executor(executor: Executor) -> Unit:
 stopped here (upstream stops it at interpreter exit)."""
     executor = _cott_validate_abi(executor, Executor, path="$.executor")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/close_executor.py", "d2ff9d27c4b1fc562767566e693c0528f60f7ac90dd98d444db5a2a759965521", "close_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.close_executor")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/close_executor.py", "40c5d3533e96383dfe82302ef11eed62bce34682f4ec5bfdacb10ed6a5a71794", "close_executor", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.close_executor")
         _result = _implementation(executor)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

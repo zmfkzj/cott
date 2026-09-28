@@ -4,7 +4,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
-from cott_runtime import UNIT, CottList, Nothing, Ok, Some, Unit
+from cott_runtime import CottList, Nothing, Ok, Some, Unit
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
@@ -26,8 +26,7 @@ def _lock(state: dict[str, object]) -> AbstractContextManager[object]:
 
 
 def _invalidate(state: dict[str, object]) -> None:
-    with _lock(state):
-        app: Any = state["app"]
+    app: Any = state["app"]
     app.invalidate()
 
 
@@ -54,31 +53,31 @@ def _tree(state: dict[str, object], key: str) -> TreeState:
 
 def _notify(state: dict[str, object], title: str | None, message: str, severity: str) -> None:
     service = state.get("notify")
-    if callable(service):
+    if service is not None:
         cast(Callable[[str | None, str, str], None], service)(title, message, severity)
 
 
 def _open_dialog(state: dict[str, object], kind: str, model: object) -> None:
     service = state.get("open_dialog")
-    if callable(service):
+    if service is not None:
         cast(Callable[[str, object], None], service)(kind, model)
 
 
 def _close_dialog(state: dict[str, object]) -> None:
     service = state.get("close_dialog")
-    if callable(service):
+    if service is not None:
         cast(Callable[[], None], service)()
 
 
 def _insert(state: dict[str, object], text: str) -> None:
     service = state.get("insert_text")
-    if callable(service):
+    if service is not None:
         cast(Callable[[str], None], service)(text)
 
 
 def _new_buffer(state: dict[str, object], text: str) -> None:
     service = state.get("new_buffer")
-    if callable(service):
+    if service is not None:
         cast(Callable[[str], None], service)(text)
 
 
@@ -106,11 +105,11 @@ def _page_rows(state: dict[str, object]) -> int:
     if window is not None:
         info: Any = window.render_info
         if info is not None:
-            height = cast(object, info.window_height)
+            height: object = info.window_height
             if isinstance(height, int):
                 return max(height, 1)
     service = state.get("size")
-    if callable(service):
+    if service is not None:
         _, rows = cast(Callable[[], tuple[int, int]], service)()
         return max(rows - 3 - int(len(_configured_tabs(state)) > 1), 1)
     return 1
@@ -174,6 +173,7 @@ def _fetch_children(state: dict[str, object], tab: str, entry: CatalogEntry) -> 
 def _load_worker(state: dict[str, object], tab: str, entry: CatalogEntry, insert_names: bool) -> None:
     result = _fetch_children(state, tab, entry)
     entries_key, _ = _tab_keys(tab)
+    names: str | None = None
     with _lock(state):
         if isinstance(result, str):
             _catalog_error(state, result)
@@ -184,7 +184,9 @@ def _load_worker(state: dict[str, object], tab: str, entry: CatalogEntry, insert
                 state[entries_key] = list(merged)
                 if insert_names:
                     children = catalog_children(merged, Some(value=entry.id))
-                    _insert(state, ", ".join(child.query_name for child in children))
+                    names = ", ".join(child.query_name for child in children)
+    if names is not None:
+        _insert(state, names)
     _invalidate(state)
 
 
@@ -209,9 +211,9 @@ def _toggle(state: dict[str, object]) -> None:
 def _insert_name(state: dict[str, object]) -> None:
     with _lock(state):
         entry = _cursor_entry(state)
-        if entry is not None:
-            _insert(state, entry.query_name)
-    _invalidate(state)
+    if entry is not None:
+        _insert(state, entry.query_name)
+        _invalidate(state)
 
 
 def _copy_name(state: dict[str, object]) -> None:
@@ -232,20 +234,20 @@ def _show_menu(state: dict[str, object]) -> None:
         if entry is not None:
             context = cast(IdeContext, state["context"])
             _open_dialog(state, "menu", context_menu(entry, catalog_interactions(context.descriptor.kind, entry)))
-    _invalidate(state)
+    if entry is not None:
+        _invalidate(state)
 
 
 def _query_buffer_worker(state: dict[str, object], sql: str, failure: str) -> None:
     with _lock(state):
         connection = _connection(state)
     result = run_scalar_query(connection, sql) if connection is not None else None
-    with _lock(state):
-        if isinstance(result, Ok) and isinstance(result.value, Some):
-            _new_buffer(state, result.value.value)
-        elif result is None or isinstance(result, Ok):
-            _notify(state, None, failure, "error")
-        else:
-            _notify(state, None, f"{failure}: {result.error.message}", "error")
+    if isinstance(result, Ok) and isinstance(result.value, Some):
+        _new_buffer(state, result.value.value)
+    elif result is None or isinstance(result, Ok):
+        _notify(state, None, failure, "error")
+    else:
+        _notify(state, None, f"{failure}: {result.error.message}", "error")
     _invalidate(state)
 
 
@@ -261,13 +263,14 @@ def _execute_worker(state: dict[str, object], plan: InteractionPlan_Execute) -> 
     with _lock(state):
         if isinstance(result, Ok):
             _notify(state, None, plan.success, "information")
-            if plan.refresh:
-                service = state.get("refresh_catalog")
-                if callable(service):
-                    cast(Callable[[], None], service)()
         else:
             _interaction_error(state, result.error.message)
     _invalidate(state)
+    if isinstance(result, Ok) and plan.refresh:
+        with _lock(state):
+            service = state.get("refresh_catalog")
+        if service is not None:
+            cast(Callable[[], None], service)()
 
 
 def _start_execute(state: dict[str, object], plan: InteractionPlan_Execute) -> None:
@@ -278,15 +281,19 @@ def _apply_plan(state: dict[str, object], local: dict[str, object], plan: Intera
     if isinstance(plan, InteractionPlan_InsertText):
         _insert(state, plan.text)
     elif isinstance(plan, InteractionPlan_InsertChildNames):
-        entries = _entries(state, "catalog")
-        parent = _find(entries, plan.parent)
-        if parent is None:
-            return
-        if not parent.loaded:
+        with _lock(state):
+            entries = _entries(state, "catalog")
+            parent = _find(entries, plan.parent)
+            if parent is None:
+                return
+            if parent.loaded:
+                names = ", ".join(child.query_name for child in catalog_children(CottList(values=entries), Some(value=parent.id)))
+            else:
+                names = None
+        if names is None:
             _start_load(state, "Databases", parent, True)
         else:
-            children = catalog_children(CottList(values=entries), Some(value=parent.id))
-            _insert(state, ", ".join(child.query_name for child in children))
+            _insert(state, names)
     elif isinstance(plan, InteractionPlan_NewBuffer):
         _new_buffer(state, plan.text)
     elif isinstance(plan, InteractionPlan_NewBufferFromQuery):
@@ -302,9 +309,10 @@ def _apply_plan(state: dict[str, object], local: dict[str, object], plan: Intera
 
 
 def _choose(state: dict[str, object], local: dict[str, object], entry: CatalogEntry, label: str) -> None:
-    context = cast(IdeContext, state["context"])
-    entries_key, _ = _tab_keys(cast(str, state["catalog_tab"]))
-    children = catalog_children(CottList(values=_entries(state, entries_key)), Some(value=entry.id))
+    with _lock(state):
+        context = cast(IdeContext, state["context"])
+        entries_key, _ = _tab_keys(cast(str, state["catalog_tab"]))
+        children = catalog_children(CottList(values=_entries(state, entries_key)), Some(value=entry.id))
     planned = plan_interaction(context.descriptor.kind, entry, label, children)
     if isinstance(planned, Some):
         _apply_plan(state, local, planned.value)
@@ -313,14 +321,14 @@ def _choose(state: dict[str, object], local: dict[str, object], entry: CatalogEn
 def _dialog_model(state: dict[str, object], kind: str) -> object | None:
     raw = state.get("dialog")
     if isinstance(raw, tuple):
-        parts = cast(tuple[object, ...], raw)
-        if len(parts) == 2 and parts[0] == kind:
-            return parts[1]
+        pair = cast(tuple[object, ...], raw)
+        if len(pair) == 2 and pair[0] == kind:
+            return pair[1]
     return None
 
 
 def _menu_key(state: dict[str, object], local: dict[str, object], key: str, text: str) -> None:
-    del text
+    chosen: tuple[CatalogEntry, str] | None = None
     with _lock(state):
         model = _dialog_model(state, "menu")
         if not isinstance(model, ContextMenu):
@@ -330,38 +338,42 @@ def _menu_key(state: dict[str, object], local: dict[str, object], key: str, text
             _open_dialog(state, "menu", step.menu)
         elif isinstance(step.outcome, ContextMenuOutcome_Choose):
             _close_dialog(state)
-            _choose(state, local, step.menu.entry, step.outcome.label)
+            chosen = (step.menu.entry, step.outcome.label)
         else:
             _close_dialog(state)
+    if chosen is not None:
+        _choose(state, local, chosen[0], chosen[1])
     _invalidate(state)
 
 
 def _confirm_key(state: dict[str, object], local: dict[str, object], key: str, text: str) -> None:
+    accepted: InteractionPlan_Execute | None = None
+    previous: object | None = None
     with _lock(state):
-        pending = local["pending"]
+        pending = local.get("pending")
         model = _dialog_model(state, "confirm")
-        if not isinstance(pending, tuple):
-            previous = local["previous_confirm"]
-            if callable(previous):
-                cast(Callable[[str, str], None], previous)(key, text)
-            return
-        pair = cast(tuple[object, ...], pending)
-        if len(pair) != 2 or not isinstance(pair[0], InteractionPlan_Execute) or not isinstance(pair[1], ConfirmModal) or model is not pair[1]:
-            local["pending"] = None
-            previous = local["previous_confirm"]
-            if callable(previous):
-                cast(Callable[[str, str], None], previous)(key, text)
-            return
-        plan = pair[0]
-        step = confirm_key(pair[1], key)
-        if isinstance(step.outcome, ConfirmOutcome_Stay):
-            local["pending"] = (plan, step.modal)
-            _open_dialog(state, "confirm", step.modal)
+        if isinstance(pending, tuple):
+            pair = cast(tuple[object, ...], pending)
+            if len(pair) == 2 and isinstance(pair[0], InteractionPlan_Execute) and isinstance(pair[1], ConfirmModal) and model is pair[1]:
+                plan = pair[0]
+                step = confirm_key(pair[1], key)
+                if isinstance(step.outcome, ConfirmOutcome_Stay):
+                    local["pending"] = (plan, step.modal)
+                    _open_dialog(state, "confirm", step.modal)
+                else:
+                    local["pending"] = None
+                    _close_dialog(state)
+                    if isinstance(step.outcome, ConfirmOutcome_Yes):
+                        accepted = plan
+            else:
+                local["pending"] = None
+                previous = local.get("previous_confirm")
         else:
-            local["pending"] = None
-            _close_dialog(state)
-            if isinstance(step.outcome, ConfirmOutcome_Yes):
-                _start_execute(state, plan)
+            previous = local.get("previous_confirm")
+    if previous is not None:
+        cast(Callable[[str, str], None], previous)(key, text)
+    if accepted is not None:
+        _start_execute(state, accepted)
     _invalidate(state)
 
 
@@ -433,21 +445,21 @@ def _bind_motion(state: dict[str, object], key: str, motion: TreeMotion) -> None
 def install_catalog_actions(session: IdeSession) -> Unit:
     handle = session.handle
     if handle.tag != "harlequin.ide":
-        return UNIT
+        return Unit()
     raw = handle.unwrap()
     if not isinstance(raw, dict):
-        return UNIT
+        return Unit()
     state = cast(dict[str, object], raw)
     handlers_raw = state.get("handlers")
     dialog_keys_raw = state.get("dialog_keys")
     if not isinstance(handlers_raw, dict) or not isinstance(dialog_keys_raw, dict):
-        return UNIT
+        return Unit()
     handlers = cast(dict[str, Callable[[], None]], handlers_raw)
     dialog_keys = cast(dict[str, Callable[[str, str], None]], dialog_keys_raw)
-    local: dict[str, object] = {"pending": None, "shown": {"Databases"}, "previous_confirm": dialog_keys.get("confirm")}
-    menu_callback: Callable[[str, str], None] = lambda key, text: _menu_key(state, local, key, text)
-    confirm_callback: Callable[[str, str], None] = lambda key, text: _confirm_key(state, local, key, text)
     with _lock(state):
+        local: dict[str, object] = {"pending": None, "shown": {"Databases"}, "previous_confirm": dialog_keys.get("confirm")}
+        menu_callback: Callable[[str, str], None] = lambda key, text: _menu_key(state, local, key, text)
+        confirm_callback: Callable[[str, str], None] = lambda key, text: _confirm_key(state, local, key, text)
         handlers["data_catalog.cursor_up"] = lambda: _move(state, TreeMotion_Up())
         handlers["data_catalog.cursor_down"] = lambda: _move(state, TreeMotion_Down())
         handlers["data_catalog.toggle_node"] = lambda: _toggle(state)
@@ -461,4 +473,4 @@ def install_catalog_actions(session: IdeSession) -> Unit:
         dialog_keys["confirm"] = confirm_callback
         for key, motion in (("pageup", TreeMotion_PageUp()), ("pagedown", TreeMotion_PageDown()), ("home", TreeMotion_First()), ("end", TreeMotion_Last()), ("left", TreeMotion_Parent())):
             _bind_motion(state, key, motion)
-    return UNIT
+    return Unit()

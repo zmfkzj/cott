@@ -1699,6 +1699,9 @@ nonempty, append build_shortcut_url(request.shortcut)'s successful value.
 Require at least one resulting URL, otherwise return InvalidInput.
 Discover descriptors through discover_extractors. For each URL in order
 call choose_extractor and extract_media; concatenate their actual items.
+That fixed registry has no disabled descriptors, so this pipeline never
+returns ExtractorMissing. choose_extractor retains that error for callers
+that supply their own disabled registries.
 Apply select_playlist, then resolve_live_media, then filter_video to these
 items using their respective request settings.
 

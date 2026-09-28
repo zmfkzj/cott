@@ -11,6 +11,7 @@ def parse_batch_urls(batch: str, comment_prefixes: CottList[str]) -> Result[Cott
     for prefix in comment_prefixes:
         if prefix == "":
             return cott_runtime.Err(error=MediaError_InvalidInput(message="comment prefix must be non-empty"))
+
     text: str = batch[1:] if batch.startswith("\ufeff") else batch
     normalized: str = text.replace("\r\n", "\n").replace("\r", "\n")
     urls: list[str] = []

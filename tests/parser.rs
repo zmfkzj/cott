@@ -1181,6 +1181,8 @@ scenario complete for app.run:
         clock clock:
             start_ms: 10
             tick_ms: 2
+        random order:
+            seed: 18446744073709551615
         failure denied:
             point: file.write
             occurrence: 1
@@ -1216,7 +1218,7 @@ scenario complete for app.run:
     };
     assert_eq!(scenario.name, "complete");
     assert_eq!(scenario.target.as_ref().unwrap().segments, ["app", "run"]);
-    assert_eq!(scenario.fixtures.len(), 4);
+    assert_eq!(scenario.fixtures.len(), 5);
     assert!(matches!(
         &scenario.fixtures[0].config,
         cott::ast::ScenarioFixtureConfig::Filesystem { files, .. }
@@ -1247,6 +1249,11 @@ scenario complete for app.run:
     ));
     assert!(matches!(
         &scenario.fixtures[3].config,
+        cott::ast::ScenarioFixtureConfig::Random { seed, .. }
+            if seed.value == "18446744073709551615"
+    ));
+    assert!(matches!(
+        &scenario.fixtures[4].config,
         cott::ast::ScenarioFixtureConfig::Failure {
             point,
             occurrence,
@@ -1318,6 +1325,16 @@ fn rejects_closed_struct_and_scenario_escape_hatches_with_stable_spans() {
             "module bad\nscenario unsafe:\n    fixtures:\n        fs files:\n            file \"payload\" hex(\"0fg\")\n    tick\n",
             "fixture hex data must contain an even number of hex digits",
             "hex",
+        ),
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        random order:\n            seed: -1\n    tick\n",
+            "expected fixture integer",
+            "-1",
+        ),
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        random order:\n            entropy: 1\n    tick\n",
+            "expected `seed` fixture field",
+            "entropy",
         ),
         (
             "module bad\nscenario broken:\n    call value app.open()\n    tick\n",

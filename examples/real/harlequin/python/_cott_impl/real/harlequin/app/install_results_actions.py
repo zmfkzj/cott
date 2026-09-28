@@ -58,7 +58,7 @@ def _page_rows(shared: dict[str, object]) -> int:
         window = typing.cast(Application[object], shared["app"]).layout.current_window
         rendered = window.render_info
         if rendered is not None:
-            return max(rendered.window_height, 1)
+            return rendered.window_height
     height = typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1]
     if layout.full_screen and isinstance(layout.focus, Pane_Results):
         return max(height - 3, 1)
@@ -130,15 +130,15 @@ def _view_cell(shared: dict[str, object]) -> None:
 
 
 def _text_key(shared: dict[str, object], key: str) -> None:
-    visible_lines = max(typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1] - 2, 1)
     with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
-        dialog = shared["dialog"]
-        if not isinstance(dialog, tuple):
+        raw = shared["dialog"]
+        if not isinstance(raw, tuple):
             return
-        pair = typing.cast(tuple[object, ...], dialog)
-        if len(pair) != 2 or pair[0] != "text" or not isinstance(pair[1], TextModal):
+        dialog = typing.cast(tuple[object, ...], raw)
+        if len(dialog) != 2 or dialog[0] != "text" or not isinstance(dialog[1], TextModal):
             return
-        step = text_modal_key(pair[1], key, visible_lines)
+        visible_lines = max(typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1] - 2, 1)
+        step = text_modal_key(dialog[1], key, visible_lines)
         outcome = step.outcome
         if isinstance(outcome, TextModalOutcome_Close):
             typing.cast(Callable[[], None], shared["close_dialog"])()
@@ -174,8 +174,7 @@ def _export_worker(shared: dict[str, object], result: ResultSet, request: Export
     with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
         if isinstance(written, Err):
             typing.cast(Callable[[str, object], None], shared["open_dialog"])(
-                "text",
-                error_modal("Export Data Error", "Harlequin encountered an error while exporting your data.", _error_text(written.error)),
+                "text", error_modal("Export Data Error", "Harlequin encountered an error while exporting your data.", _error_text(written.error))
             )
         else:
             typing.cast(Callable[[str | None, str, str], None], shared["notify"])(None, f"Data exported to {written.value.path}.", "information")
@@ -183,15 +182,15 @@ def _export_worker(shared: dict[str, object], result: ResultSet, request: Export
 
 
 def _export_key(shared: dict[str, object], key: str, text: str) -> None:
-    export_job: tuple[ResultSet, ExportRequest] | None = None
+    job: tuple[ResultSet, ExportRequest] | None = None
     with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
-        dialog = shared["dialog"]
-        if not isinstance(dialog, tuple):
+        raw = shared["dialog"]
+        if not isinstance(raw, tuple):
             return
-        pair = typing.cast(tuple[object, ...], dialog)
-        if len(pair) != 2 or pair[0] != "export" or not isinstance(pair[1], ExportDialog):
+        dialog = typing.cast(tuple[object, ...], raw)
+        if len(dialog) != 2 or dialog[0] != "export" or not isinstance(dialog[1], ExportDialog):
             return
-        step = export_dialog_key(pair[1], key, text)
+        step = export_dialog_key(dialog[1], key, text)
         outcome = step.outcome
         if isinstance(outcome, ExportOutcome_Cancel):
             typing.cast(Callable[[], None], shared["close_dialog"])()
@@ -199,13 +198,13 @@ def _export_key(shared: dict[str, object], key: str, text: str) -> None:
             results = typing.cast(list[ResultSet], shared["results"])
             index = typing.cast(int, shared["result_index"])
             if 0 <= index < len(results):
-                export_job = (results[index], outcome.request)
+                job = (results[index], outcome.request)
             typing.cast(Callable[[], None], shared["close_dialog"])()
         else:
             shared["dialog"] = ("export", step.dialog)
         typing.cast(Callable[[], None], shared["invalidate"])()
-    if export_job is not None:
-        result, request = export_job
+    if job is not None:
+        result, request = job
         threading.Thread(target=lambda: _export_worker(shared, result, request), daemon=True).start()
 
 
@@ -235,10 +234,10 @@ def install_results_actions(session: IdeSession) -> Unit:
             (GridMotion_PageDown(), "cursor_page_down", "select_page_down"),
             (GridMotion_TableStart(), "cursor_table_start", "select_table_start"),
             (GridMotion_TableEnd(), "cursor_table_end", "select_table_end"),
-            (GridMotion_SelectAll(), "select_all", ""),
         )
         for motion, cursor_name, select_name in motions:
             _register_motion(shared, handlers, motion, cursor_name, select_name)
+        handlers["results_viewer.select_all"] = lambda: _move(shared, GridMotion_SelectAll(), True)
         handlers["results_viewer.select_cursor"] = lambda: _select_cursor(shared)
         handlers["results_viewer.next_tab"] = lambda: _cycle(shared, 1)
         handlers["results_viewer.previous_tab"] = lambda: _cycle(shared, -1)

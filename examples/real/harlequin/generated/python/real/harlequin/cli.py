@@ -203,7 +203,7 @@ options noted "(secret)". Entries are two-space indented with help text
 aligned in a column and wrapped at 79 characters."""
     descriptors = _cott_normalize_f32_abi(descriptors, CottList[AdapterDescriptor], path="$.descriptors")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/cli/harlequin_help.py", "075c7b11540639bd100348b0c2ddaea7eecc452a20e0aed4d6b35c6cdadf5d0f", "harlequin_help", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.cli.harlequin_help")
+        _implementation = _cott_load("_cott_impl/real/harlequin/cli/harlequin_help.py", "577478403f4ba06f9935813ee2b663b2d3455ef6d5b342106f1ee23923b42015", "harlequin_help", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.cli.harlequin_help")
         _result = _implementation(descriptors)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

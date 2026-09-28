@@ -1,9 +1,12 @@
-from cott_runtime import CottList, CottSet
+from cott_runtime import CottList
 from real.yt_dlp_types import DownloadPlan, MediaItem
 
 
 def plan_downloads(items: CottList[MediaItem], archive: CottList[str], break_on_existing: bool) -> DownloadPlan:
-    known: CottSet[str] = CottSet(values=[entry for entry in archive])
+    if len(archive) == 0:
+        return DownloadPlan(items=items, stopped_on_archive=False)
+
+    known: set[str] = set(archive)
     selected: list[MediaItem] = []
     for item in items:
         if item.id in known:

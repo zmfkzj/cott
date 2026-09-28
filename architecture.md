@@ -516,18 +516,27 @@ fixtures_block = "fixtures", ":", NEWLINE, INDENT, { fixture }, DEDENT ;
 fixture       = "fs", identifier, ":", NEWLINE, INDENT, { "file", string_literal, scenario_data, NEWLINE }, DEDENT
               | "http", identifier, ":", NEWLINE, INDENT, { "route", string_literal, "->", http_outcome, NEWLINE }, DEDENT
               | "clock", identifier, ":", NEWLINE, INDENT, "start_ms", ":", integer, NEWLINE, "tick_ms", ":", integer, NEWLINE, DEDENT
+              | "random", identifier, ":", NEWLINE, INDENT, "seed", ":", integer, NEWLINE, DEDENT
+              | "database", identifier, ":", NEWLINE, INDENT, "backend", ":", ("sqlite" | "duckdb" | "postgres"), NEWLINE, DEDENT
+              | "socket", identifier, ":", NEWLINE, INDENT, "path", ":", string_literal, NEWLINE,
+                "greeting", ":", scenario_data, NEWLINE, "response", ":", scenario_data, NEWLINE,
+                "interrupt_after_request", ":", ("true" | "false"), NEWLINE, DEDENT
               | "failure", identifier, ":", NEWLINE, INDENT, "point", ":", failure_point, NEWLINE,
                 "occurrence", ":", integer, NEWLINE, "error", ":", failure_error, NEWLINE, DEDENT ;
 scenario_data = ("text" | "bytes" | "hex"), "(", string_literal, ")" ;
 http_outcome  = "response(status:", integer, ", body:", scenario_data, ", encoding:", string_literal, [ ", content_type:", string_literal ], ")"
               | "redirect(status:", integer, ", location:", string_literal, ")" | "delay(ms:", integer, ")" | "disconnect()" ;
 failure_point = "file.open" | "file.read" | "file.write" | "file.flush" | "file.replace"
-              | "http.connect" | "http.read" | "clock.read" ;
-failure_error = "permission_denied" | "not_found" | "disk_full" | "timeout" | "connection_reset" ;
+              | "http.connect" | "http.read" | "clock.read"
+              | "database.connect" | "database.read" | "database.write" | "database.commit"
+              | "database.rollback" | "database.close" | "database.cancel" ;
+failure_error = "permission_denied" | "not_found" | "disk_full" | "timeout" | "connection_reset" | "interrupted" ;
 scenario_arguments = expression, { ",", expression } ;
 scenario_step = "call", binding_name, "=", qname, "(", [ scenario_arguments ], ")", NEWLINE
               | "spawn", binding_name, "=", qname, "(", [ scenario_arguments ], ")", NEWLINE
               | "await", binding_name, ("as", binding_name | "cancelled"), NEWLINE
+              | "unwrap", binding_name, "=", expression, NEWLINE
+              | "item", binding_name, "=", expression, "at", integer, NEWLINE
               | "cancel", binding_name, NEWLINE | "tick", NEWLINE | "assert", expression, NEWLINE ;
 doc_block     = "doc", triple_string, NEWLINE ;
 
@@ -1099,7 +1108,48 @@ limit은 containment이지 ordering evidence가 아니다.
 
 다른 모듈의 free function을 `call` 또는 `spawn`할 때 parameter·return type 이름은 함수 선언을 소유한 모듈에서 resolve한다. 호출 인자와 scenario-local binding은 scenario 모듈에서 resolve하며, 같은 이름의 caller type이 callee signature를 바꾸지 않는다.
 
-`fixtures:` 안의 closed kind는 `fs`, `http`, `clock`, `failure`뿐이다. filesystem은 normalized relative POSIX path와 inline `text`/`bytes` file만, HTTP는 normalized `/path`와 `response(status, body, encoding)`·relative `redirect(status, location)`·`delay(ms)`·`disconnect()`만, clock은 unsigned `start_ms`/`tick_ms`만 가진다. failure는 `file.open|read|write|flush|replace`, `http.connect|read`, `clock.read`의 정확히 한 occurrence와 `permission_denied|not_found|disk_full|timeout|connection_reset`만 가진다. source/manifest/IR에는 host path, socket address, remote URL, script, plugin 또는 monkeypatch name이 없다. HIR은 target/argument/result/fixture reference를 resolve하고 required effect union과 fixture authority의 exact match를 강제한다. custom/database/random/process effect는 fixture backend가 없으므로 observed scenario가 될 수 없다.
+`fixtures:`의 closed kind는 `fs`, `http`, `clock`, `random`, `database`, `socket`, `failure`다.
+각 kind는 자기 field만 허용한다. filesystem은 normalized relative POSIX path와 inline
+text/bytes file, HTTP는 normalized `/path`(root `/` 포함)와 닫힌 response/redirect/delay/disconnect,
+clock은 unsigned start_ms/tick_ms만 가진다. random은 unsigned u64 seed 하나이며 scenario당
+최대 하나다. database는 sqlite/duckdb/postgres 중 backend 하나이며, socket은 상대 path와
+유한 greeting/response bytes 및 interrupt_after_request boolean만 가진다. database와 socket도
+각각 최대 하나다. file effect는 fs, random은 random, database.read/write는 database가 필요하다.
+network는 http/database/socket 중 실제 backend가 담당한다. custom/process effect의 임의 권한은
+여전히 부여하지 않는다. host path·임의 endpoint·실행 script·plugin·monkeypatch는 DSL 입력이 아니다.
+
+`unwrap value = result_value`는 Result.Ok의 실제 payload를 typed local binding으로 유지한다.
+Err는 scenario 실패다. `item value = values at N`은 List의 unsigned u64 index를 검사하고 실제
+element를 보존하며 범위 밖은 실패다. 생성·복사한 Opaque handle로 대체하지 않는다. 기존
+assert pattern binding의 범위는 넓히지 않는다. `result`라는 scenario-local 이름은 함수의
+postcondition result가 아니라 그 local binding이다.
+
+Python database fixture는 실제 SDK 호출을 위한 private storage를 소유하며 fake driver를 주지 않는다.
+SQLite/DuckDB는 confined `.path("file")` 또는 authored `:memory:`를 사용한다. PostgreSQL의
+`.url("/")`는 compiler-owned cluster의 private Unix socket URI다. `COTT_POSTGRES_BIN` 또는
+PATH로 찾은 PostgreSQL 16의 native 실행 파일·share·필요한 loader·bootstrap dictionary·plpgsql closure를 sandbox에서
+검사하고 content hash를 고정하며 실행 뒤 재검사한다. 버전과 host-path-free digest는
+`tools.postgresql_fixture`에 남긴다. 임의 extension/JIT는 fixture capability가 아니다.
+실제 server는 listen_addresses 없이 non-root disabled-network sandbox에서 실행하고, 명시한
+filesystem/time ceiling을 적용하며 종료·정리 실패를 certification으로 바꾸지 않는다.
+Python contract runner는 `OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`로 native numeric pool이
+host CPU 수만큼 thread/stack을 예약하지 않게 한다. 기존 task·address-space ceiling은 늘리지 않는다.
+DB/socket scenario는 각각 독립된 기존 제한 sandbox process에서 실행해 native SDK cache와
+allocator가 다른 scenario로 누적되지 않게 한다. 나머지는 private/HTTP loopback group으로 나누고,
+실제 predicate observation만 원래 scenario 순서로 합친다. 같은 scenario에 postgres와 http를
+섞는 것은 거부한다. Result/Opaque 값은 한 scenario 안에서만 그대로 유지한다.
+
+Socket fixture는 private AF_UNIX socket에서 u8 kind + big-endian u32 length frame을 최대
+1 MiB로 받는다. finite greeting/request/response 교환만 하며 interrupt mode는 SO_PEERCRED로
+현재 runner 자신인 peer를 확인한 뒤, synchronous facade call이 armed인 동안 자기 process에만
+SIGINT를 한 번 보낸다. 그 뒤 두 번째 취소 연결을 끝까지 drain한다. 외부 PID는 입력받지 않는다.
+Python runner는 기존 isolated subprocess 안에서 default KeyboardInterrupt handler를 유지한다.
+socket interrupt 또는 database interrupted failure가 있는 scenario는 async call/worker/tick을 거부한다.
+
+Failure는 기존 file/http/clock 지점과 database.connect/read/write/commit/rollback/close/cancel의
+정확히 한 occurrence를 지정한다. 기존 OSError label과 달리 `interrupted`는 database boundary에만
+허용하며 실제 SIGINT를 전달한다. Kotlin/Dart는 database/socket/random capability가 없음을
+명시적으로 보고하며 Python 관측값을 재사용하지 않는다.
 
 HTTP response의 선택적 `content_type`은 response에만 허용하며, 비어 있지 않은 printable ASCII이고 첫 글자는 공백이 아니어야 한다. 생략하면 `text/plain; charset=<encoding>`을 사용한다. Python fixture listener의 `HEAD`는 `GET`과 같은 status·Content-Type·Content-Length를 보내되 body는 보내지 않는다. Content-Length는 encoding 적용 후 실제 byte 길이다.
 
@@ -1571,6 +1621,9 @@ generated/
 `tests/generated/<module path>/<callable>.json`은 compiler가 실행하는 deterministic managed contract-test strategy v6다. callable은 free function의 `<function>` 또는 impl method의 `<Concrete>/<method>`다. 닫힌 object는 `schema_version`, `symbol`, `seed`, seven existing limits, `callable_kind`, `return_kind`, `classification`, ordered `clause_ids`, ordered `obligations:[{clause_id, role:"success"|"conditional_error"}]`, 그리고 `scenario:null|{id,required_effects,fixtures,steps,lifecycle_limit,limits}`를 가진다. scenario의 `steps`는 64개 이하이고 limits는 effective `verification.fixtures` ceiling이다. generated Python source는 strategy를 해석하지 않는다.
 
 `cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant와 fixture adapter activation을 유지하며 새 loader는 closed v8 generation reference envelope를 검증한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
+Python 실행 파일의 content hash는 매 provenance 검사에서 bounded-buffer streaming으로
+재계산한다. 전체 binary를 메모리에 복사하거나 변경 가능 파일의 hash를 캐시하지 않으며,
+symlink·nonregular·shared-inode 거부와 hash equality 검사는 그대로 유지한다.
 
 Python의 compiler-private fixture 파일 adapter `_cott_fixture_read`, `_cott_fixture_write`,
 `_cott_fixture_replace`, `_cott_fixture_remove`는 활성 fixture root 안의 상대 `pathlib.Path` 또는 `str`을 받는다.
@@ -1609,6 +1662,15 @@ scenario 대상 계약이 Cott scenario 밖에서는 host file system을 사용�
 기존 `file.write` failure point를 삭제 전에 방문하므로 주입 실패는 기존 file을 보존한다.
 성공한 삭제는 상대 path만 가진 `filesystem.remove` fixture event로 기록한다. 이 private adapter
 추가는 source fixture kind·failure label·공개 target ABI를 바꾸지 않는다.
+
+`_cott_fixture_shuffle(list)`는 scenario-private `random.Random(seed)`만 사용해 in-place shuffle하고
+값 없이 길이만 관측한다. `_cott_fixture_database(operation)`은 active database 권한과 닫힌
+operation을 확인하고 실패 지점 및 boundary event를 기록한 뒤 실제 SDK 호출을 계속하게 한다.
+주입한 오류는 callable의 정상 오류 처리로 전달하며, boundary event 자체가 SDK 성공이나 clause
+만족 증거는 아니다. setup/cleanup은 facade observation을 만들지 않는다. 두 adapter는 inactive
+상태에서 인자를 검사하기 전에 기존 inactive violation을 내며, 구현은 그 정확한 경우에만
+host 동작으로 진행한다. fixture helper Python 모듈은 compiler scratch의 read-only support이며
+generated runtime/deployment에 포함하지 않는다.
 
 Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 7를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
@@ -2031,7 +2093,7 @@ network mode는 `Disabled` 또는 `IsolatedLoopback`이다. 후자는 host netwo
 
 ### 16.9 Semantic coverage 정책
 
-`verified`는 artifact/type/runtime/proof/runner verification이 성공하여 snapshot을 certify했음을 뜻하고, semantic coverage CI policy와 별개다. Canonical IR clause inventory `(symbol, kind:clause_id, span)`와 기록된 evidence를 join하여 `observed`, `unobserved`, `trust_declaration`, `unknown`을 분류한다. 현재 `src/cli.rs::coverage_status`는 `test observation`/`runtime check` grade뿐 아니라 `status = "proved"`도 `observed`로 분류한다. 따라서 계약의 satisfiability/reachability proof만 있는 조항도 observed일 수 있으며, 이 값은 실제 구현 실행 관찰이나 모든 branch 실행을 보장하지 않는다. 정책은 이 분류 결과를 gate하므로 실행 보장을 판단하려면 개별 raw evidence와 scenario를 확인해야 한다. 이 구현상 한계는 proof와 실행 관찰을 분리해야 한다는 보증 목표를 충족한 것으로 해석하지 않는다.
+`verified`는 artifact/type/runtime/proof/runner verification이 성공하여 snapshot을 certify했음을 뜻하며 semantic coverage CI policy와 별개다. Canonical IR clause inventory `(symbol, kind:clause_id, span)`와 실제 runner evidence만 join하여 `observed`, `unobserved`, `trust_declaration`, `unknown`을 분류한다. `observed`는 해당 조항의 `test observation` 또는 `runtime check`가 있어야 한다. 정적 satisfiability/reachability 결과는 별도 `verification.contract_proofs`에 남으며, `proved`·`unknown`·`disproved` 중 어느 것도 실행 coverage를 승격·강등하거나 runner에 없는 조항을 추가하지 않는다. 따라서 proof만 있는 조항은 실행 관측으로 정책을 통과할 수 없다. 관측된 경우에도 그 실행의 입력·guard·invocation 범위만 보장하며 모든 branch나 임의 입력의 정확성은 증명하지 않는다.
 
 `[[verification.coverage.rules]]`는 exact canonical callable `symbol`, nonempty sorted-unique `clauses=["ensures:2","error:5"]`, 그리고 `allow_unobserved`, `allow_trust_declaration`, `allow_unknown` boolean만 가진 deny-unknown policy다. duplicate `(symbol, clause)` selection, invalid selector/qname와 empty clause list는 manifest error다. rule이 없으면 selected clause도 gate도 없다. selected clause는 manifest allowance가 없을 때 해당 status로 deterministic violation이 되고 unselected clause는 gate하지 않는다.
 
@@ -2592,6 +2654,9 @@ Source retry와 parallel wave에도 동일한 선택을 사용하고 실제 sele
 * `[generator].timeout_seconds`는 1–3600이며 default는 900이다. 모든 agent child는 compiler-owned process containment에 넣는다. parent가 정상 종료해도 남은 descendant를 전부 종료·reap하고 containment가 비었음을 확인한 뒤에만 candidate path를 staging workspace handle 기준 `O_NOFOLLOW`로 열어 regular file·`st_nlink == 1`인지 `fstat`으로 확인하고 읽는다. 그 밖의 file kind, 사용자 취소·timeout·비정상 종료나 descendant 정리 실패는 transaction을 폐기한다.
 * containment에는 compiler version이 고정한 process·CPU·memory·open-file·writable-byte ceiling을 적용하고 candidate implementation file은 최대 1 MiB로 제한한다. 어떤 ceiling이라도 넘으면 agent 실패다.
 * stdout·stderr는 끝까지 drain하며 전체 byte count·SHA-256와 truncation 여부를 계산하고 사용자에게 stream별 최대 1 MiB만 보여 준다. generation record에는 raw output을 넣지 않고 이 metadata, exit code, 실행 시간, adapter·executable path·version·content hash·prompt hash만 남긴다.
+* Python의 합성 prompt 전체는 최대 8 MiB다. 개별 generator rule, 기존 구현, 참조 구현,
+  feedback 입력과 생성 candidate의 기존 1 MiB 제한은 그대로다. 큰 composition root를
+  수용하기 위해 계약·참조를 잘라내거나 sandbox·coverage 제한을 완화하지 않는다.
 
 모든 sandbox 실행은 systemd `>=254`의 reachable user manager와 cgroup v2 `pids` controller를
 요구한다. 각 실행에 고유한 transient `.scope`를 만들고 `TasksMax = process_count + 4`를
@@ -3491,7 +3556,7 @@ v1.0은 다음을 모두 자동 검증할 때 완료다.
 9. fixture transcript/atomic replace/encoding/redirect/failure occurrence/cleanup evidence는 bounded deterministic logical data만 기록한다.
 10. `COTT-K101`은 exact doc/directive span과 formal-evidence suppression만 사용하고 ordinary prompt prose, semantic proof와 command exit을 바꾸지 않는다.
 11. authored/deployed Python tree는 facade allow/deny matrix, exact generated implementation role/hash, no-follow/single-link rule과 all-violation diagnostic ordering을 통과한다.
-12. semantic coverage는 IR inventory와 기록된 runner/proof evidence를 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다. 현재 `proved`도 observed로 분류하는 §16.9의 한계 때문에 이 상태가 실제 구현 실행 관찰을 보장하지 않는다.
+12. semantic coverage는 IR inventory와 실제 runner evidence만 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다. 정적 proof는 별도 report에 보존하며 실행 관측으로 승격하지 않는다. 관측은 기록된 invocation 범위의 증거이며 모든 branch 실행이나 전체 정확성 증명은 아니다.
 13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure(Python exit `3`, Kotlin/Dart exit `8`)에도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
 14. `cott diff`는 project API version만 비교하고 compiler/package/wire version은 compatibility reader/writer boundary에서만 비교한다. example project public version은 `0.1.0`으로 유지한다.
 15. agent/binding/implementation provenance, strict type checking, exact verified loader, transaction recovery, diagnostics v1, formatter idempotence와 init atomicity의 기존 guarantees를 보존한다.

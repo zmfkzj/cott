@@ -1,8 +1,7 @@
 import shlex
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Callable, Final, cast
 
 import questionary
 from cott_runtime import CottList, Err, I64, Nothing, Option, Some
@@ -19,7 +18,7 @@ _SPLIT_INSTRUCTION: Final[str] = "Separate items by a space. Quote a single item
 
 
 def _answer(question: Any) -> object:
-    value = cast(object, question.ask())
+    value: object = cast(object, question.ask())
     if value is None:
         raise KeyboardInterrupt
     return value
@@ -37,26 +36,28 @@ def _strings(value: object) -> list[str]:
     return [_string(item) for item in cast(list[object], value)]
 
 
-def _validate(text: str, rule: str) -> bool | str:
+def _validate(value: object, rule: str) -> bool | str:
+    if not isinstance(value, str):
+        return "Expected text."
     if rule == "path":
-        return True if text.endswith(".toml") else "Must create a file with a .toml extension."
+        return True if value.endswith(".toml") else "Must create a file with a .toml extension."
     if rule == "name":
-        return True if text.strip() and text.strip() != "None" else "Cannot be empty or None"
+        return True if value.strip() and value.strip() != "None" else "Cannot be empty or None"
     if rule == "required":
-        return True if text.strip() else "Cannot be empty"
+        return True if value.strip() else "Cannot be empty"
     if rule == "integer":
         try:
-            int(text)
+            int(value)
         except ValueError:
             return "Must be an integer."
-    if rule == "float" and text.strip():
+    if rule == "float" and value.strip():
         try:
-            float(text)
+            float(value)
         except ValueError:
             return "Must be a number."
     if rule == "split":
         try:
-            shlex.split(text)
+            shlex.split(value)
         except ValueError as error:
             return str(error)
     return True
@@ -64,11 +65,11 @@ def _validate(text: str, rule: str) -> bool | str:
 
 def _text(message: str, default: str, instruction: str, rule: str, secret: bool) -> str:
     sdk: Any = questionary
-    check: Callable[[str], bool | str] = lambda text: _validate(text, rule)
+    validator: Callable[[object], bool | str] = lambda value: _validate(value, rule)
     if secret:
-        question: Any = sdk.password(message, default=default, instruction=instruction or None, validate=check)
+        question: Any = sdk.password(message, default=default, instruction=instruction or None, validate=validator)
     else:
-        question = sdk.text(message, default=default, instruction=instruction or None, validate=check)
+        question = sdk.text(message, default=default, instruction=instruction or None, validate=validator)
     return _string(_answer(question))
 
 
@@ -90,6 +91,13 @@ def _checkbox(message: str, choices: list[tuple[str, str]], checked: list[str]) 
     sdk: Any = questionary
     items: list[object] = [cast(object, sdk.Choice(title=label, value=value, checked=value in checked)) for label, value in choices]
     return _strings(_answer(sdk.checkbox(message, choices=items)))
+
+
+def _path(default_path: Path) -> Path:
+    sdk: Any = questionary
+    validator: Callable[[object], bool | str] = lambda value: _validate(value, "path")
+    question: Any = sdk.path("What config file do you want to create or update?", default=str(default_path), validate=validator)
+    return Path(_string(_answer(question))).expanduser().absolute()
 
 
 def _default(values: dict[str, ConfigValue], key: str, fallback: str) -> str:
@@ -123,10 +131,10 @@ def _option(option: AdapterOption, values: dict[str, ConfigValue]) -> AdapterSet
     kind = option.kind
     setting: SettingValue
     if isinstance(kind, OptionKind_Flag):
-        setting = SettingValue_Flag(value=_confirm(option.label, _boolean(values, key, default.lower() == "true")))
+        setting = SettingValue_Flag(value=_confirm(option.label, _boolean(values, key, default.casefold() == "true")))
     elif isinstance(kind, OptionKind_Choice):
         choices = [item for item in kind.choices]
-        normalized = next((item for item in choices if item.lower() == default.lower()), default)
+        normalized = next((item for item in choices if item.casefold() == default.casefold()), default)
         setting = SettingValue_Text(value=_select(option.label, choices, normalized))
     else:
         repeated = isinstance(kind, OptionKind_Repeated)
@@ -144,14 +152,12 @@ def run_config_wizard(explicit_path: Option[Path], default_path: Path, descripto
             path = explicit_path.value
             print(f"Updating the file at {path}:")
         else:
-            sdk: Any = questionary
-            check: Callable[[str], bool | str] = lambda text: _validate(text, "path")
-            answer = _string(_answer(sdk.path("What config file do you want to create or update?", default=str(default_path), validate=check)))
-            path = Path(answer).expanduser().absolute()
+            path = _path(default_path)
         if not str(path).endswith(".toml"):
             print("Harlequin could not create your configuration.", file=sys.stderr)
             print("Must create a file with a .toml extension.", file=sys.stderr)
             return 0
+
         loaded = read_config_file(path)
         if isinstance(loaded, Err):
             print(loaded.error.title, file=sys.stderr)
@@ -163,18 +169,17 @@ def run_config_wizard(explicit_path: Option[Path], default_path: Path, descripto
             profiles = [profile for profile in loaded.value.value.profiles]
             default_profile = loaded.value.value.default_profile
         names = [profile.name for profile in profiles]
-        selected = _NEW
-        if profiles:
-            selected = _select("Which profile would you like to update?", [_NEW, *names], _NEW)
+        selected = _select("Which profile would you like to update?", [_NEW, *names], _NEW) if profiles else _NEW
         values: dict[str, ConfigValue] = {}
         if selected == _NEW:
             name = _text("What would you like to name your profile?", "", "", "name", False).strip()
         else:
             name = selected
-            for profile in profiles:
-                if profile.name == name:
-                    values = {entry.key: entry.value for entry in profile.entries}
+            for existing in profiles:
+                if existing.name == name:
+                    values = {entry.key: entry.value for entry in existing.entries}
                     break
+
         by_name = {descriptor.name: descriptor for descriptor in descriptors}
         adapter = _select("Which adapter should this profile use?", sorted(by_name), _default(values, "adapter", "duckdb"))
         descriptor = by_name[adapter]
@@ -197,6 +202,7 @@ def run_config_wizard(explicit_path: Option[Path], default_path: Path, descripto
             forwards = _text("Which SSH forwards would you like to use?", _default(values, "ssh_forward", ""), _SPLIT_INSTRUCTION, "split", False)
             batch = _confirm("Use SSH BatchMode?", _boolean(values, "ssh_batch_mode", False))
             timeout = _text("How many seconds should Harlequin wait for the forwards?", _default(values, "ssh_timeout", ""), "", "float", False)
+
         options = adapter_options(descriptor.kind)
         chosen = _checkbox("Which of the following adapter options would you like to set?", [(option.label, option.name) for option in options], [option.name for option in options if option.name.replace("-", "_") in values])
         settings = [_option(option, values) for option in options if option.name in chosen]

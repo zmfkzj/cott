@@ -15,18 +15,22 @@ from real.pgcli.session_types import CommandOutcome, EvaluateError_ConnectionLos
 
 
 def _empty_outcome(session: Session, text: str) -> CommandOutcome:
-    query = QueryOutcome(
-        query=text,
-        successful=False,
-        total_time=0.0,
-        execution_time=0.0,
-        meta_changed=False,
-        db_changed=False,
-        path_changed=False,
-        mutated=False,
-        is_special=False,
+    return CommandOutcome(
+        session=session,
+        query=QueryOutcome(
+            query=text,
+            successful=False,
+            total_time=0.0,
+            execution_time=0.0,
+            meta_changed=False,
+            db_changed=False,
+            path_changed=False,
+            mutated=False,
+            is_special=False,
+        ),
+        refresh=RefreshKind_Nothing(),
+        quit=False,
     )
-    return CommandOutcome(session=session, query=query, refresh=RefreshKind_Nothing(), quit=False)
 
 
 def _reconnect(session: Session) -> tuple[Session, str | None]:
@@ -41,7 +45,7 @@ def _reconnect(session: Session) -> tuple[Session, str | None]:
 
 def _cancelled(session: Session, text: str) -> CommandOutcome:
     if session.settings.destructive_warning_restarts_connection:
-        session, _ = _reconnect(session)
+        session, _error = _reconnect(session)
         click.secho("cancelled query and restarted connection", err=True, fg="red")
     else:
         click.secho("cancelled query", err=True, fg="red")
@@ -126,7 +130,7 @@ def _route_ignoring_interrupt(evaluation: Evaluation, text: str, screen: Termina
 def _execute(session: Session, text: str, screen: TerminalSize, retry: bool) -> CommandOutcome:
     settings = session.settings
     try:
-        if len(settings.destructive_warning) > 0:
+        if settings.destructive_warning:
             if settings.destructive_statements_require_transaction:
                 status = executor_transaction_status(session.executor)
                 if not isinstance(status, (TransactionStatus_Active, TransactionStatus_InTransaction)) and is_destructive(text, settings.destructive_warning):
@@ -171,8 +175,9 @@ def _execute(session: Session, text: str, screen: TerminalSize, retry: bool) -> 
                 click.secho("Running query...", fg="green")
                 return _execute(reconnected, text, screen, True)
             return _empty_outcome(reconnected, text)
-        click.secho(error.message, err=True, fg="red")
-        return _empty_outcome(session, text)
+        else:
+            click.secho(error.message, err=True, fg="red")
+            return _empty_outcome(session, text)
 
     evaluation = result.value
     if evaluation.quit:

@@ -736,11 +736,30 @@ pub enum HirScenarioFixtureKind {
         start_ms: u64,
         tick_ms: u64,
     },
+    Random {
+        seed: u64,
+    },
     Failure {
         point: HirScenarioFailurePoint,
         occurrence: u64,
         error: HirScenarioFailureError,
     },
+    Database {
+        backend: HirScenarioDatabaseBackend,
+    },
+    Socket {
+        path: String,
+        greeting: HirScenarioData,
+        response: HirScenarioData,
+        interrupt_after_request: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirScenarioDatabaseBackend {
+    Sqlite,
+    Duckdb,
+    Postgres,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -793,6 +812,13 @@ pub enum HirScenarioFailurePoint {
     HttpConnect,
     HttpRead,
     ClockRead,
+    DatabaseConnect,
+    DatabaseRead,
+    DatabaseWrite,
+    DatabaseCommit,
+    DatabaseRollback,
+    DatabaseClose,
+    DatabaseCancel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -802,6 +828,7 @@ pub enum HirScenarioFailureError {
     DiskFull,
     Timeout,
     ConnectionReset,
+    Interrupted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -887,6 +914,25 @@ pub enum HirScenarioStep {
         span: Span,
         binding: SymbolId,
         expression: HirExpr,
+    },
+    /// Requires the observed `Result` value to be exactly `Ok` and binds its
+    /// live payload; `Err` fails the scenario.
+    UnwrapResult {
+        step_id: u32,
+        span: Span,
+        binding: SymbolId,
+        value: HirExpr,
+        return_type: HirType,
+    },
+    /// Binds the live element at `index` of the observed `List` value; an
+    /// out-of-range index fails the scenario.
+    ListItem {
+        step_id: u32,
+        span: Span,
+        binding: SymbolId,
+        value: HirExpr,
+        index: u64,
+        return_type: HirType,
     },
 }
 
@@ -3996,7 +4042,8 @@ impl<'a> OwnedLower<'a> {
                             },
                             kind: if path.segments[0] == "self" {
                                 HirExprKind::SelfRef
-                            } else if path.segments[0] == "result" {
+                            } else if path.segments[0] == "result" && self.scenario_scope.is_none()
+                            {
                                 HirExprKind::ResultRef
                             } else if binding {
                                 HirExprKind::BindingRef(symbol)
@@ -4047,7 +4094,7 @@ impl<'a> OwnedLower<'a> {
                 if let Some((symbol, ty, binding)) = env.get(&name) {
                     if name == "self" {
                         (HirExprKind::SelfRef, ty.clone(), None)
-                    } else if name == "result" {
+                    } else if name == "result" && self.scenario_scope.is_none() {
                         (HirExprKind::ResultRef, ty.clone(), None)
                     } else if *binding {
                         (
@@ -4377,30 +4424,25 @@ impl<'a> OwnedLower<'a> {
             }
             ExprKind::FixturePath { fixture, path } | ExprKind::FixtureUrl { fixture, path } => {
                 let path_fixture = matches!(&value.kind, ExprKind::FixturePath { .. });
-                let (template, incompatible) = match self.scenario_scope.as_mut() {
+                let (template, problem) = match self.scenario_scope.as_mut() {
                     Some(scope) => {
                         scope.used_fixtures.insert(fixture.clone());
                         match &scope.fixtures {
-                            None => (true, false),
+                            None => (true, None),
                             Some(fixtures) => (
                                 false,
-                                fixtures.get(fixture).map(|(_, kind)| *kind)
-                                    != Some(if path_fixture { "fs" } else { "http" }),
+                                scenario_fixture_reference_problem(
+                                    fixtures.get(fixture).map(|(_, kind)| *kind),
+                                    path_fixture,
+                                    path,
+                                ),
                             ),
                         }
                     }
-                    None => (false, false),
+                    None => (false, None),
                 };
-                if incompatible {
-                    self.error(
-                        module,
-                        value.span.clone(),
-                        if path_fixture {
-                            "fixture .path() requires a filesystem fixture"
-                        } else {
-                            "fixture .url() requires an HTTP fixture"
-                        },
-                    );
+                if let Some(problem) = problem {
+                    self.error(module, value.span.clone(), problem);
                 }
                 // Module test data templates keep the bare fixture name; each
                 // scenario use rebinds it to that scenario's fixture identity.
@@ -4889,15 +4931,20 @@ impl<'a> OwnedLower<'a> {
         let mut used = BTreeSet::new();
         let mut problems = Vec::new();
         walk_expr_mut(&mut value, &mut |expression| {
-            let (fixture, required) = match &mut expression.kind {
-                HirExprKind::FixturePath { fixture, .. } => (fixture, "fs"),
-                HirExprKind::FixtureUrl { fixture, .. } => (fixture, "http"),
+            let (fixture, path_accessor, path) = match &mut expression.kind {
+                HirExprKind::FixturePath { fixture, path } => (fixture, true, path.as_str()),
+                HirExprKind::FixtureUrl { fixture, path } => (fixture, false, path.as_str()),
                 _ => return,
             };
             let fixture_name = fixture.name.clone();
             used.insert(fixture_name.clone());
             match fixtures.get(&fixture_name) {
-                Some((symbol, kind)) if *kind == required => *fixture = symbol.clone(),
+                Some((symbol, kind))
+                    if scenario_fixture_reference_problem(Some(*kind), path_accessor, path)
+                        .is_none() =>
+                {
+                    *fixture = symbol.clone()
+                }
                 Some(_) => problems.push(format!(
                     "scenario data `{name}` uses fixture `{fixture_name}` with an incompatible kind"
                 )),
@@ -5014,6 +5061,42 @@ impl<'a> OwnedLower<'a> {
             self.error(module, value.span.clone(), message);
         }
         lowered
+    }
+
+    /// Declares one unique typed scenario-local value binding. A source that
+    /// failed to type still binds an invalid value so later steps do not cascade.
+    fn scenario_local_binding(
+        &mut self,
+        module: usize,
+        scenario: &SymbolId,
+        binding: &ast::ScenarioBinding,
+        ty: Option<HirType>,
+        env: &mut ScenarioEnv,
+        workers: &HashMap<String, (SymbolId, HirType, bool)>,
+    ) -> SymbolId {
+        let local = SymbolId::new(
+            scenario.module.clone(),
+            format!("{}.{}", scenario.name, binding.name),
+        );
+        if env.contains_key(&binding.name)
+            || workers.contains_key(&binding.name)
+            || self.test_data_decl(module, &binding.name).is_some()
+        {
+            self.error(
+                module,
+                binding.span.clone(),
+                "duplicate scenario value or worker binding",
+            );
+        }
+        env.insert(
+            binding.name.clone(),
+            (
+                local.clone(),
+                ty.unwrap_or_else(|| owned_invalid_expr_type("invalid-scenario-value")),
+                true,
+            ),
+        );
+        local
     }
 
     fn construct_value(
@@ -9371,6 +9454,9 @@ impl<'a> OwnedLower<'a> {
                 let mut fixture_env = HashMap::new();
                 let mut fixture_names = BTreeSet::new();
                 let mut fixture_kinds = BTreeMap::new();
+                let mut random_fixture_seen = false;
+                let mut database_fixture_seen = false;
+                let mut socket_fixture_seen = false;
                 for fixture in &value.fixtures {
                     if !fixture_names.insert(fixture.name.clone()) {
                         self.error(
@@ -9379,12 +9465,7 @@ impl<'a> OwnedLower<'a> {
                             "duplicate scenario fixture name",
                         );
                     }
-                    let kind = match &fixture.config {
-                        ast::ScenarioFixtureConfig::Filesystem { .. } => "fs",
-                        ast::ScenarioFixtureConfig::Http { .. } => "http",
-                        ast::ScenarioFixtureConfig::Clock { .. } => "clock",
-                        ast::ScenarioFixtureConfig::Failure { .. } => "failure",
-                    };
+                    let kind = scenario_fixture_kind(&fixture.config);
                     fixture_kinds.insert(fixture.name.clone(), kind);
                     match &fixture.config {
                         ast::ScenarioFixtureConfig::Filesystem { files, .. } => {
@@ -9411,8 +9492,79 @@ impl<'a> OwnedLower<'a> {
                                 }
                             }
                         }
+                        ast::ScenarioFixtureConfig::Random { seed, .. } => {
+                            if seed.value.parse::<u64>().is_err() {
+                                self.error(
+                                    module,
+                                    seed.span.clone(),
+                                    "random fixture seed must be an unsigned 64-bit integer",
+                                );
+                            }
+                            if random_fixture_seen {
+                                self.error(
+                                    module,
+                                    fixture.span.clone(),
+                                    "scenario declares more than one random fixture",
+                                );
+                            }
+                            random_fixture_seen = true;
+                        }
+                        ast::ScenarioFixtureConfig::Database { .. } => {
+                            if database_fixture_seen {
+                                self.error(
+                                    module,
+                                    fixture.span.clone(),
+                                    "scenario declares more than one database fixture",
+                                );
+                            }
+                            database_fixture_seen = true;
+                        }
+                        ast::ScenarioFixtureConfig::Socket {
+                            path,
+                            greeting,
+                            response,
+                            ..
+                        } => {
+                            if socket_fixture_seen {
+                                self.error(
+                                    module,
+                                    fixture.span.clone(),
+                                    "scenario declares more than one socket fixture",
+                                );
+                            }
+                            socket_fixture_seen = true;
+                            if !closed_socket_path(path) {
+                                self.error(
+                                    module,
+                                    fixture.span.clone(),
+                                    "socket fixture path must be a normalized relative path of ASCII letters, digits, `.`, `_` and `-` components of at most 255 bytes",
+                                );
+                            }
+                            for data in [greeting, response] {
+                                if scenario_data_len(data) > SCENARIO_SOCKET_DATA_LIMIT {
+                                    self.error(
+                                        module,
+                                        data.span.clone(),
+                                        "socket fixture greeting and response are limited to 1 MiB each",
+                                    );
+                                }
+                            }
+                        }
                         ast::ScenarioFixtureConfig::Clock { .. }
                         | ast::ScenarioFixtureConfig::Failure { .. } => {}
+                    }
+                }
+                // PostgreSQL's initdb requires a non-root, network-disabled sandbox, while the
+                // isolated HTTP loopback runs as namespace uid 0; the two cannot share one run.
+                if fixture_kinds.values().any(|kind| *kind == "http") {
+                    for fixture in &value.fixtures {
+                        if scenario_fixture_kind(&fixture.config) == "database.postgres" {
+                            self.error(
+                                module,
+                                fixture.span.clone(),
+                                "postgres database fixture cannot share a scenario with an http fixture",
+                            );
+                        }
                     }
                 }
                 let fixtures = value
@@ -9467,6 +9619,11 @@ impl<'a> OwnedLower<'a> {
                                 start_ms: scenario_integer(start_ms),
                                 tick_ms: scenario_integer(tick_ms),
                             },
+                            ast::ScenarioFixtureConfig::Random { seed, .. } => {
+                                HirScenarioFixtureKind::Random {
+                                    seed: scenario_integer(seed),
+                                }
+                            }
                             ast::ScenarioFixtureConfig::Failure {
                                 point,
                                 occurrence,
@@ -9498,6 +9655,27 @@ impl<'a> OwnedLower<'a> {
                                     ast::ScenarioFailurePointKind::ClockRead => {
                                         HirScenarioFailurePoint::ClockRead
                                     }
+                                    ast::ScenarioFailurePointKind::DatabaseConnect => {
+                                        HirScenarioFailurePoint::DatabaseConnect
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseRead => {
+                                        HirScenarioFailurePoint::DatabaseRead
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseWrite => {
+                                        HirScenarioFailurePoint::DatabaseWrite
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseCommit => {
+                                        HirScenarioFailurePoint::DatabaseCommit
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseRollback => {
+                                        HirScenarioFailurePoint::DatabaseRollback
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseClose => {
+                                        HirScenarioFailurePoint::DatabaseClose
+                                    }
+                                    ast::ScenarioFailurePointKind::DatabaseCancel => {
+                                        HirScenarioFailurePoint::DatabaseCancel
+                                    }
                                 },
                                 occurrence: scenario_integer(occurrence),
                                 error: match error.kind {
@@ -9516,7 +9694,37 @@ impl<'a> OwnedLower<'a> {
                                     ast::ScenarioFailureErrorKind::ConnectionReset => {
                                         HirScenarioFailureError::ConnectionReset
                                     }
+                                    ast::ScenarioFailureErrorKind::Interrupted => {
+                                        HirScenarioFailureError::Interrupted
+                                    }
                                 },
+                            },
+                            ast::ScenarioFixtureConfig::Database { backend, .. } => {
+                                HirScenarioFixtureKind::Database {
+                                    backend: match backend.kind {
+                                        ast::ScenarioDatabaseBackendKind::Sqlite => {
+                                            HirScenarioDatabaseBackend::Sqlite
+                                        }
+                                        ast::ScenarioDatabaseBackendKind::Duckdb => {
+                                            HirScenarioDatabaseBackend::Duckdb
+                                        }
+                                        ast::ScenarioDatabaseBackendKind::Postgres => {
+                                            HirScenarioDatabaseBackend::Postgres
+                                        }
+                                    },
+                                }
+                            }
+                            ast::ScenarioFixtureConfig::Socket {
+                                path,
+                                greeting,
+                                response,
+                                interrupt_after_request,
+                                ..
+                            } => HirScenarioFixtureKind::Socket {
+                                path: path.clone(),
+                                greeting: scenario_data(greeting),
+                                response: scenario_data(response),
+                                interrupt_after_request: *interrupt_after_request,
                             },
                         };
                         HirScenarioFixture {
@@ -9930,6 +10138,100 @@ impl<'a> OwnedLower<'a> {
                                 expression,
                             });
                         }
+                        ast::ScenarioStep::Unwrap {
+                            span,
+                            binding,
+                            value: source,
+                        } => {
+                            let before = self.errors.len();
+                            let value = self.scenario_value(
+                                module,
+                                source,
+                                None,
+                                &env,
+                                "scenario unwrap value does not type-check",
+                            );
+                            let return_type = match &value.ty {
+                                HirType::Result { ok, .. } => Some((**ok).clone()),
+                                _ => None,
+                            };
+                            if return_type.is_none() && self.errors.len() == before {
+                                self.error(
+                                    module,
+                                    source.span.clone(),
+                                    "scenario unwrap requires a Result value",
+                                );
+                            }
+                            let local = self.scenario_local_binding(
+                                module,
+                                &id,
+                                binding,
+                                return_type.clone(),
+                                &mut env,
+                                &workers,
+                            );
+                            if let Some(return_type) = return_type {
+                                steps.push(HirScenarioStep::UnwrapResult {
+                                    step_id,
+                                    span: span.clone(),
+                                    binding: local,
+                                    value,
+                                    return_type,
+                                });
+                            }
+                        }
+                        ast::ScenarioStep::Item {
+                            span,
+                            binding,
+                            value: source,
+                            index,
+                        } => {
+                            let before = self.errors.len();
+                            let value = self.scenario_value(
+                                module,
+                                source,
+                                None,
+                                &env,
+                                "scenario item value does not type-check",
+                            );
+                            let return_type = match &value.ty {
+                                HirType::List { item } => Some((**item).clone()),
+                                _ => None,
+                            };
+                            if return_type.is_none() && self.errors.len() == before {
+                                self.error(
+                                    module,
+                                    source.span.clone(),
+                                    "scenario item requires a List value",
+                                );
+                            }
+                            let position = index.value.parse::<u64>().ok();
+                            if position.is_none() {
+                                self.error(
+                                    module,
+                                    index.span.clone(),
+                                    "scenario item index must be an unsigned 64-bit integer",
+                                );
+                            }
+                            let local = self.scenario_local_binding(
+                                module,
+                                &id,
+                                binding,
+                                return_type.clone(),
+                                &mut env,
+                                &workers,
+                            );
+                            if let (Some(return_type), Some(index)) = (return_type, position) {
+                                steps.push(HirScenarioStep::ListItem {
+                                    step_id,
+                                    span: span.clone(),
+                                    binding: local,
+                                    value,
+                                    index,
+                                    return_type,
+                                });
+                            }
+                        }
                     }
                 }
                 let scenario_scope = std::mem::replace(&mut self.scenario_scope, outer_scope);
@@ -9955,7 +10257,9 @@ impl<'a> OwnedLower<'a> {
                         ast::ScenarioStep::Assert {
                             expression: value, ..
                         }
-                        | ast::ScenarioStep::Data { value, .. } => {
+                        | ast::ScenarioStep::Data { value, .. }
+                        | ast::ScenarioStep::Unwrap { value, .. }
+                        | ast::ScenarioStep::Item { value, .. } => {
                             scenario_fixture_references(value, &mut fixture_references)
                         }
                         ast::ScenarioStep::Await { .. }
@@ -9964,21 +10268,18 @@ impl<'a> OwnedLower<'a> {
                     }
                 }
                 for effect in required_effects.values() {
-                    let backend = match effect.key.as_str() {
-                        "file.read" | "file.write" => Some("fs"),
-                        "network" => Some("http"),
-                        "clock" => Some("clock"),
-                        _ => None,
-                    };
-                    let Some(backend) = backend else {
+                    if !scenario_effect_has_backend(&effect.key) {
                         self.error(
                             module,
                             effect.span.clone(),
                             "scenario effect has no supported fixture backend",
                         );
                         continue;
-                    };
-                    if !fixture_kinds.values().any(|kind| *kind == backend) {
+                    }
+                    if !fixture_kinds
+                        .values()
+                        .any(|kind| scenario_fixture_grants(&effect.key, kind))
+                    {
                         self.error(
                             module,
                             effect.span.clone(),
@@ -9995,15 +10296,21 @@ impl<'a> OwnedLower<'a> {
                         .get(&fixture.name)
                         .copied()
                         .unwrap_or_default();
-                    let supports_effect =
-                        required_effects.values().any(|effect| {
-                            matches!(
-                                (effect.key.as_str(), kind),
-                                ("file.read" | "file.write", "fs")
-                                    | ("network", "http")
-                                    | ("clock", "clock")
-                            )
-                        }) || scenario_failure_fixture_matches(&fixture.config, &effect_names);
+                    let supports_effect = required_effects
+                        .values()
+                        .any(|effect| scenario_fixture_grants(&effect.key, kind))
+                        || scenario_failure_fixture_matches(&fixture.config, &effect_names);
+                    if scenario_failure_point_is_database(&fixture.config)
+                        && !fixture_kinds
+                            .values()
+                            .any(|kind| kind.starts_with("database."))
+                    {
+                        self.error(
+                            module,
+                            fixture.span.clone(),
+                            "database failure point requires a database fixture",
+                        );
+                    }
                     if kind == "failure" && !supports_effect {
                         self.error(
                             module,
@@ -10015,6 +10322,48 @@ impl<'a> OwnedLower<'a> {
                             module,
                             fixture.span.clone(),
                             "scenario fixture grants unused authority",
+                        );
+                    }
+                }
+                // SIGINT must reach one synchronous facade call; async calls,
+                // workers and ticks could observe it outside the intended boundary.
+                if value.fixtures.iter().any(|fixture| {
+                    matches!(
+                        fixture.config,
+                        ast::ScenarioFixtureConfig::Socket {
+                            interrupt_after_request: true,
+                            ..
+                        } | ast::ScenarioFixtureConfig::Failure {
+                            error: ast::ScenarioFailureError {
+                                kind: ast::ScenarioFailureErrorKind::Interrupted,
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }) {
+                    for step in &steps {
+                        let span = match step {
+                            HirScenarioStep::Call {
+                                span,
+                                callable_kind: HirCallableKind::Async,
+                                ..
+                            }
+                            | HirScenarioStep::MethodCall {
+                                span,
+                                callable_kind: HirCallableKind::Async,
+                                ..
+                            }
+                            | HirScenarioStep::Spawn { span, .. }
+                            | HirScenarioStep::Await { span, .. }
+                            | HirScenarioStep::Cancel { span, .. }
+                            | HirScenarioStep::Tick { span, .. } => span,
+                            _ => continue,
+                        };
+                        self.error(
+                            module,
+                            span.clone(),
+                            "interrupting fixture allows only synchronous facade calls, not async calls, workers or ticks",
                         );
                     }
                 }
@@ -10336,7 +10685,126 @@ fn scenario_failure_fixture_matches(
             effects.contains("network")
         }
         ast::ScenarioFailurePointKind::ClockRead => effects.contains("clock"),
+        ast::ScenarioFailurePointKind::DatabaseConnect
+        | ast::ScenarioFailurePointKind::DatabaseRead
+        | ast::ScenarioFailurePointKind::DatabaseWrite
+        | ast::ScenarioFailurePointKind::DatabaseCommit
+        | ast::ScenarioFailurePointKind::DatabaseRollback
+        | ast::ScenarioFailurePointKind::DatabaseClose
+        | ast::ScenarioFailurePointKind::DatabaseCancel => {
+            effects.contains("database.read") || effects.contains("database.write")
+        }
     }
+}
+
+fn scenario_failure_point_is_database(fixture: &ast::ScenarioFixtureConfig) -> bool {
+    matches!(
+        fixture,
+        ast::ScenarioFixtureConfig::Failure { point, .. } if matches!(
+            point.kind,
+            ast::ScenarioFailurePointKind::DatabaseConnect
+                | ast::ScenarioFailurePointKind::DatabaseRead
+                | ast::ScenarioFailurePointKind::DatabaseWrite
+                | ast::ScenarioFailurePointKind::DatabaseCommit
+                | ast::ScenarioFailurePointKind::DatabaseRollback
+                | ast::ScenarioFailurePointKind::DatabaseClose
+                | ast::ScenarioFailurePointKind::DatabaseCancel
+        )
+    )
+}
+
+/// Closed scenario fixture kind; database kinds carry their backend so fixture
+/// accessors can be checked per backend.
+fn scenario_fixture_kind(config: &ast::ScenarioFixtureConfig) -> &'static str {
+    match config {
+        ast::ScenarioFixtureConfig::Filesystem { .. } => "fs",
+        ast::ScenarioFixtureConfig::Http { .. } => "http",
+        ast::ScenarioFixtureConfig::Clock { .. } => "clock",
+        ast::ScenarioFixtureConfig::Random { .. } => "random",
+        ast::ScenarioFixtureConfig::Failure { .. } => "failure",
+        ast::ScenarioFixtureConfig::Database { backend, .. } => match backend.kind {
+            ast::ScenarioDatabaseBackendKind::Sqlite => "database.sqlite",
+            ast::ScenarioDatabaseBackendKind::Duckdb => "database.duckdb",
+            ast::ScenarioDatabaseBackendKind::Postgres => "database.postgres",
+        },
+        ast::ScenarioFixtureConfig::Socket { .. } => "socket",
+    }
+}
+
+fn scenario_effect_has_backend(effect: &str) -> bool {
+    matches!(
+        effect,
+        "file.read"
+            | "file.write"
+            | "network"
+            | "database.read"
+            | "database.write"
+            | "clock"
+            | "random"
+    )
+}
+
+/// Whether one fixture kind grants one required effect. Network authority comes
+/// from the HTTP loopback, a database server or a socket peer; file effects still
+/// require a filesystem fixture even when a database is file-backed.
+fn scenario_fixture_grants(effect: &str, kind: &str) -> bool {
+    match effect {
+        "file.read" | "file.write" => kind == "fs",
+        "network" => matches!(kind, "http" | "socket") || kind.starts_with("database."),
+        "database.read" | "database.write" => kind.starts_with("database."),
+        "clock" => kind == "clock",
+        "random" => kind == "random",
+        _ => false,
+    }
+}
+
+/// The closed accessor rule of one fixture reference: `.path()` projects files of
+/// filesystem and file-backed database fixtures; `.url()` projects HTTP routes and
+/// the single PostgreSQL endpoint `/`.
+fn scenario_fixture_reference_problem(
+    kind: Option<&str>,
+    path_accessor: bool,
+    path: &str,
+) -> Option<&'static str> {
+    match (kind, path_accessor) {
+        (Some("fs" | "database.sqlite" | "database.duckdb"), true) | (Some("http"), false) => None,
+        (Some("database.postgres"), false) if path == "/" => None,
+        (Some("database.postgres"), false) => {
+            Some("postgres database fixture .url() accepts only \"/\"")
+        }
+        (Some("database.postgres"), true) => {
+            Some("postgres database fixture has no .path(); use .url(\"/\")")
+        }
+        (Some("database.sqlite" | "database.duckdb"), false) => {
+            Some("sqlite and duckdb database fixtures have no .url(); use .path(...)")
+        }
+        (_, true) => Some("fixture .path() requires a filesystem fixture"),
+        (_, false) => Some("fixture .url() requires an HTTP fixture"),
+    }
+}
+
+/// Each socket greeting and response is one bounded outbound payload.
+const SCENARIO_SOCKET_DATA_LIMIT: usize = 1 << 20;
+
+fn scenario_data_len(value: &ast::ScenarioData) -> usize {
+    match &value.kind {
+        ast::ScenarioDataKind::Text(value) | ast::ScenarioDataKind::Bytes(value) => value.len(),
+        ast::ScenarioDataKind::Hex(value) => value.len() / 2,
+    }
+}
+
+/// The socket peer binds a closed relative path under the scenario root.
+fn closed_socket_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part.len() <= 255
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
 }
 
 fn scenario_data(value: &ast::ScenarioData) -> HirScenarioData {
@@ -13202,9 +13670,13 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                             owned_visit_expr(&argument.value, &mut visit);
                         }
                     }
-                    ast::ScenarioStep::Assert { expression, .. } => {
-                        owned_visit_expr(expression, &mut visit)
+                    ast::ScenarioStep::Assert { expression, .. }
+                    | ast::ScenarioStep::Unwrap {
+                        value: expression, ..
                     }
+                    | ast::ScenarioStep::Item {
+                        value: expression, ..
+                    } => owned_visit_expr(expression, &mut visit),
                     ast::ScenarioStep::Data { ty, value, .. } => {
                         owned_visit_type(ty, &mut visit);
                         owned_visit_expr(value, &mut visit);

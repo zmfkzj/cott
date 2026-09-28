@@ -9,7 +9,7 @@ from real.pgcli.session import execute_pgcli_command
 from real.pgcli.session_types import CommandOutcome, QueryOutcome, RefreshKind_Nothing, Session, TerminalSize
 
 
-def _finish_watch(last: CommandOutcome | None, current: Session, query: str, scripted: bool) -> CommandOutcome:
+def _watch_result(last: CommandOutcome | None, current: Session, query: str, scripted: bool) -> CommandOutcome:
     if last is None:
         record = QueryOutcome(
             query=query,
@@ -33,7 +33,9 @@ def watch_pgcli_command(session: Session, text: str, screen: TerminalSize) -> Co
     parsed = cast(object, iocommands.get_watch_command(text))
     if not isinstance(parsed, tuple):
         raise TypeError("Invalid \\watch command result")
-    pair = cast(tuple[object, object], parsed)
+    pair = cast(tuple[object, ...], parsed)
+    if len(pair) != 2:
+        raise TypeError("Invalid \\watch command result")
     raw_query = pair[0]
     if raw_query is not None and not isinstance(raw_query, str):
         raise TypeError("Invalid \\watch query")
@@ -46,14 +48,13 @@ def watch_pgcli_command(session: Session, text: str, screen: TerminalSize) -> Co
             watch_sql = None
     if watch_sql is None:
         outcome = execute_pgcli_command(session, text, screen)
-        updated = dataclasses.replace(outcome.session, last_query=text)
-        return dataclasses.replace(outcome, session=updated)
+        return dataclasses.replace(outcome, session=dataclasses.replace(outcome.session, last_query=text))
 
     raw_seconds = pair[1]
     if isinstance(raw_seconds, bool) or not isinstance(raw_seconds, (int, float)):
         raise TypeError("Invalid \\watch interval")
     seconds = raw_seconds
-    original_scripted = session.settings.scripted
+    scripted = session.settings.scripted
     current = dataclasses.replace(session, settings=dataclasses.replace(session.settings, scripted=True))
     last: CommandOutcome | None = None
     try:
@@ -63,4 +64,4 @@ def watch_pgcli_command(session: Session, text: str, screen: TerminalSize) -> Co
             click.echo("Waiting for " + str(seconds) + " seconds before repeating")
             time.sleep(seconds)
     except KeyboardInterrupt:
-        return _finish_watch(last, current, watch_sql, original_scripted)
+        return _watch_result(last, current, watch_sql, scripted)

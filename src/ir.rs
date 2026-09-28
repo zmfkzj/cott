@@ -12,9 +12,9 @@ use crate::hir::{
     HirGenericParam, HirImplInitializer, HirImplMethod, HirMatchGuard, HirMethod, HirModule,
     HirParameter, HirParameterKind, HirPattern, HirPatternKind, HirProject, HirReference,
     HirRequirement, HirResource, HirResourceTerminal, HirResourceTransition, HirScenario,
-    HirScenarioData, HirScenarioFailureError, HirScenarioFailurePoint, HirScenarioFixtureKind,
-    HirScenarioHttpOutcome, HirScenarioStep, HirSelectedImplementation, HirType, HirUnaryOp,
-    HirValue, HirVariance, HirVariant, PrimitiveType,
+    HirScenarioData, HirScenarioDatabaseBackend, HirScenarioFailureError, HirScenarioFailurePoint,
+    HirScenarioFixtureKind, HirScenarioHttpOutcome, HirScenarioStep, HirSelectedImplementation,
+    HirType, HirUnaryOp, HirValue, HirVariance, HirVariant, PrimitiveType,
 };
 use crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
 
@@ -771,6 +771,12 @@ fn render_scenario(json: &mut Json, value: &HirScenario) {
                 json.key("tick_ms");
                 json.number(&tick_ms.to_string());
             }
+            HirScenarioFixtureKind::Random { seed } => {
+                json.string("random");
+                json.comma();
+                json.key("seed");
+                json.number(&seed.to_string());
+            }
             HirScenarioFixtureKind::Failure {
                 point,
                 occurrence,
@@ -786,6 +792,32 @@ fn render_scenario(json: &mut Json, value: &HirScenario) {
                 json.comma();
                 json.key("point");
                 json.string(failure_point_name(*point));
+            }
+            HirScenarioFixtureKind::Database { backend } => {
+                json.string("database");
+                json.comma();
+                json.key("backend");
+                json.string(database_backend_name(*backend));
+            }
+            HirScenarioFixtureKind::Socket {
+                path,
+                greeting,
+                response,
+                interrupt_after_request,
+            } => {
+                json.string("socket");
+                json.comma();
+                json.key("greeting");
+                render_scenario_data(json, greeting);
+                json.comma();
+                json.key("interrupt_after_request");
+                json.boolean(*interrupt_after_request);
+                json.comma();
+                json.key("path");
+                json.string(path);
+                json.comma();
+                json.key("response");
+                render_scenario_data(json, response);
             }
         }
         json.comma();
@@ -1158,6 +1190,60 @@ fn render_scenario_step(json: &mut Json, step: &HirScenarioStep) {
             json.key("span");
             render_span(json, span);
         }
+        HirScenarioStep::UnwrapResult {
+            step_id,
+            span,
+            binding,
+            value,
+            return_type,
+        } => {
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("kind");
+            json.string("unwrap_result");
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("value");
+            render_expr(json, value);
+        }
+        HirScenarioStep::ListItem {
+            step_id,
+            span,
+            binding,
+            value,
+            index,
+            return_type,
+        } => {
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("index");
+            json.number(&index.to_string());
+            json.comma();
+            json.key("kind");
+            json.string("list_item");
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("value");
+            render_expr(json, value);
+        }
     }
     json.object_end();
 }
@@ -1191,6 +1277,20 @@ fn failure_point_name(value: HirScenarioFailurePoint) -> &'static str {
         HirScenarioFailurePoint::HttpConnect => "http.connect",
         HirScenarioFailurePoint::HttpRead => "http.read",
         HirScenarioFailurePoint::ClockRead => "clock.read",
+        HirScenarioFailurePoint::DatabaseConnect => "database.connect",
+        HirScenarioFailurePoint::DatabaseRead => "database.read",
+        HirScenarioFailurePoint::DatabaseWrite => "database.write",
+        HirScenarioFailurePoint::DatabaseCommit => "database.commit",
+        HirScenarioFailurePoint::DatabaseRollback => "database.rollback",
+        HirScenarioFailurePoint::DatabaseClose => "database.close",
+        HirScenarioFailurePoint::DatabaseCancel => "database.cancel",
+    }
+}
+fn database_backend_name(value: HirScenarioDatabaseBackend) -> &'static str {
+    match value {
+        HirScenarioDatabaseBackend::Sqlite => "sqlite",
+        HirScenarioDatabaseBackend::Duckdb => "duckdb",
+        HirScenarioDatabaseBackend::Postgres => "postgres",
     }
 }
 fn failure_error_name(value: HirScenarioFailureError) -> &'static str {
@@ -1200,6 +1300,7 @@ fn failure_error_name(value: HirScenarioFailureError) -> &'static str {
         HirScenarioFailureError::DiskFull => "disk_full",
         HirScenarioFailureError::Timeout => "timeout",
         HirScenarioFailureError::ConnectionReset => "connection_reset",
+        HirScenarioFailureError::Interrupted => "interrupted",
     }
 }
 

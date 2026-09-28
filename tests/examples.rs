@@ -2,7 +2,7 @@ use cott::provenance::{
     GenerationCompatibility, GenerationRecord, GenerationSnapshot, RUNTIME_ABI_VERSION,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 #[cfg(unix)]
@@ -25,7 +25,6 @@ struct Example {
 struct RealExample {
     path: &'static str,
     upstream_url: &'static str,
-    source_files: &'static [&'static str],
     adapter_files: &'static [&'static str],
 }
 
@@ -33,90 +32,31 @@ const REAL_EXAMPLES: &[RealExample] = &[
     RealExample {
         path: "real/yt-dlp",
         upstream_url: "https://github.com/yt-dlp/yt-dlp",
-        source_files: &["src/real/yt_dlp.cott"],
         adapter_files: &["python/app.py"],
     },
     RealExample {
         path: "real/harlequin",
         upstream_url: "https://github.com/tconbeer/harlequin",
-        source_files: &[
-            "src/real/harlequin/adapters.cott",
-            "src/real/harlequin/app.cott",
-            "src/real/harlequin/catalog.cott",
-            "src/real/harlequin/cli.cott",
-            "src/real/harlequin/config.cott",
-            "src/real/harlequin/export.cott",
-            "src/real/harlequin/files.cott",
-            "src/real/harlequin/history.cott",
-            "src/real/harlequin/hsql.cott",
-            "src/real/harlequin/ide.cott",
-            "src/real/harlequin/keymap.cott",
-            "src/real/harlequin/main.cott",
-            "src/real/harlequin/results.cott",
-            "src/real/harlequin/sqltext.cott",
-            "src/real/harlequin/style.cott",
-            "src/real/harlequin/support.cott",
-            "src/real/harlequin/tools.cott",
-        ],
         adapter_files: &["python/harlequin_cli.py", "python/hsql_cli.py"],
     },
     RealExample {
         path: "real/pgcli",
         upstream_url: "https://github.com/dbcli/pgcli",
-        source_files: &[
-            "src/real/pgcli/cli.cott",
-            "src/real/pgcli/completion.cott",
-            "src/real/pgcli/config.cott",
-            "src/real/pgcli/connection.cott",
-            "src/real/pgcli/output.cott",
-            "src/real/pgcli/parseutils.cott",
-            "src/real/pgcli/repl.cott",
-            "src/real/pgcli/session.cott",
-        ],
         adapter_files: &["python/pgcli_cli.py"],
     },
     RealExample {
         path: "real/posting",
         upstream_url: "https://github.com/darrenburns/posting",
-        source_files: &["src/real/posting/client.cott"],
         adapter_files: &["python/posting_cli.py"],
     },
     RealExample {
         path: "real/toolong",
         upstream_url: "https://github.com/Textualize/toolong",
-        source_files: &[
-            "src/real/toolong/cli.cott",
-            "src/real/toolong/files.cott",
-            "src/real/toolong/help.cott",
-            "src/real/toolong/index.cott",
-            "src/real/toolong/keys.cott",
-            "src/real/toolong/model.cott",
-            "src/real/toolong/screen.cott",
-            "src/real/toolong/text.cott",
-            "src/real/toolong/timestamps.cott",
-            "src/real/toolong/tui.cott",
-            "src/real/toolong/view.cott",
-        ],
         adapter_files: &["python/toolong.py"],
     },
     RealExample {
         path: "real/frogmouth",
         upstream_url: "https://github.com/Textualize/frogmouth",
-        source_files: &[
-            "src/real/frogmouth/bookmarks.cott",
-            "src/real/frogmouth/branding.cott",
-            "src/real/frogmouth/browser.cott",
-            "src/real/frogmouth/cli.cott",
-            "src/real/frogmouth/config.cott",
-            "src/real/frogmouth/document.cott",
-            "src/real/frogmouth/forge.cott",
-            "src/real/frogmouth/history.cott",
-            "src/real/frogmouth/layout.cott",
-            "src/real/frogmouth/locations.cott",
-            "src/real/frogmouth/model.cott",
-            "src/real/frogmouth/omnibox.cott",
-            "src/real/frogmouth/storage.cott",
-        ],
         adapter_files: &[
             "python/frogmouth_ui/__init__.py",
             "python/frogmouth_ui/__main__.py",
@@ -702,25 +642,25 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
             example.path
         );
 
-        let source_files = authored_files_below(&project.join("src"))
-            .iter()
+        let source_hashes = authored_files_below(&project.join("src"))
+            .into_iter()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "cott")
+            })
             .map(|path| {
-                path.strip_prefix(&project)
+                let relative = path
+                    .strip_prefix(&project)
                     .expect("source file should remain within its project")
                     .to_string_lossy()
-                    .into_owned()
+                    .into_owned();
+                let bytes = fs::read(&path).expect("authored contract is readable");
+                (
+                    relative,
+                    format!("sha256:{}", cott::hash::sha256_hex(&bytes)),
+                )
             })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            source_files,
-            example
-                .source_files
-                .iter()
-                .map(|path| (*path).to_owned())
-                .collect(),
-            "{} source shape changed",
-            example.path
-        );
+            .collect::<BTreeMap<_, _>>();
 
         let adapter_files = authored_files_below(&project.join("python"))
             .into_iter()
@@ -757,6 +697,23 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
         let generation: serde_json::Value = snapshot::read(&bytes);
         GenerationRecord::parse(&bytes).expect("generation metadata must use the current schema");
         assert_generation_identity(&generation);
+        let recorded_sources = generation["current"]["inputs"]
+            .as_object()
+            .expect("generation inputs are an object")
+            .iter()
+            .filter(|(path, _)| path.starts_with("src/") && path.ends_with(".cott"))
+            .map(|(path, digest)| {
+                (
+                    path.clone(),
+                    digest.as_str().expect("source hash").to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            source_hashes, recorded_sources,
+            "{} authored contracts differ from the verified snapshot",
+            example.path
+        );
         assert_eq!(generation["current"]["verified"], true);
         assert_eq!(
             generation["last_verified"]["generation_id"], generation["current"]["generation_id"],

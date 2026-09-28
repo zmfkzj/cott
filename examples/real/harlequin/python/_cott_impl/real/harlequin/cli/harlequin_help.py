@@ -2,7 +2,6 @@ import textwrap
 from typing import Final
 
 from cott_runtime import CottList, Some
-
 from real.harlequin.adapters import adapter_options
 from real.harlequin.adapters_types import AdapterDescriptor, AdapterOption, OptionKind_Choice, OptionKind_FilePath, OptionKind_Flag
 
@@ -36,62 +35,60 @@ def _core_rows() -> list[tuple[str, str]]:
         ("--no-download-tzdata", "Do not download timezone data. Defaults to off."),
         ("--config", "Run the configuration wizard and exit. Defaults to off."),
         ("--keys", "Run the keymap editor and exit. Defaults to off."),
-        ("--version", "Show the version and exit."),
-        ("--help", "Show this message and exit."),
+        ("--version", "Show the version and exit. Defaults to off."),
+        ("--help", "Show this message and exit. Defaults to off."),
     ]
 
 
 def _write_dl(rows: list[tuple[str, str]]) -> list[str]:
-    first_col = min(max((len(first) for first, _ in rows), default=0), _COL_MAX) + _COL_SPACING
-    text_width = max(_WIDTH - first_col - _INDENT, 10)
+    first_col = min(max((len(decl) for decl, _ in rows), default=0), _COL_MAX) + _COL_SPACING
+    text_width = _WIDTH - _INDENT - first_col
+    help_indent = " " * (_INDENT + first_col)
     out: list[str] = []
-    for first, second in rows:
-        head = " " * _INDENT + first
-        if second == "":
-            out.append(head)
+    for decl, description in rows:
+        if not description:
+            out.extend(textwrap.wrap(decl, _WIDTH, initial_indent=" " * _INDENT, subsequent_indent=" " * (_INDENT + 2), break_on_hyphens=False))
             continue
-        lines = textwrap.wrap(second, text_width) or [""]
-        if len(first) <= first_col - _COL_SPACING:
-            out.append(head + " " * (first_col - len(first)) + lines[0])
+        help_lines = textwrap.wrap(description, text_width, break_on_hyphens=False)
+        if len(decl) <= first_col - _COL_SPACING:
+            out.append(" " * _INDENT + decl + " " * (first_col - len(decl)) + help_lines[0])
         else:
-            out.append(head)
-            out.append(" " * (first_col + _INDENT) + lines[0])
-        for line in lines[1:]:
-            out.append(" " * (first_col + _INDENT) + line)
+            out.extend(textwrap.wrap(decl, _WIDTH, initial_indent=" " * _INDENT, subsequent_indent=" " * (_INDENT + 2), break_on_hyphens=False))
+            out.append(help_indent + help_lines[0])
+        for line in help_lines[1:]:
+            out.append(help_indent + line)
     return out
 
 
 def _option_row(option: AdapterOption) -> tuple[str, str]:
-    shorts = [str(decl) for decl in option.short_decls]
-    decls = [d for d in shorts if not d.startswith("--")] + ["--" + option.name] + [d for d in shorts if d.startswith("--")]
+    shorts = [decl for decl in option.short_decls]
+    decls = [decl for decl in shorts if not decl.startswith("--")]
+    decls.append("--" + option.name)
+    decls.extend(decl for decl in shorts if decl.startswith("--"))
     kind = option.kind
     if isinstance(kind, OptionKind_Flag):
         metavar = ""
     elif isinstance(kind, OptionKind_Choice):
-        metavar = " [" + "|".join(str(choice) for choice in kind.choices) + "]"
+        metavar = " [" + "|".join(kind.choices) + "]"
     elif isinstance(kind, OptionKind_FilePath):
         metavar = " PATH"
     else:
         metavar = " TEXT"
-    help_text = option.description
+    description = option.description
     if option.secret:
-        help_text += " (secret)"
+        description += " (secret)"
     default = option.default
     if isinstance(default, Some):
-        help_text += "  [default: " + default.value + "]"
-    return (", ".join(decls) + metavar, help_text)
+        description += "  [default: " + default.value + "]"
+    return ", ".join(decls) + metavar, description
 
 
 def harlequin_help(descriptors: CottList[AdapterDescriptor]) -> str:
-    out: list[str] = ["Usage: harlequin [OPTIONS] [CONN_STR]...", ""]
-    out.extend(textwrap.wrap(_DESCRIPTION, _WIDTH, initial_indent="  ", subsequent_indent="  "))
-    out.append("")
-    out.append("Options:")
-    out.extend(_write_dl(_core_rows()))
+    lines = ["Usage: harlequin [OPTIONS] [CONN_STR]...", ""]
+    lines.extend(textwrap.wrap(_DESCRIPTION, _WIDTH, initial_indent="  ", subsequent_indent="  "))
+    lines.extend(["", "Options:"])
+    lines.extend(_write_dl(_core_rows()))
     for descriptor in descriptors:
-        out.append("")
-        out.append(descriptor.display_name + " Adapter Options:")
-        rows = [_option_row(option) for option in adapter_options(descriptor.kind)]
-        if rows:
-            out.extend(_write_dl(rows))
-    return "\n".join(out) + "\n"
+        lines.extend(["", descriptor.display_name + " Adapter Options:"])
+        lines.extend(_write_dl([_option_row(option) for option in adapter_options(descriptor.kind)]))
+    return "\n".join(lines) + "\n"

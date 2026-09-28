@@ -100,7 +100,7 @@ prompt_toolkit focus in step."""
     context = _cott_normalize_f32_abi(context, IdeContext, path="$.context")
     keymaps = _cott_normalize_f32_abi(keymaps, CottList[KeyMap], path="$.keymaps")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/build_ide.py", "291544cc9ba6b0cebcf97e379e3354aec2e92d45e8b5aae263f3319fef7d6c5d", "build_ide", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.build_ide")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/build_ide.py", "e8ccde393ceb080a8f651650e0b2dbdadbed0f9ddc7b9de3b8c7436f96e56d07", "build_ide", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.build_ide")
         _result = _implementation(settings, context, keymaps)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -179,7 +179,7 @@ The Python function keeps the exact signature
 (session: IdeSession) -> Unit and returns cott_runtime.Unit()."""
     session = _cott_normalize_f32_abi(session, IdeSession, path="$.session")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_editor_actions.py", "f94e4869cf2bd5d70ee5363dbec91f189256bcc4ae74976ac8ff9b04e68b01c6", "install_editor_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_editor_actions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_editor_actions.py", "328ddf5e03d02c16f80679a1e9be169652321b608f4637e109047b033e09c728", "install_editor_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_editor_actions")
         _result = _implementation(session)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -260,7 +260,7 @@ The Python function keeps the exact signature
 (session: IdeSession) -> Unit and returns cott_runtime.Unit()."""
     session = _cott_normalize_f32_abi(session, IdeSession, path="$.session")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_query_actions.py", "4426d5b0e02e1041e31f6539bf5df12ab54dfa42aafdb94c1f2a3124231ce7ac", "install_query_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_query_actions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_query_actions.py", "fca7e869e32f428b86eb0e614031a3983beb9c672259e39b19039eded706372d", "install_query_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_query_actions")
         _result = _implementation(session)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -310,7 +310,7 @@ The Python function keeps the exact signature
 (session: IdeSession) -> Unit and returns cott_runtime.Unit()."""
     session = _cott_normalize_f32_abi(session, IdeSession, path="$.session")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_catalog_actions.py", "443ef568b29d0890518629d6a5f7d68ba31461e7cfc4fc4b14f13f68b4e3e074", "install_catalog_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_catalog_actions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_catalog_actions.py", "97b85f3f81002af18b5646d493b25d491afc434323c37ae8aa5feaa4b2eaeab9", "install_catalog_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_catalog_actions")
         _result = _implementation(session)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -357,7 +357,7 @@ The Python function keeps the exact signature
 (session: IdeSession) -> Unit and returns cott_runtime.Unit()."""
     session = _cott_normalize_f32_abi(session, IdeSession, path="$.session")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_results_actions.py", "70d083f78142864b074af2d14c943a75d77d91e3ec065ac858d73d98b1206583", "install_results_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_results_actions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_results_actions.py", "56826f783e45025d0e4453609531a6c7070bc117095ed3f61b46cc131b531f40", "install_results_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_results_actions")
         _result = _implementation(session)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -397,7 +397,7 @@ real.harlequin.support.ssh_tunnel_alive every 5 seconds and notifies
 error "The SSH tunnel to {host} closed." once when it dies."""
     session = _cott_normalize_f32_abi(session, IdeSession, path="$.session")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_app_actions.py", "603296ef7f63700d6350bda5b8bc3b84942ec8b62b7069735dc140fb80cf1a3d", "install_app_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_app_actions")
+        _implementation = _cott_load("_cott_impl/real/harlequin/app/install_app_actions.py", "8fa635332175bb3a5b7ad7b6dc504fc1f344da188b62e3c8730117766be987db", "install_app_actions", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.app.install_app_actions")
         _result = _implementation(session)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

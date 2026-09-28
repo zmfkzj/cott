@@ -369,6 +369,8 @@ scenario workflow for app.run:
     clock clock:
       start_ms:10
       tick_ms:2
+    random order:
+      seed:7
     failure denied:
       point:file.write
       occurrence:1
@@ -406,6 +408,8 @@ scenario workflow for app.run:
         clock clock:
             start_ms: 10
             tick_ms: 2
+        random order:
+            seed: 7
         failure denied:
             point: file.write
             occurrence: 1

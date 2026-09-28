@@ -5,13 +5,11 @@ from real.yt_dlp_types import MediaError, MediaError_SubtitleUnavailable, MediaI
 def select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[CottList[str], MediaError]:
     match request.mode:
         case SubtitleMode_None():
-            return Ok(value=CottList(values=[]))
+            return Ok(value=CottList[str](values=[]))
         case SubtitleMode_Manual() | SubtitleMode_Automatic() | SubtitleMode_All():
             if len(request.languages) == 0:
                 return Err(error=MediaError_SubtitleUnavailable(language=""))
-            selected: list[str] = []
             for language in request.languages:
                 if language == "":
                     return Err(error=MediaError_SubtitleUnavailable(language=""))
-                selected.append(language)
-            return Ok(value=CottList(values=selected))
+            return Ok(value=request.languages)

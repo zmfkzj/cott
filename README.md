@@ -46,9 +46,13 @@ Evidence is one of:
 | trust declaration | The declaration is accepted without general proof by Cott. |
 
 Struct invariants are part of the canonical constructor contract. Scenarios use only public facades
-and closed filesystem, HTTP, clock, and failure fixtures. Effectful fixture observations require the
-compiler-owned Linux bubblewrap isolated-loopback sandbox; missing or unusable isolation is
-unobserved, never an unsandboxed or external-network fallback. Semantic coverage joins the Canonical
+and closed filesystem, HTTP, clock, random, database, socket and failure fixtures.
+Python supplies seeded randomness, real private SQLite/DuckDB/PostgreSQL sessions and bounded
+AF_UNIX peers; unsupported target capabilities remain unavailable. `unwrap` and `item` scenario
+steps retain actual returned values rather than fabricating handles. Effectful observations stay
+inside compiler-owned Linux bubblewrap sandboxes: HTTP uses isolated loopback, while PostgreSQL
+uses a private Unix socket with external networking disabled. Missing isolation never falls back
+to unsandboxed or host-network execution. Semantic coverage joins the Canonical
 IR clause inventory to runner evidence; manifest coverage rules may gate selected clauses without
 changing artifact certification.
 

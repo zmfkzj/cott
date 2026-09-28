@@ -19,7 +19,7 @@ def sort_formats(formats: CottList[FormatDescriptor], fields: CottList[str]) -> 
     for name in fields:
         if name in ("res", "abr", "size") and name not in keys:
             keys.append(name)
-    ordered: list[FormatDescriptor] = [fmt for fmt in formats]
+    ordered: list[FormatDescriptor] = list(formats)
     if keys:
         ordered.sort(key=lambda fmt: _sort_key(fmt, keys))
     return CottList(values=ordered)

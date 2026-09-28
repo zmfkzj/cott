@@ -179,7 +179,7 @@ allow_unknown = false
 
 [[verification.coverage.rules]]
 symbol = "real.yt_dlp.execute"
-clauses = ["ensures:1", "ensures:2", "error:4", "error:5", "error:7", "error:8", "error:9", "error:11", "error:12", "error:13", "error:14", "error:15", "error:16", "error:17", "error:18", "error:19", "error:20", "error:21", "error:22", "error:23"]
+clauses = ["ensures:1", "ensures:2", "error:4", "error:5", "error:7", "error:8", "error:9", "error:11", "error:12", "error:13", "error:14", "error:15", "error:16", "error:17", "error:18", "error:19", "error:20", "error:21", "error:22"]
 allow_unobserved = false
 allow_trust_declaration = false
 allow_unknown = false

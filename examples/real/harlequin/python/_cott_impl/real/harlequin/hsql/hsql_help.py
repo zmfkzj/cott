@@ -1,6 +1,13 @@
-from cott_runtime import CottList, Option, Some
+import textwrap
 
-from real.harlequin.adapters_types import AdapterDescriptor, AdapterOption, OptionKind_Choice, OptionKind_FilePath, OptionKind_Flag
+from cott_runtime import CottList, Option, Some
+from real.harlequin.adapters_types import (
+    AdapterDescriptor,
+    AdapterOption,
+    OptionKind_Choice,
+    OptionKind_FilePath,
+    OptionKind_Flag,
+)
 
 
 def _hsql_rows() -> list[tuple[str, str]]:
@@ -69,13 +76,15 @@ def _format_rows(rows: list[tuple[str, str]]) -> list[str]:
     width = min(max((len(term) for term, _description in rows), default=0), 30)
     lines: list[str] = []
     for term, description in rows:
-        if not description:
-            lines.append(f"  {term}")
-        elif len(term) <= width:
-            lines.append(f"  {term.ljust(width)}  {description}")
+        if len(term) <= width:
+            prefix = f"  {term.ljust(width)}  "
+            if not description:
+                lines.append(f"  {term}")
+                continue
         else:
             lines.append(f"  {term}")
-            lines.append(f"  {' ' * width}  {description}")
+            prefix = " " * (width + 4)
+        lines.extend(textwrap.wrap(description, width=78, initial_indent=prefix, subsequent_indent=prefix, break_long_words=False, break_on_hyphens=False))
     return lines
 
 
@@ -84,6 +93,7 @@ def _adapter_row(option: AdapterOption, taken: set[str]) -> tuple[str, str] | No
     spellings = [decl for decl in sorted(decls, key=len) + [f"--{option.name}"] if decl not in taken]
     if not spellings:
         return None
+    taken.update(spellings)
     kind = option.kind
     if isinstance(kind, OptionKind_Flag):
         metavar = ""
@@ -97,7 +107,7 @@ def _adapter_row(option: AdapterOption, taken: set[str]) -> tuple[str, str] | No
     default = option.default
     if isinstance(default, Some):
         description = f"{description}  [default: {default.value}]"
-    return (", ".join(spellings) + metavar, description)
+    return ", ".join(spellings) + metavar, description
 
 
 def hsql_help(descriptors: CottList[AdapterDescriptor], selected: Option[AdapterDescriptor], options: CottList[AdapterOption]) -> str:
@@ -108,12 +118,13 @@ def hsql_help(descriptors: CottList[AdapterDescriptor], selected: Option[Adapter
         "",
         "  Installed adapters: " + ", ".join(descriptor.name for descriptor in descriptors),
         "",
+        "Options:",
     ]
     rows = _hsql_rows()
     lines.extend(_format_rows(rows))
     if isinstance(selected, Some):
-        adapter_rows: list[tuple[str, str]] = []
         taken = _spellings(rows)
+        adapter_rows: list[tuple[str, str]] = []
         for option in options:
             row = _adapter_row(option, taken)
             if row is not None:

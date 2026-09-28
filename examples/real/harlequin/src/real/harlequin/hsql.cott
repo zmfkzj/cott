@@ -2,6 +2,7 @@ module real.harlequin.hsql
 
 use real.harlequin.adapters.{
     AdapterDescriptor,
+    AdapterKind,
     AdapterOption,
     Connection,
     ConnectionRequest,
@@ -700,3 +701,105 @@ scenario a_session_that_is_not_running_is_a_connection_error:
             message: "no session named 'idle' is running. Start one with `hsql --serve idle ...`.",
         ),
     )
+
+scenario a_connected_hsql_request_reads_the_retained_session:
+    fixtures:
+        database db:
+            backend: sqlite
+        fs files:
+            file "work/anchor" text("")
+        clock timer:
+            start_ms: 1000
+            tick_ms: 1
+    call opened = connect(
+        ConnectionRequest(
+            adapter: AdapterKind.Sqlite,
+            conn_str: List(":memory:"),
+            read_only: false,
+            settings: List(),
+        ),
+    )
+    unwrap connection = opened
+    call prepared = execute_statements(
+        connection,
+        List("create table cott_items(value integer)", "insert into cott_items values (7), (9)"),
+        Option.Nothing,
+        false,
+    )
+    assert prepared.len == 2
+    call parsed = parse_hsql_arguments(
+        List(
+            "--adapter",
+            "sqlite",
+            "--command",
+            "select sum(value) as total from cott_items",
+            "--csv",
+            "--no-footer",
+        ),
+        List("sqlite"),
+        List(),
+    )
+    unwrap arguments = parsed
+    call response = execute_hsql_request(
+        connection,
+        arguments,
+        files.path("work"),
+        Option.Nothing,
+        HsqlContext(
+            profile: Option.Nothing,
+            adapter_name: "sqlite",
+            query_log: files.path("query-history.db"),
+            stdout_tty: false,
+            stderr_tty: false,
+            no_color: true,
+            implements_cancel: true,
+            implements_catalog_search: true,
+            secrets: List(),
+        ),
+    )
+    assert response.status == 0
+    assert response.stdout == Bytes("746f74616c0a31360a")
+    call closed = close_connection(connection)
+    assert closed == Result.Ok(value: ())
+
+scenario session_response_comes_from_a_private_framed_peer:
+    fixtures:
+        fs files:
+            file "work/anchor" text("")
+        socket peer:
+            path: "hsql/live.sock"
+            greeting: hex("0100000006322e31352e30")
+            response: hex("03000000036f6b0a050000000400000000")
+            interrupt_after_request: false
+    call response = send_session_request(
+        "live",
+        List("--command", "select 1"),
+        files.path("work"),
+        Option.Nothing,
+        Map("XDG_RUNTIME_DIR": "."),
+        false,
+        false,
+    )
+    assert response == Result.Ok(
+        value: HsqlResponse(stdout: Bytes("6f6b0a"), stderr: "", status: 0),
+    )
+
+scenario session_interrupt_is_a_real_sigint_during_a_request:
+    fixtures:
+        fs files:
+            file "work/anchor" text("")
+        socket peer:
+            path: "hsql/live.sock"
+            greeting: hex("0100000006322e31352e30")
+            response: hex("")
+            interrupt_after_request: true
+    call response = send_session_request(
+        "live",
+        List("--command", "select 1"),
+        files.path("work"),
+        Option.Nothing,
+        Map("XDG_RUNTIME_DIR": "."),
+        false,
+        false,
+    )
+    assert response == Result.Err(error: HsqlError.Interrupted)

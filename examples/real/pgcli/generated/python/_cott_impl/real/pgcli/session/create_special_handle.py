@@ -1,9 +1,9 @@
 import os
-from collections.abc import Callable
-from typing import Any, Literal, cast
+import pathlib
+from typing import Any, Callable, Literal, cast
 
 from configobj import ConfigObj
-from cott_runtime import Err, Ok, Opaque, Result
+from cott_runtime import CottContractViolation, Err, Ok, Opaque, Result, _cott_fixture_read
 from pgspecial.main import NO_QUERY, PARSED_QUERY, PGSpecial
 from pgspecial.namedqueries import NamedQueries
 
@@ -15,7 +15,24 @@ def create_special_handle(setup: SpecialSetup) -> Result[Opaque[Literal["pgcli.p
         special: Any = PGSpecial()
         special.timing_enabled = setup.timing
         special.pset_pager("on" if setup.enable_pager else "off")
-        config: Any = ConfigObj(os.path.expanduser(str(setup.config_path)), interpolation=False, encoding="utf-8")
+
+        path = pathlib.Path(os.path.expanduser(str(setup.config_path)))
+        try:
+            contents = _cott_fixture_read(path)
+        except CottContractViolation as error:
+            if error.message == "fixture adapters are inactive":
+                config: Any = ConfigObj(str(path), interpolation=False, encoding="utf-8")
+            elif isinstance(error.__cause__, FileNotFoundError):
+                config = ConfigObj([], interpolation=False, encoding="utf-8")
+                config.filename = str(path)
+            elif isinstance(error.__cause__, OSError):
+                raise error.__cause__
+            else:
+                raise
+        else:
+            config = ConfigObj(contents.decode("utf-8").splitlines(keepends=True), interpolation=False, encoding="utf-8")
+            config.filename = str(path)
+
         named: Any = NamedQueries
         named.instance = named.from_config(config)
         no_query = cast(object, NO_QUERY)
@@ -39,15 +56,7 @@ def create_special_handle(setup: SpecialSetup) -> Result[Opaque[Literal["pgcli.p
         )
         for command, syntax, description, arg_type, case_sensitive, aliases in commands:
             handler: Callable[..., list[object]] = lambda *args, **kwargs: []
-            special.register(
-                handler,
-                command,
-                syntax,
-                description,
-                arg_type=arg_type,
-                case_sensitive=case_sensitive,
-                aliases=aliases,
-            )
+            special.register(handler, command, syntax, description, arg_type=arg_type, case_sensitive=case_sensitive, aliases=aliases)
         return Ok(value=Opaque(tag="pgcli.pgspecial", value=special))
     except Exception as error:
         return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))

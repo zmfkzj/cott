@@ -1916,6 +1916,21 @@ fn render_scenario(
     if scenario
         .fixtures
         .iter()
+        .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("random"))
+    {
+        return Err("random fixtures have no Kotlin runtime entropy authority".to_owned());
+    }
+    if scenario.fixtures.iter().any(|fixture| {
+        matches!(
+            fixture.get("kind").and_then(Value::as_str),
+            Some("database" | "socket")
+        )
+    }) {
+        return Err("database and socket fixtures have no Kotlin runtime authority".to_owned());
+    }
+    if scenario
+        .fixtures
+        .iter()
         .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("http"))
     {
         return Err(
@@ -2231,6 +2246,41 @@ fn render_scenario(
                 )
                 .unwrap();
             }
+            Some("unwrap_result" | "list_item") => {
+                let binding = quoted(local_name(
+                    step.get("binding")
+                        .and_then(Value::as_str)
+                        .ok_or("scenario extraction has no binding")?,
+                ));
+                let expression = expressions::render_scenario_expression(
+                    step.get("value")
+                        .ok_or("scenario extraction has no value")?,
+                    types,
+                )?;
+                let temporary = format!("_cott_extract_{step_id}");
+                writeln!(source, "            val {temporary} = {expression}").unwrap();
+                if step["kind"] == "unwrap_result" {
+                    let payload_type = types::render_type_contextual(
+                        step.get("return_type")
+                            .ok_or("scenario unwrap has no payload type")?,
+                        None,
+                        Some(types),
+                    )?;
+                    writeln!(source, "            check({temporary} is cott_runtime.Ok<*>) {{ \"scenario unwrap step:{step_id} expected Ok\" }}\n            val {binding} = {temporary}.value as {payload_type}").unwrap();
+                } else {
+                    let index = step
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .ok_or("scenario item has no u64 index")?;
+                    if index > i32::MAX as u64 {
+                        writeln!(source, "            check(false) {{ \"scenario item step:{step_id} index out of bounds\" }}\n            val {binding} = {temporary}[0]").unwrap();
+                    } else {
+                        writeln!(source, "            check({index} < {temporary}.size) {{ \"scenario item step:{step_id} index out of bounds\" }}").unwrap();
+                        writeln!(source, "            val {binding} = {temporary}[{index}]")
+                            .unwrap();
+                    }
+                }
+            }
             Some(other) => return Err(format!("unsupported scenario step `{other}`")),
             None => return Err("scenario step has no kind".to_owned()),
         }
@@ -2397,4 +2447,35 @@ fn kotlin_string(value: &str) -> String {
     }
     result.push('"');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_scenario_is_reported_unavailable_instead_of_authorized() {
+        let source = "module demo.main\n\nfn pick(value: Str) -> Str:\n    ensures result == value\n    effects [random]\n\nscenario seeded:\n    fixtures:\n        random order:\n            seed: 7\n    call picked = pick(\"a\")\n    assert picked == \"a\"\n";
+        let parsed = crate::compiler::parse_project([crate::compiler::SourceFile::new(
+            "demo/main.cott",
+            source,
+        )])
+        .expect("parse random fixture");
+        let hir =
+            crate::hir::lower(std::path::Path::new("src"), parsed).expect("lower random fixture");
+        let ir = crate::ir::render(&hir).expect("render random fixture IR");
+        let plan = KotlinPlan::from_ir(&ir).expect("project random fixture");
+        let verification = VerificationConfig::default();
+        let strategies = crate::contract_test::derive_strategies(&ir, &verification)
+            .expect("derive random strategies");
+        let program =
+            render(&plan, &strategies, &verification).expect("render random scenario runner");
+        assert_eq!(
+            program
+                .unavailable
+                .get("demo.main.scenario.seeded")
+                .map(String::as_str),
+            Some("random fixtures have no Kotlin runtime entropy authority")
+        );
+    }
 }

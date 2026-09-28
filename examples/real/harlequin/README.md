@@ -33,7 +33,7 @@ local databases. Remote adapters, external SQL services, clipboard and SSH
 integrations have not been exercised. Neither class of external test becomes
 scenario evidence.
 
-The verified snapshot records 143 observed contract clauses, 59 trusted
+The verified snapshot records 166 observed contract clauses, 36 trusted
 declarations, 0 unknown and 1 unobserved clause. `cott requirements` reports
 `CONNECT_RETAINS_A_LIVE_SESSION` as unverified because it has no `checked_by`
 linkage. The external retained-session regression exercises that behavior but
@@ -43,14 +43,14 @@ The strict coverage policy selects 88 clauses across 43 callables, including
 connection/query/result handling, transaction and cancellation errors, retained
 session requests, history persistence, exports, file failures and core CLI/IDE
 transformations. No `unobserved`, `trust_declaration` or `unknown` is allowed.
-Sol regeneration and actual `verify` resolved 24 of the previous 42 policy
-violations. The remaining 18 are trust declarations: 16 require a database
-fixture backend and two require a private Unix-socket peer and interruption
-control for `send_session_request`. The verifier certified the artifact snapshot
-but exited nonzero on those strict-policy violations; deployment remains blocked.
-External SQLite/DuckDB regressions do not replace the missing Cott observations.
-The current compiler can also classify contract `proved` evidence as `observed`;
-neither that status nor policy selection establishes execution of every branch.
+Sol regeneration and real `verify` now pass all 88 selected clauses (exit 0),
+resolving all 42 original policy violations. Database scenarios retain real
+SQLite sessions, cursors and transactions across facade calls and observe
+declared database failure boundaries. Private AF_UNIX peers exercise a complete
+response and real SIGINT/cancellation handling in `send_session_request`.
+External SQLite/DuckDB regressions remain separate evidence.
+Static proofs are reported separately and cannot satisfy execution coverage.
+Observed status and policy selection do not establish execution of every branch.
 
 The export facade scenario now writes every fetched row through the real SDK.
 DuckDB export connections use `threads=1`: the default host-sized worker pool
@@ -58,6 +58,13 @@ aborted under the runner's process/thread limit. The bounded connection passed
 the same sandbox constraints; no resource ceiling or coverage rule was relaxed.
 Generated callbacks use explicit `Callable` annotations to satisfy the pinned
 type checker without suppressions.
+Pending query cursors remain owned by the connection until `fetch_result`
+consumes and closes them; the new retained-session scenario exposed and repaired
+an earlier producer/consumer mismatch in that lifecycle. Native database/socket
+scenarios run in separate bounded sandbox processes so SDK caches and allocators
+do not accumulate across scenarios. Python executable provenance hashes are
+streamed on every check, preserving tamper detection without allocating the
+entire interpreter binary.
 
 ## Run
 

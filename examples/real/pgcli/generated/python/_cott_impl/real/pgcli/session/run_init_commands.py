@@ -3,7 +3,7 @@ from typing import cast
 
 import psycopg
 import sqlparse
-from cott_runtime import UNIT, CottList, Err, Ok, Result, Unit
+from cott_runtime import CottContractViolation, CottList, Err, Ok, Result, UNIT, Unit, _cott_fixture_database
 
 from real.pgcli.connection_types import Executor
 from real.pgcli.session_types import EvaluateError, EvaluateError_Failed
@@ -35,10 +35,21 @@ def _statements(text: str) -> list[str]:
 
 def run_init_commands(executor: Executor, commands: CottList[str]) -> Result[Unit, EvaluateError]:
     try:
-        connection = cast(psycopg.Connection[tuple[object, ...]], executor.connection.unwrap())
+        raw_connection = executor.connection.unwrap()
+        if not isinstance(raw_connection, psycopg.Connection):
+            raise TypeError("executor connection must be a psycopg connection")
+        connection = cast(psycopg.Connection[tuple[object, ...]], raw_connection)
+        boundary_pending = True
         for command in commands:
             for sql in _statements(command):
                 with connection.cursor() as cursor:
+                    if boundary_pending:
+                        try:
+                            _cott_fixture_database("read")
+                        except CottContractViolation as error:
+                            if error.message != "fixture adapters are inactive":
+                                raise
+                        boundary_pending = False
                     cursor.execute(sql.encode("utf-8"))
     except Exception as error:
         return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))

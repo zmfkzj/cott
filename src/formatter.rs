@@ -645,6 +645,10 @@ impl<'a> Printer<'a> {
                 self.push(3, format!("start_ms: {}", start_ms.value));
                 self.push(3, format!("tick_ms: {}", tick_ms.value));
             }
+            ScenarioFixtureConfig::Random { seed, .. } => {
+                self.push(2, format!("random {}:", fixture.name));
+                self.push(3, format!("seed: {}", seed.value));
+            }
             ScenarioFixtureConfig::Failure {
                 point,
                 occurrence,
@@ -655,6 +659,26 @@ impl<'a> Printer<'a> {
                 self.push(3, format!("point: {}", failure_point(point.kind)));
                 self.push(3, format!("occurrence: {}", occurrence.value));
                 self.push(3, format!("error: {}", failure_error(error.kind)));
+            }
+            ScenarioFixtureConfig::Database { backend, .. } => {
+                self.push(2, format!("database {}:", fixture.name));
+                self.push(3, format!("backend: {}", database_backend(backend.kind)));
+            }
+            ScenarioFixtureConfig::Socket {
+                path,
+                greeting,
+                response,
+                interrupt_after_request,
+                ..
+            } => {
+                self.push(2, format!("socket {}:", fixture.name));
+                self.push(3, format!("path: {}", serde_json::to_string(path).unwrap()));
+                self.push(3, format!("greeting: {}", self.scenario_data(greeting)));
+                self.push(3, format!("response: {}", self.scenario_data(response)));
+                self.push(
+                    3,
+                    format!("interrupt_after_request: {interrupt_after_request}"),
+                );
             }
         }
     }
@@ -741,6 +765,20 @@ impl<'a> Printer<'a> {
                 &format!("data {}: {} = ", binding.name, self.ty(ty)),
                 value,
                 "",
+            ),
+            ScenarioStep::Unwrap { binding, value, .. } => {
+                self.value_lines(1, &format!("unwrap {} = ", binding.name), value, "");
+            }
+            ScenarioStep::Item {
+                binding,
+                value,
+                index,
+                ..
+            } => self.value_lines(
+                1,
+                &format!("item {} = ", binding.name),
+                value,
+                &format!(" at {}", index.value),
             ),
         }
     }
@@ -1485,6 +1523,21 @@ const fn failure_point(point: crate::ast::ScenarioFailurePointKind) -> &'static 
         crate::ast::ScenarioFailurePointKind::HttpConnect => "http.connect",
         crate::ast::ScenarioFailurePointKind::HttpRead => "http.read",
         crate::ast::ScenarioFailurePointKind::ClockRead => "clock.read",
+        crate::ast::ScenarioFailurePointKind::DatabaseConnect => "database.connect",
+        crate::ast::ScenarioFailurePointKind::DatabaseRead => "database.read",
+        crate::ast::ScenarioFailurePointKind::DatabaseWrite => "database.write",
+        crate::ast::ScenarioFailurePointKind::DatabaseCommit => "database.commit",
+        crate::ast::ScenarioFailurePointKind::DatabaseRollback => "database.rollback",
+        crate::ast::ScenarioFailurePointKind::DatabaseClose => "database.close",
+        crate::ast::ScenarioFailurePointKind::DatabaseCancel => "database.cancel",
+    }
+}
+
+const fn database_backend(backend: crate::ast::ScenarioDatabaseBackendKind) -> &'static str {
+    match backend {
+        crate::ast::ScenarioDatabaseBackendKind::Sqlite => "sqlite",
+        crate::ast::ScenarioDatabaseBackendKind::Duckdb => "duckdb",
+        crate::ast::ScenarioDatabaseBackendKind::Postgres => "postgres",
     }
 }
 
@@ -1495,6 +1548,7 @@ const fn failure_error(error: crate::ast::ScenarioFailureErrorKind) -> &'static 
         crate::ast::ScenarioFailureErrorKind::DiskFull => "disk_full",
         crate::ast::ScenarioFailureErrorKind::Timeout => "timeout",
         crate::ast::ScenarioFailureErrorKind::ConnectionReset => "connection_reset",
+        crate::ast::ScenarioFailureErrorKind::Interrupted => "interrupted",
     }
 }
 
