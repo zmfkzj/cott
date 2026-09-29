@@ -1,21 +1,20 @@
 package cott_impl.real.posting.client
 
-private fun _mkUrl(scheme: String, authority: String, host: String, port: Int?, path: String, query: String?, fragment: String?): List<String?> =
-    listOf(scheme, authority, host, port?.toString(), path, query, fragment)
+private fun _mkUrl(scheme: String, host: String, port: Int?, path: String, query: String?): List<String?> =
+    listOf(scheme, host, port?.toString(), path, query)
 
 private fun _uScheme(u: List<String?>): String = u[0]!!
-private fun _uAuth(u: List<String?>): String = u[1]!!
-private fun _uHost(u: List<String?>): String = u[2]!!
-private fun _uPort(u: List<String?>): Int? = u[3]?.toInt()
-private fun _uPath(u: List<String?>): String = u[4]!!
-private fun _uQuery(u: List<String?>): String? = u[5]
+private fun _uHost(u: List<String?>): String = u[1]!!
+private fun _uPort(u: List<String?>): Int? = u[2]?.toInt()
+private fun _uPath(u: List<String?>): String = u[3]!!
+private fun _uQuery(u: List<String?>): String? = u[4]
+
+private fun _isTokenChar(c: Char): Boolean =
+    (c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || "!#$%&'*+-.^_`|~".indexOf(c) >= 0
 
 private fun _isToken(s: String): Boolean {
     if (s.isEmpty()) return false
-    for (c in s) {
-        val ok = (c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || "!#$%&'*+-.^_`|~".indexOf(c) >= 0
-        if (!ok) return false
-    }
+    for (c in s) if (!_isTokenChar(c)) return false
     return true
 }
 
@@ -47,6 +46,35 @@ private fun _methodName(m: real.posting.client.HttpMethod): String = when (m) {
     is real.posting.client.HttpMethod.Delete -> "DELETE"
     is real.posting.client.HttpMethod.Options -> "OPTIONS"
     is real.posting.client.HttpMethod.Custom -> m.name
+}
+
+private fun _removeDotSegments(path: String): String {
+    var input = path
+    val out = StringBuilder()
+    while (input.isNotEmpty()) {
+        if (input.startsWith("../")) {
+            input = input.substring(3)
+        } else if (input.startsWith("./")) {
+            input = input.substring(2)
+        } else if (input.startsWith("/./")) {
+            input = input.substring(2)
+        } else if (input == "/.") {
+            input = "/"
+        } else if (input.startsWith("/../") || input == "/..") {
+            input = if (input == "/..") "/" else input.substring(3)
+            val idx = out.lastIndexOf("/")
+            if (idx >= 0) out.setLength(idx) else out.setLength(0)
+        } else if (input == "." || input == "..") {
+            input = ""
+        } else {
+            val start = if (input.startsWith("/")) 1 else 0
+            val next = input.indexOf('/', start)
+            val end = if (next < 0) input.length else next
+            out.append(input, 0, end)
+            input = input.substring(end)
+        }
+    }
+    return out.toString()
 }
 
 private fun _parseUrl(url: String): List<String?>? {
@@ -87,18 +115,14 @@ private fun _parseUrl(url: String): List<String?>? {
     if (host.isEmpty()) return null
     var port: Int? = null
     if (portStr.isNotEmpty()) {
-        if (portStr.length > 5 || !portStr.all { it in '0'..'9' }) return null
-        val p = portStr.toInt()
-        if (p > 65535) return null
-        port = p
+        if (!portStr.all { it in '0'..'9' }) return null
+        val p = java.math.BigInteger(portStr)
+        if (p > java.math.BigInteger.valueOf(65535)) return null
+        port = p.toInt()
     }
-    var fragment: String? = null
     var beforeFrag = tail
     val hash = tail.indexOf('#')
-    if (hash >= 0) {
-        fragment = tail.substring(hash + 1)
-        beforeFrag = tail.substring(0, hash)
-    }
+    if (hash >= 0) beforeFrag = tail.substring(0, hash)
     var query: String? = null
     var path = beforeFrag
     val q = beforeFrag.indexOf('?')
@@ -106,7 +130,7 @@ private fun _parseUrl(url: String): List<String?>? {
         query = beforeFrag.substring(q + 1)
         path = beforeFrag.substring(0, q)
     }
-    return _mkUrl(scheme, authority, host, port, path, query, fragment)
+    return _mkUrl(scheme, host, port, path, query)
 }
 
 private fun _defaultPort(scheme: String): Int = if (scheme == "https") 443 else 80
@@ -118,36 +142,17 @@ private fun _sameOrigin(a: List<String?>, b: List<String?>): Boolean =
         _uHost(a).lowercase() == _uHost(b).lowercase() &&
         _effPort(a) == _effPort(b)
 
-private fun _removeDotSegments(path: String): String {
-    var input = path
-    val out = StringBuilder()
-    while (input.isNotEmpty()) {
-        if (input.startsWith("../")) {
-            input = input.substring(3)
-        } else if (input.startsWith("./")) {
-            input = input.substring(2)
-        } else if (input.startsWith("/./")) {
-            input = input.substring(2)
-        } else if (input == "/.") {
-            input = "/"
-        } else if (input.startsWith("/../") || input == "/..") {
-            input = if (input == "/..") "/" else input.substring(3)
-            val idx = out.lastIndexOf("/")
-            if (idx >= 0) out.setLength(idx) else out.setLength(0)
-        } else if (input == "." || input == "..") {
-            input = ""
-        } else {
-            val start = if (input.startsWith("/")) 1 else 0
-            val next = input.indexOf('/', start)
-            val end = if (next < 0) input.length else next
-            out.append(input, 0, end)
-            input = input.substring(end)
-        }
+private fun _authorityOf(url: String): String {
+    val rest = url.substring(url.indexOf("://") + 3)
+    var end = rest.length
+    for (i in rest.indices) {
+        val c = rest[i]
+        if (c == '/' || c == '?' || c == '#') { end = i; break }
     }
-    return out.toString()
+    return rest.substring(0, end)
 }
 
-private fun _resolve(base: List<String?>, ref: String): String? {
+private fun _resolve(baseUrl: String, base: List<String?>, ref: String): String? {
     if (!_urlCharsOk(ref)) return null
     var rest = ref
     var fragment: String? = null
@@ -193,7 +198,7 @@ private fun _resolve(base: List<String?>, ref: String): String? {
             tPath = _removeDotSegments(rest)
             tQuery = query
         } else {
-            tAuth = _uAuth(base)
+            tAuth = _authorityOf(baseUrl)
             if (rest.isEmpty()) {
                 tPath = basePath
                 tQuery = query ?: _uQuery(base)
@@ -217,7 +222,7 @@ private fun _resolve(base: List<String?>, ref: String): String? {
     return sb.toString()
 }
 
-private fun _readLine(input: java.io.InputStream): String {
+private fun _readLine(input: java.io.InputStream): ByteArray {
     val buf = java.io.ByteArrayOutputStream()
     while (true) {
         val b = input.read()
@@ -229,7 +234,7 @@ private fun _readLine(input: java.io.InputStream): String {
     val bytes = buf.toByteArray()
     var n = bytes.size
     if (n > 0 && bytes[n - 1] == '\r'.code.toByte()) n--
-    return String(bytes, 0, n, Charsets.ISO_8859_1)
+    return bytes.copyOf(n)
 }
 
 private fun _readExactly(input: java.io.InputStream, out: java.io.ByteArrayOutputStream, count: Long, limit: Long): Unit {
@@ -247,6 +252,100 @@ private fun _readExactly(input: java.io.InputStream, out: java.io.ByteArrayOutpu
 private fun _findHeader(headers: List<real.posting.client.Header>, name: String): String? {
     for (h in headers) if (h.name.equals(name, ignoreCase = true)) return h.value
     return null
+}
+
+private fun _decodeUtf8(bytes: ByteArray, strict: Boolean): String? {
+    val sb = StringBuilder(bytes.size)
+    var i = 0
+    val n = bytes.size
+    while (i < n) {
+        val b = bytes[i].toInt() and 0xFF
+        if (b < 0x80) {
+            sb.append(b.toChar())
+            i++
+            continue
+        }
+        var need = 0
+        var lo = 0x80
+        var hi = 0xBF
+        var mask = 0
+        if (b in 0xC2..0xDF) { need = 1; mask = 0x1F }
+        else if (b == 0xE0) { need = 2; mask = 0x0F; lo = 0xA0 }
+        else if (b == 0xED) { need = 2; mask = 0x0F; hi = 0x9F }
+        else if (b in 0xE1..0xEF) { need = 2; mask = 0x0F }
+        else if (b == 0xF0) { need = 3; mask = 0x07; lo = 0x90 }
+        else if (b in 0xF1..0xF3) { need = 3; mask = 0x07 }
+        else if (b == 0xF4) { need = 3; mask = 0x07; hi = 0x8F }
+        if (need == 0) {
+            if (strict) return null
+            sb.append('\uFFFD')
+            i++
+            continue
+        }
+        var cp = b and mask
+        var j = i + 1
+        var ok = true
+        for (k in 0 until need) {
+            if (j >= n) { ok = false; break }
+            val c = bytes[j].toInt() and 0xFF
+            val l = if (k == 0) lo else 0x80
+            val h = if (k == 0) hi else 0xBF
+            if (c < l || c > h) { ok = false; break }
+            cp = (cp shl 6) or (c and 0x3F)
+            j++
+        }
+        if (ok) {
+            sb.appendCodePoint(cp)
+        } else {
+            if (strict) return null
+            sb.append('\uFFFD')
+        }
+        i = j
+    }
+    return sb.toString()
+}
+
+private fun _decodeHeaderBlock(raw: List<Pair<ByteArray, ByteArray>>): List<real.posting.client.Header> {
+    var ascii = true
+    for (p in raw) {
+        for (b in p.first) if (b < 0) ascii = false
+        for (b in p.second) if (b < 0) ascii = false
+    }
+    val out = ArrayList<real.posting.client.Header>()
+    if (ascii) {
+        for (p in raw) out.add(real.posting.client.Header(String(p.first, Charsets.ISO_8859_1), String(p.second, Charsets.ISO_8859_1)))
+        return out
+    }
+    var utf8Ok = true
+    for (p in raw) {
+        if (_decodeUtf8(p.second, true) == null) { utf8Ok = false; break }
+    }
+    for (p in raw) {
+        val name = String(p.first, Charsets.ISO_8859_1)
+        if (utf8Ok) out.add(real.posting.client.Header(name, _decodeUtf8(p.second, true)!!))
+        else out.add(real.posting.client.Header(name, String(p.second, Charsets.ISO_8859_1)))
+    }
+    return out
+}
+
+private fun _trimSpHt(b: ByteArray): ByteArray {
+    var s = 0
+    var e = b.size
+    while (s < e && (b[s] == 0x20.toByte() || b[s] == 0x09.toByte())) s++
+    while (e > s && (b[e - 1] == 0x20.toByte() || b[e - 1] == 0x09.toByte())) e--
+    return b.copyOfRange(s, e)
+}
+
+private fun _parseChunkSize(line: ByteArray): Long {
+    var p = 0
+    while (p < line.size && _isHex((line[p].toInt() and 0xFF).toChar())) p++
+    if (p == 0) throw java.io.IOException("bad chunk size")
+    val digits = String(line, 0, p, Charsets.ISO_8859_1)
+    while (p < line.size && (line[p] == 0x20.toByte() || line[p] == 0x09.toByte())) p++
+    if (p < line.size && line[p] != ';'.code.toByte()) throw java.io.IOException("bad chunk size")
+    val stripped = digits.trimStart('0')
+    if (stripped.length > 15) throw java.io.IOException("body too large")
+    return if (stripped.isEmpty()) 0L else stripped.toLong(16)
 }
 
 private fun _fetch(
@@ -276,7 +375,7 @@ private fun _fetch(
             ssl.soTimeout = timeoutMs
             ssl.startHandshake()
         }
-        val uPath = _uPath(u)
+        val uPath = _removeDotSegments(_uPath(u))
         val uQuery = _uQuery(u)
         val path = (if (uPath.isEmpty()) "/" else uPath) + (if (uQuery != null) "?" + uQuery else "")
         val bodyBytes = body.toByteArray(Charsets.UTF_8)
@@ -295,37 +394,41 @@ private fun _fetch(
         if (_findHeader(headers, "Connection") == null) head.append("Connection: close\r\n")
         head.append("\r\n")
         val out = socket.getOutputStream()
-        out.write(head.toString().toByteArray(Charsets.UTF_8))
+        out.write(head.toString().toByteArray(Charsets.ISO_8859_1))
         if (bodyBytes.isNotEmpty()) out.write(bodyBytes)
         out.flush()
 
         val input = java.io.BufferedInputStream(socket.getInputStream())
+        val statusRe = Regex("^HTTP/1\\.[0-9] ([0-9]{3})(?: .*)?$", RegexOption.DOT_MATCHES_ALL)
         while (true) {
-            val line = _readLine(input)
-            val sm = Regex("^HTTP/1\\.[0-9] ([0-9]{3})(?: .*)?$").find(line) ?: throw java.io.IOException("bad status line")
+            val line = String(_readLine(input), Charsets.ISO_8859_1)
+            val sm = statusRe.find(line) ?: throw java.io.IOException("bad status line")
             val status = sm.groupValues[1].toInt()
-            val hdrs = ArrayList<real.posting.client.Header>()
+            val raw = ArrayList<Pair<ByteArray, ByteArray>>()
             while (true) {
                 val l = _readLine(input)
                 if (l.isEmpty()) break
-                val idx = l.indexOf(':')
-                if (idx < 0) throw java.io.IOException("bad header")
-                hdrs.add(real.posting.client.Header(l.substring(0, idx), l.substring(idx + 1).trim()))
+                var idx = -1
+                for (k in l.indices) if (l[k] == ':'.code.toByte()) { idx = k; break }
+                if (idx <= 0) throw java.io.IOException("bad header")
+                for (k in 0 until idx) {
+                    val c = l[k].toInt()
+                    if (c < 0 || !_isTokenChar(c.toChar())) throw java.io.IOException("bad header name")
+                }
+                raw.add(Pair(l.copyOfRange(0, idx), _trimSpHt(l.copyOfRange(idx + 1, l.size))))
             }
-            if (status in 100..199 && status != 101) continue
+            if (status == 101) throw java.io.IOException("unexpected upgrade")
+            if (status in 100..199) continue
             if (status < 100 || status > 599) throw java.io.IOException("status out of range")
+            val hdrs = _decodeHeaderBlock(raw)
             val bodyOut = java.io.ByteArrayOutputStream()
-            val noBody = method == "HEAD" || status in 100..199 || status == 204 || status == 304
+            val noBody = method == "HEAD" || status == 204 || status == 304
             if (!noBody) {
                 val te = _findHeader(hdrs, "Transfer-Encoding")
                 val cl = _findHeader(hdrs, "Content-Length")
                 if (te != null && te.lowercase().contains("chunked")) {
                     while (true) {
-                        val sizeLine = _readLine(input)
-                        val semi = sizeLine.indexOf(';')
-                        val hex = (if (semi >= 0) sizeLine.substring(0, semi) else sizeLine).trim()
-                        val size = hex.toLongOrNull(16) ?: throw java.io.IOException("bad chunk size")
-                        if (size < 0) throw java.io.IOException("bad chunk size")
+                        val size = _parseChunkSize(_readLine(input))
                         if (size == 0L) {
                             while (_readLine(input).isNotEmpty()) { }
                             break
@@ -334,9 +437,11 @@ private fun _fetch(
                         if (_readLine(input).isNotEmpty()) throw java.io.IOException("bad chunk")
                     }
                 } else if (cl != null) {
-                    val n = cl.trim().toLongOrNull() ?: throw java.io.IOException("bad content-length")
-                    if (n < 0) throw java.io.IOException("bad content-length")
-                    _readExactly(input, bodyOut, n, limit)
+                    val t = cl.trim()
+                    if (t.isEmpty() || !t.all { it in '0'..'9' }) throw java.io.IOException("bad content-length")
+                    val big = java.math.BigInteger(t)
+                    if (big > java.math.BigInteger.valueOf(limit)) throw java.io.IOException("body too large")
+                    _readExactly(input, bodyOut, big.toLong(), limit)
                 } else {
                     val chunk = ByteArray(8192)
                     while (true) {
@@ -355,51 +460,6 @@ private fun _fetch(
     }
 }
 
-private fun _decodeUtf8(bytes: ByteArray): String {
-    val sb = StringBuilder(bytes.size)
-    var i = 0
-    val n = bytes.size
-    while (i < n) {
-        val b = bytes[i].toInt() and 0xFF
-        if (b < 0x80) {
-            sb.append(b.toChar())
-            i++
-            continue
-        }
-        var need = 0
-        var lo = 0x80
-        var hi = 0xBF
-        var mask = 0
-        if (b in 0xC2..0xDF) { need = 1; mask = 0x1F }
-        else if (b == 0xE0) { need = 2; mask = 0x0F; lo = 0xA0 }
-        else if (b == 0xED) { need = 2; mask = 0x0F; hi = 0x9F }
-        else if (b in 0xE1..0xEF) { need = 2; mask = 0x0F }
-        else if (b == 0xF0) { need = 3; mask = 0x07; lo = 0x90 }
-        else if (b in 0xF1..0xF3) { need = 3; mask = 0x07 }
-        else if (b == 0xF4) { need = 3; mask = 0x07; hi = 0x8F }
-        if (need == 0) {
-            sb.append('\uFFFD')
-            i++
-            continue
-        }
-        var cp = b and mask
-        var j = i + 1
-        var ok = true
-        for (k in 0 until need) {
-            if (j >= n) { ok = false; break }
-            val c = bytes[j].toInt() and 0xFF
-            val l = if (k == 0) lo else 0x80
-            val h = if (k == 0) hi else 0xBF
-            if (c < l || c > h) { ok = false; break }
-            cp = (cp shl 6) or (c and 0x3F)
-            j++
-        }
-        if (ok) sb.appendCodePoint(cp) else sb.append('\uFFFD')
-        i = j
-    }
-    return sb.toString()
-}
-
 internal fun send_request(request: real.posting.client.Request): cott_runtime.CottResult<real.posting.client.Response, real.posting.client.PostingError> {
     if (request.timeout_ms == 0u) {
         return cott_runtime.Err(real.posting.client.PostingError.InvalidRequest("timeout_ms must be positive"))
@@ -410,8 +470,10 @@ internal fun send_request(request: real.posting.client.Request): cott_runtime.Co
         if (h.name.isBlank() || !_isToken(h.name)) {
             return cott_runtime.Err(real.posting.client.PostingError.InvalidRequest("invalid header name"))
         }
-        if (h.value.indexOf('\r') >= 0 || h.value.indexOf('\n') >= 0) {
-            return cott_runtime.Err(real.posting.client.PostingError.InvalidRequest("invalid header value"))
+        for (c in h.value) {
+            if (c == '\r' || c == '\n' || c.code > 0x7F) {
+                return cott_runtime.Err(real.posting.client.PostingError.InvalidRequest("invalid header value"))
+            }
         }
     }
     val m = request.method
@@ -429,9 +491,10 @@ internal fun send_request(request: real.posting.client.Request): cott_runtime.Co
         while (true) {
             val (status, rh, bytes) = _fetch(name, cur, headers, request.body, timeoutMs)
             if (follows && redirects < 10 && (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)) {
-                val location = _findHeader(rh, "Location")
-                if (location != null) {
-                    val resolved = _resolve(cur, location)
+                val locs = rh.filter { it.name.equals("Location", ignoreCase = true) }
+                if (locs.isNotEmpty()) {
+                    val location = locs.joinToString(", ") { it.value }
+                    val resolved = _resolve(url, cur, location)
                     val next = if (resolved != null) _parseUrl(resolved) else null
                     if (resolved != null && next != null && !(_uScheme(cur) == "https" && _uScheme(next) == "http")) {
                         if (!_sameOrigin(cur, next)) {
@@ -452,7 +515,7 @@ internal fun send_request(request: real.posting.client.Request): cott_runtime.Co
                     status.toUShort(),
                     url,
                     cott_runtime.CottList(rh),
-                    _decodeUtf8(bytes),
+                    _decodeUtf8(bytes, false)!!,
                 )
             )
         }

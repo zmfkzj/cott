@@ -1,206 +1,82 @@
 #!/usr/bin/env python3
-"""The differential case table.
+"""The differential case table: the contract rules R1-R7 and the general behavior (this file) and the decisions D1-D14
+(decisions.py), built with the helpers of casekit.py.
 
-Every expected value here is derived from the contract text (client.cott, send_request rules) or computed by the
-independent oracles in oracle.py (RFC 3986 resolution, Unicode Table 3-7/3-8 decoding, URL-character validity,
-request target and Host derivation).  None is copied from an implementation's output.  A case with ``expect`` must
-be met by BOTH implementations; a case tagged ``edge`` has no ``expect`` because the contract leaves that behavior
-open, so only Python/Kotlin agreement is checked for it.
+Every expected value is derived from the contract text (client.cott, send_request) or computed by the independent
+oracles in oracle.py (RFC 3986 resolution, Unicode Table 3-7/3-8 decoding, URL-character validity, request target, Host
+and port derivation, header-block decoding).  None is copied from an implementation's output.  Every case carries an
+``expect`` that BOTH implementations must meet.
 
     python3 cases.py             per-group counts
     python3 cases.py --write F   dump the case list as JSON
     python3 cases.py --list      case ids and tags
-
-Case fields: ``id`` (unique, ``fn/...``), ``fn``, the inputs of that function, and optionally ``expect`` (assertions
-over the normalized result, see README.md), ``ignore`` (result paths excluded from the Python/Kotlin comparison
-because the contract does not define them), ``tags`` (slow, edge, ipv6, port80), ``deadline_s``, ``body_digest``, ``note``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import string
 import sys
 from collections import Counter
 
+import casekit
+from casekit import (
+    ABSENT,
+    CREDS,
+    CREDS_NO_HOST,
+    INVALID,
+    INVALID_ARGS,
+    KEPT_ALL,
+    LIMIT,
+    NETWORK,
+    OK,
+    STANDARD,
+    TCHAR_PUNCT,
+    TCHARS,
+    VIOLATION,
+    add,
+    alternating,
+    concrete,
+    contains,
+    cp,
+    custom,
+    echo,
+    execute,
+    followed_echo,
+    mirror,
+    ok,
+    place,
+    redir,
+    render,
+    resolved,
+    rules,
+    send,
+    stripped,
+)
+from decisions import GROUPS as DECISION_GROUPS
 from oracle import (
     INVALID_PRINTABLE,
     RFC_ABNORMAL,
     RFC_BASE,
     RFC_NORMAL,
-    STAND_INS,
     TABLE_3_8_BYTES,
     VALID_PRINTABLE,
     decode_utf8,
+    expected_headers,
     followable,
     host_header,
     origin,
-    parse,
-    recompose,
     request_target,
-    resolve_ref,
     url_characters_valid,
 )
-
-CASES: list[dict] = []
-_IDS: set[str] = set()
-
-ABSENT = {"$absent": True}
-OK = {"tag": "Ok"}
-INVALID = {"tag": "Err", "error.variant": "InvalidRequest"}
-NETWORK = {"tag": "Err", "error.variant": "NetworkFailed"}
-INVALID_ARGS = {"tag": "Err", "error.variant": "InvalidArguments"}
-VIOLATION = {"tag": "Violation", "phase": "validation"}
-
-
-def contains(*parts):
-    """Assertion for a string result: every part occurs in it."""
-    return {"$contains": list(parts)}
-
-STANDARD = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-TCHAR_PUNCT = "!#$%&'*+-.^_`|~"
-TCHARS = string.ascii_letters + string.digits + TCHAR_PUNCT
-LIMIT = 67108864
-
-
-# ---- building blocks ------------------------------------------------------------------------------------------
-
-
-def add(ident, fn, *, tags=(), expect=None, ignore=None, note=None, deadline=None, digest=False, **inputs):
-    assert ident not in _IDS, f"duplicate case id {ident}"
-    assert ident.split("/", 1)[0] == fn, f"case id {ident} must start with {fn}/"
-    assert not ("edge" in tags and expect), f"{ident}: an edge case has no contract expectation"
-    assert expect or "edge" in tags, f"{ident}: needs an expect or the edge tag"
-    _IDS.add(ident)
-    case = {"id": ident, "fn": fn, **inputs}
-    if digest:
-        case["body_digest"] = True
-    if deadline:
-        case["deadline_s"] = deadline
-    if tags:
-        case["tags"] = list(tags)
-    if expect:
-        case["expect"] = expect
-    if ignore:
-        case["ignore"] = list(ignore)
-    if note:
-        case["note"] = note
-    CASES.append(case)
-
-
-def custom(name):
-    return {"variant": "Custom", "name": name}
-
-
-def send(ident, method="Get", url="{A}/text", headers=(), body="", timeout=5000, **kw):
-    request = {"method": method, "url": url, "headers": [list(h) for h in headers], "body": body, "timeout_ms": timeout}
-    add(ident, "send_request", request=request, **kw)
-
-
-def execute(ident, arguments, **kw):
-    add(ident, "execute", arguments=arguments, **kw)
-
-
-def render(ident, status=200, url="http://api.example/", headers=(), body="", **kw):
-    add(ident, "render_response", response={"status": status, "url": url, "headers": [list(h) for h in headers], "body": body}, **kw)
-
-
-def cp(text):
-    return "-".join(f"U+{ord(ch):04X}" for ch in text)
-
-
-def ok(**fields):
-    """ok(status=200, url=..., body=...) -> assertions on an Ok response."""
-    return {"tag": "Ok", **{f"value.{key}": value for key, value in fields.items()}}
-
-
-def echo(*, method=None, version=None, target=None, host=None, hdr=None, body=None, body_bytes=None, order=None,
-         order_no_host=None, url=None, status=200, extra=None):
-    """Assertions on the ``echo`` route's JSON body (see server.py) and the response around it."""
-    expect = {"tag": "Ok", "value.status": status}
-    if url is not None:
-        expect["value.url"] = url
-
-    def put(key, value):
-        expect["value.body.@json." + key] = value
-
-    if method is not None:
-        put("method", method)
-    if version is not None:
-        put("version", version)
-    if target is not None:
-        put("target", target)
-    if host is not None:
-        put("headers.host", [host])
-    for name, values in (hdr or {}).items():
-        put("headers." + name, values)
-    if body is not None:
-        put("body", body)
-    if body_bytes is not None:
-        put("body_bytes", body_bytes)
-    if order is not None:
-        put("order", order)
-    if order_no_host is not None:
-        put("order_no_host", order_no_host)
-    if extra:
-        expect.update(extra)
-    return expect
-
-
-def stripped(new_host, kept=("x-keep", ["yes"])):
-    """The credential rule applied: the four headers gone, Host replaced by the URL's own, others kept."""
-    return {"host": [new_host], kept[0]: kept[1], "authorization": ABSENT, "cookie": ABSENT, "proxy-authorization": ABSENT}
-
-
-def pct(text, safe=""):
-    out = []
-    for ch in text:
-        if ch.isascii() and (ch.isalnum() or ch in "-._~" or ch in safe):
-            out.append(ch)
-        else:
-            out.extend(f"%{byte:02X}" for byte in ch.encode("utf-8"))
-    return "".join(out)
-
-
-_PLACEHOLDER = re.compile(r"(\{[A-Z0-9_]+\})")
-
-
-def enc(text, safe=":/"):
-    """Percent-encode a query value for use in a case URL, leaving {PLACEHOLDER} tokens for the drivers."""
-    return "".join(part if _PLACEHOLDER.fullmatch(part) else pct(part, safe) for part in _PLACEHOLDER.split(text))
-
-
-def concrete(text):
-    return STAND_INS.concrete(text)
-
-
-def place(text):
-    return STAND_INS.abstract(text)
-
-
-def resolved(base, reference):
-    """(final URL as placeholder text, the resolved reference) for a case URL and a Location value."""
-    target = resolve_ref(parse(concrete(base)), parse(concrete(reference)))
-    return place(recompose(target)), target
-
-
-def mirror(ident, ref, at=None, more=()):
-    headers = [("X-Mirror", "ref=" + ref), ("X-Mirror-Id", ident)]
-    if at:
-        headers.append(("X-Mirror-At", at))
-    return headers + list(more)
-
-
-def alternating(text, upper_first):
-    return "".join(ch.upper() if (index % 2 == 0) == upper_first else ch.lower() for index, ch in enumerate(text))
 
 
 # ---- parse_method ---------------------------------------------------------------------------------------------
 
 
 def group_parse_method():
+    rules("methods")
     for method in STANDARD:
         forms = {
             "upper": method, "lower": method.lower(), "title": method.capitalize(),
@@ -258,6 +134,7 @@ def group_parse_method():
 
 
 def group_parse_arguments():
+    rules("arguments")
     url = "http://example.test/items"
     ok_request = {"tag": "Ok", "value.headers.#": 0, "value.timeout_ms": 30000}
     add("parse_arguments/zero-arguments", "parse_arguments", arguments=[], expect=INVALID_ARGS)
@@ -297,6 +174,7 @@ def group_parse_arguments():
 
 
 def group_render_response():
+    rules("render")
     def rendered(status, url, headers, body):
         lines = [f"{status} {url}"] + [f"{name}: {value}" for name, value in headers] + ["", body]
         return {"tag": "Str", "value": "\n".join(lines)}
@@ -331,6 +209,7 @@ def group_render_response():
 
 
 def group_violations():
+    rules("boundary")
     note = "a Str holding a lone UTF-16 surrogate is a boundary contract violation in both runtimes, before any implementation code runs"
     for name, source in {"high": "\ud800", "low": "\udc00", "reversed-pair": "\udc00\ud800", "after-token": "GET\ud800",
                          "inside-custom-token": "PUR\udbffGE"}.items():
@@ -356,6 +235,7 @@ def group_violations():
 
 
 def group_invalid_request():
+    rules("invalid-request")
     n = "{N}/text"
     send("send_request/invalid-timeout-zero", url=n, timeout=0, expect=INVALID)
     send("send_request/invalid-timeout-zero-post-body", "Post", n, body="x", timeout=0, expect=INVALID)
@@ -408,6 +288,7 @@ def group_invalid_request():
 
 def group_url_characters():
     """Rule 1: every character outside the URL set, and every malformed %HH, is InvalidRequest; the whole set is not."""
+    rules("R1")
     bad_percent = {
         "lone": "%", "one-digit": "%4", "non-hex-pair": "%zz", "hex-then-non-hex": "%4g", "non-hex-then-hex": "%g4",
         "double": "%%41", "arabic-indic-digits": "%\u0664\u0664", "fullwidth-digits": "%\uff14\uff11", "sign": "%+1",
@@ -472,6 +353,7 @@ def group_url_characters():
 
 
 def group_target_and_host():
+    rules("R2")
     for ident, url, target in [
         ("path-root", "{A}/", "/"), ("path-empty", "{A}", "/"), ("path-empty-with-query", "{A}?x=1", "/?x=1"),
         ("path-empty-with-empty-query", "{A}?", "/?"), ("path-empty-with-fragment", "{A}#frag", "/"),
@@ -486,6 +368,7 @@ def group_target_and_host():
     send("send_request/target-http-version", url="{A}/echo", expect=echo(version="HTTP/1.1", method="GET", target="/echo"),
          note="Send one HTTP/1.1 request")
     send("send_request/target-query-value-with-hash-escape", url="{A}/echo?a=%23b#c", expect=echo(target="/echo?a=%23b"))
+    rules("R3")
     for ident, url in [
         ("default", "{A}/echo"), ("uppercase-host", "http://LOCALHOST:{A_PORT}/echo"), ("mixed-case-host", "http://LocalHost:{A_PORT}/echo"),
         ("userinfo", "http://user:pw@{A_HOST}/echo"), ("userinfo-empty", "http://:@{A_HOST}/echo"),
@@ -514,6 +397,7 @@ def group_target_and_host():
 
 
 def group_exchanges():
+    rules("exchange")
     send("send_request/get-text", expect={**ok(status=200, url="{A}/text", body="hello world"), "value.headers.#": 3,
                                           "value.headers.0.name": "Content-Type", "value.headers.0.value": "text/plain; charset=utf-8"})
     send("send_request/get-unicode-body", url="{A}/unicode", expect=ok(status=200, body="h\u00e9llo w\u00f6rld \u2014 \u65e5\u672c\u8a9e \U0001f600\n"))
@@ -595,25 +479,9 @@ def group_exchanges():
 
 # ---- redirects --------------------------------------------------------------------------------------------------
 
-CREDS = [("Authorization", "Bearer s3cret"), ("Cookie", "sid=1"), ("Proxy-Authorization", "Basic eHl6"), ("Host", "custom.example"), ("X-Keep", "yes")]
-CREDS_NO_HOST = [header for header in CREDS if header[0] != "Host"]
-KEPT_ALL = {"authorization": ["Bearer s3cret"], "cookie": ["sid=1"], "proxy-authorization": ["Basic eHl6"], "x-keep": ["yes"]}
-
-
-def redir(path, ref, status=302, extra=""):
-    return f"{{A}}{path}?status={status}&to={enc(ref)}{extra}"
-
-
-def followed_echo(ident, url, ref, headers=(), **kw):
-    """A followed redirect answered by the echo route; every expectation comes from the oracle."""
-    final, target = resolved(url, ref)
-    assert followable(target), (url, ref)
-    wire = request_target(concrete(final))
-    assert wire != request_target(concrete(url)), f"{ident}: the resolved target equals the base's; use mirror()"
-    send(ident, url=url, headers=list(headers) + [("X-Echo", "1")], expect=echo(target=wire, url=final), **kw)
-
 
 def group_redirects():
+    rules("redirects")
     followed = ok(status=200, url="{A}/text", body="hello world")
     for code in (301, 302, 303, 307, 308):
         send(f"send_request/redirect-{code}-get-followed", url=f"{{A}}/redir?status={code}&to=/text", expect=followed)
@@ -676,6 +544,7 @@ def group_redirects():
 
 def group_origins():
     """Rule 5 and the credential rule."""
+    rules("R5")
     send("send_request/redirect-cross-origin-port-strips-credentials", url="{A}/x-out", headers=CREDS,
          expect=echo(url="{B}/echo", target="/echo", hdr=stripped("{B_HOST}")),
          note="Authorization, Cookie, Proxy-Authorization and Host are not sent to the new origin; Host is replaced by the URL's own host; X-Keep is kept")
@@ -712,6 +581,7 @@ def group_origins():
 
 
 def group_resolution():
+    rules("R4")
     base = "{A}/b/c/d;p?q"
 
     def mirrored(ident, base_url, ref, at=None, more=(), **kw):
@@ -780,15 +650,13 @@ def group_resolution():
 
 def group_invalid_locations():
     """A Location with a character outside the URL set (or a malformed %HH) is not followed: the 3xx is returned."""
-    def add_location(ident, raw: bytes, *, ascii_only=True, **kw):
+    rules("R4")
+
+    def add_location(ident, raw: bytes, **kw):
         url = "{A}/redir?status=302&to_hex=" + raw.hex()
-        expect = {**ok(status=302, url=url), "value.body": "redirecting\n", "value.headers.0.name": "Location"}
-        ignore = None
-        if ascii_only:
-            expect["value.headers.0.value"] = raw.decode("ascii")
-        else:
-            ignore = ["value.headers"]
-        send(ident, url=url, headers=[("X-Echo", "1")], expect=expect, ignore=ignore, **kw)
+        lines = [b"Location: " + raw, b"Content-Type: text/plain; charset=utf-8", b"Content-Length: 12", b"Connection: close"]
+        send(ident, url=url, headers=[("X-Echo", "1")],
+             expect={**ok(status=302, url=url, body="redirecting\n"), "value.headers": expected_headers(lines)}, **kw)
 
     for ch in INVALID_PRINTABLE + " ":
         text = "/ec" + ch + "ho"
@@ -796,21 +664,20 @@ def group_invalid_locations():
         add_location(f"send_request/location-invalid-{cp(ch)}", text.encode("ascii"))
     add_location("send_request/location-invalid-U+0009-tab", b"/ec\tho")
     for label, raw in {"latin1-e9": b"/ec\xe9ho", "utf8-c3a9": b"/ec\xc3\xa9ho", "utf8-emoji": b"/ec\xf0\x9f\x98\x80ho", "utf8-fullwidth-solidus": b"/ec\xef\xbc\x8fho"}.items():
-        add_location(f"send_request/location-invalid-non-ascii-{label}", raw, ascii_only=False,
-                     note="the contract does not say how response header bytes >= 0x80 decode, so Response.headers is not compared")
+        add_location(f"send_request/location-invalid-non-ascii-{label}", raw, rule="D6",
+                     note="the Location bytes are not URL characters, so the 3xx is returned; the values of its header block are decoded as a whole (ASCII, else valid UTF-8, else ISO-8859-1)")
     for label, text in {"lone": "/ec%ho", "one-digit": "/ec%4ho", "non-hex-pair": "/ec%zzho", "double": "/ec%%41ho", "at-end": "/echo%",
                         "one-digit-at-end": "/echo%4", "absolute-with-bad-percent": "http://{A_HOST}/echo%zz"}.items():
         add_location(f"send_request/location-invalid-percent-{label}", text.encode("ascii"))
     send("send_request/location-valid-percent-followed-verbatim", url="{A}/redir?status=302&to=/ec%2568o", headers=[("X-Echo", "1")],
          expect=echo(target="/ec%68o", url="{A}/ec%68o"), note="a well-formed %68 stays as written")
-    send("send_request/edge-location-invalid-first-of-two-headers", url="{A}/redir?status=302&to_hex=" + b"/e cho".hex() + "&dup=/text",
-         headers=[("X-Echo", "1")], tags=["edge"], note="two Location headers, the first invalid: the contract does not say which one counts")
 
 
 # ---- decoding ---------------------------------------------------------------------------------------------------
 
 
 def group_decoding():
+    rules("R6")
     def body(ident, raw: bytes, **kw):
         text = decode_utf8(raw)
         send(ident, url="{A}/binary?hex=" + raw.hex(), expect=ok(status=200, body=text), **kw)
@@ -883,6 +750,7 @@ def group_decoding():
 
 
 def group_failures():
+    rules("R7")
     note7 = "a connection closed before the empty line that ends the header block, before all Content-Length bytes, or before the terminating chunk is NetworkFailed; no partial Response"
     send("send_request/fail-connection-dropped", url="{A}/drop", expect=NETWORK)
     send("send_request/fail-connection-dropped-head", "Head", "{A}/drop", expect=NETWORK)
@@ -931,6 +799,7 @@ def group_failures():
 
 
 def group_execute():
+    rules("execute")
     text = "200 {A}/text\nContent-Type: text/plain; charset=utf-8\nContent-Length: 11\nConnection: close\n\nhello world"
     execute("execute/get-text", ["get", "{A}/text"], expect={**OK, "value": text})
     execute("execute/get-upper", ["GET", "{A}/text"], expect={**OK, "value": text})
@@ -976,6 +845,7 @@ def group_execute():
 
 
 def group_ipv6():
+    rules("listeners")
     tag = ["ipv6"]
     send("send_request/ipv6-host-header-keeps-brackets", url="{V6}/echo", tags=tag,
          expect=echo(host="{V6_HOST}", target="/echo", url="{V6}/echo"), note="an IPv6 literal keeps its brackets in Host, with the non-default port")
@@ -996,6 +866,7 @@ def group_ipv6():
 
 
 def group_port80():
+    rules("listeners")
     tag = ["port80"]
     note = "127.0.0.1:80 is reachable only where the port can be bound (a private network namespace); see README.md"
     for ident, url, host in [
@@ -1024,61 +895,27 @@ def group_port80():
              expect=echo(url=final, hdr=expected), note="the port is compared after applying the scheme default (80 for http)")
 
 
-# ---- behavior the contract leaves open --------------------------------------------------------------------------
-
-
-def group_edge():
-    send("send_request/edge-custom-head-method-response-has-no-body", custom("HEAD"), "{A}/text", timeout=1500, tags=["edge"],
-         note="Custom(\"HEAD\") is sent as HEAD; whether the client then treats the response as body-less (HTTP/1.1) or waits for the announced 11 bytes is not stated")
-    for ident, url in [("dot-segment", "{A}/./echo"), ("dot-dot-segment", "{A}/a/../echo"), ("mixed", "{A}/a/./b/../echo")]:
-        send(f"send_request/edge-initial-url-dot-segments-{ident}", url=url, tags=["edge"],
-             note="RFC 3986 5.2.4 is stated for Location resolution only: whether the initial URL's dot segments are sent as written is not stated")
-    send("send_request/edge-location-two-headers", url="{A}/redir?status=302&to=/echo&dup=/text", tags=["edge"], note="two Location headers: which one is used is not stated")
-    for ident, ref in [("uppercase-scheme", "HTTP://{A_HOST}/echo"), ("mixed-case-scheme", "Http://{A_HOST}/echo")]:
-        send(f"send_request/edge-location-{ident}", url=f"{{A}}/redir?status=302&to={enc(ref)}", tags=["edge"], headers=[("X-Echo", "1")],
-             note="the URL rule requires a lower-case http:// for the request URL; whether a Location spelled HTTP:// is followed, and how Response.url spells its scheme, is not stated")
-    send("send_request/edge-response-header-values-with-outer-whitespace", url="{A}/hdr-ows", tags=["edge"],
-         note="leading/trailing SP and HTAB around a received header value: trimmed (RFC 9110) or kept is not stated")
-    send("send_request/edge-response-header-bytes-above-0x7f", url="{A}/hdr-nonascii", tags=["edge"],
-         note="how received header bytes >= 0x80 decode (Latin-1 or UTF-8) is not stated")
-    send("send_request/edge-interim-102-response-before-final", url="{A}/interim", tags=["edge"], note="an interim 1xx response before the final one is not mentioned")
-    send("send_request/edge-expect-100-continue-interim-response", "Post", "{A}/echo", [("Expect", "100-continue")], "hello", tags=["edge"],
-         note="the server answers 100 Continue first; interim responses are not mentioned")
-    send("send_request/edge-status-line-without-reason-phrase", url="{A}/status-line?hex=" + b"HTTP/1.1 200".hex(), tags=["edge"],
-         note="HTTP/1.1 200 with no reason phrase (and no trailing space): is it an HTTP/1.x status line?")
-    send("send_request/edge-chunk-extension-and-trailer", url="{A}/chunk-ext", tags=["edge"], note="chunk extensions and trailer fields: ignored, or trailers reported as headers, is not stated")
-    send("send_request/edge-chunk-size-not-hexadecimal", url="{A}/chunk-bad-size", tags=["edge"], note="malformed chunk framing is not one of the listed NetworkFailed causes")
-    send("send_request/edge-closed-after-last-chunk-line", url="{A}/drop-mid-terminator", tags=["edge"],
-         note="closed after 0 CRLF but before the final empty line: the terminating chunk is arguably complete")
-    for ident, url in [("out-of-range", "http://127.0.0.1:99999/x"), ("zero", "http://127.0.0.1:0/x"), ("non-numeric", "http://127.0.0.1:abc/x"),
-                       ("leading-zeros", "http://127.0.0.1:0041005/x")]:
-        send(f"send_request/edge-port-{ident}", url=url, tags=["edge"], note="an unusable port: InvalidRequest or NetworkFailed is not stated")
-    send("send_request/edge-request-header-value-non-ascii", url="{A}/echo", headers=[("X-Keep", "caf\u00e9")], tags=["edge"],
-         note="how a non-ASCII request header value is put on the wire is not stated (only CR and LF are rejected)")
-
-
 GROUPS = [
     group_parse_method, group_parse_arguments, group_render_response, group_violations, group_invalid_request, group_url_characters,
     group_target_and_host, group_exchanges, group_redirects, group_origins, group_resolution, group_invalid_locations, group_decoding,
-    group_failures, group_execute, group_ipv6, group_port80, group_edge,
+    group_failures, group_execute, group_ipv6, group_port80,
+    *DECISION_GROUPS,
 ]
 
 
 def build_cases() -> list[dict]:
-    CASES.clear()
-    _IDS.clear()
+    casekit.reset()
     for group in GROUPS:
         group()
-    return list(CASES)
+    return list(casekit.CASES)
 
 
 def summary(cases: list[dict]) -> str:
-    by_group = Counter(case["id"].split("/", 1)[0] + "/" + re.split(r"[-/]", case["id"].split("/", 1)[1])[0] for case in cases)
+    by_rule = Counter(case.get("rule", "") for case in cases)
+    functions = Counter(case["fn"] for case in cases)
     tags = Counter(tag for case in cases for tag in case.get("tags", ()))
-    contract = sum(1 for case in cases if "expect" in case)
-    lines = [f"{len(cases)} cases: {contract} contract cases (expect), {tags['edge']} edge, "
-             f"{sum(1 for case in cases if 'ignore' in case)} with ignored paths; tags {dict(tags)}"]
-    lines += [f"  {group:44s} {count}" for group, count in sorted(by_group.items())]
+    lines = [f"{len(cases)} cases, each with a contract expectation; by function {dict(functions)}; tags {dict(tags)}"]
+    lines += [f"  {rule or '(none)':18s} {count}" for rule, count in sorted(by_rule.items(), key=lambda item: (item[0][:1] != 'R', item[0][:1] != 'D', item[0].zfill(4), item[0]))]
     return "\n".join(lines)
 
 

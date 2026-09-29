@@ -21,11 +21,13 @@ internal fun execute(arguments: cott_runtime.CottList<kotlin.String>): cott_runt
     return cott_runtime.Ok(_render(response))
 }
 
+private fun _isTokenChar(c: kotlin.Char): kotlin.Boolean =
+    (c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || "!#$%&'*+-.^_`|~".indexOf(c) >= 0
+
 private fun _isToken(s: kotlin.String): kotlin.Boolean {
     if (s.isEmpty()) return false
     for (c in s) {
-        val ok = (c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || "!#$%&'*+-.^_`|~".indexOf(c) >= 0
-        if (!ok) return false
+        if (!_isTokenChar(c)) return false
     }
     return true
 }
@@ -124,8 +126,8 @@ private fun _splitRef(s: kotlin.String): Array<kotlin.String?> {
     return arrayOf(scheme, authority, rest, query, fragment)
 }
 
-// Returns [host, port-digits-or-empty] or null when invalid.
-private fun _hostInfo(authority: kotlin.String): Array<kotlin.String>? {
+// Returns Pair(host as written, port value or -1 for empty) or null when invalid.
+private fun _hostInfo(authority: kotlin.String): kotlin.Pair<kotlin.String, kotlin.Int>? {
     val at = authority.lastIndexOf('@')
     val hp = authority.substring(at + 1)
     val host: kotlin.String
@@ -142,15 +144,18 @@ private fun _hostInfo(authority: kotlin.String): Array<kotlin.String>? {
         rest = if (colon < 0) "" else hp.substring(colon)
     }
     if (host.isEmpty()) return null
-    var port = ""
+    var port = -1
     if (rest.isNotEmpty()) {
         if (rest[0] != ':') return null
-        port = rest.substring(1)
-        if (port.length > 5 || !port.all { it in '0'..'9' }) return null
-        if (port.isNotEmpty() && port.toInt() > 65535) return null
-        if (port.isNotEmpty()) port = port.toInt().toString()
+        val digits = rest.substring(1)
+        if (!digits.all { it in '0'..'9' }) return null
+        if (digits.isNotEmpty()) {
+            val v = java.math.BigInteger(digits)
+            if (v > java.math.BigInteger.valueOf(65535L)) return null
+            port = v.toInt()
+        }
     }
-    return arrayOf(host, port)
+    return kotlin.Pair(host, port)
 }
 
 private fun _removeDotSegments(path: kotlin.String): kotlin.String {
@@ -186,7 +191,6 @@ private fun _removeDotSegments(path: kotlin.String): kotlin.String {
     return out.toString()
 }
 
-// Resolves ref against base (both already split); returns URL string.
 private fun _resolve(base: Array<kotlin.String?>, ref: Array<kotlin.String?>): kotlin.String {
     val scheme: kotlin.String
     val authority: kotlin.String?
@@ -238,12 +242,10 @@ private fun _resolve(base: Array<kotlin.String?>, ref: Array<kotlin.String?>): k
 private fun _invalid(msg: kotlin.String): kotlin.Pair<real.posting.client.Response?, real.posting.client.PostingError?> =
     kotlin.Pair(null, real.posting.client.PostingError.InvalidRequest(msg))
 
-private fun _defaultPort(scheme: kotlin.String): kotlin.Int = if (scheme == "https") 443 else 80
-
-private fun _origin(parts: Array<kotlin.String?>, info: Array<kotlin.String>): kotlin.String {
-    val scheme = parts[0]!!.lowercase(java.util.Locale.ROOT)
-    val port = if (info[1].isEmpty()) _defaultPort(scheme) else info[1].toInt()
-    return scheme + "|" + info[0].lowercase(java.util.Locale.ROOT) + "|" + port
+private fun _origin(scheme: kotlin.String, info: kotlin.Pair<kotlin.String, kotlin.Int>): kotlin.String {
+    val s = scheme.lowercase(java.util.Locale.ROOT)
+    val port = if (info.second < 0) (if (s == "https") 443 else 80) else info.second
+    return s + "|" + info.first.lowercase(java.util.Locale.ROOT) + "|" + port
 }
 
 private fun _send(request: real.posting.client.Request): kotlin.Pair<real.posting.client.Response?, real.posting.client.PostingError?> {
@@ -255,7 +257,9 @@ private fun _send(request: real.posting.client.Request): kotlin.Pair<real.postin
     if (_hostInfo(firstAuth) == null) return _invalid("invalid URL host or port")
     for (h in request.headers) {
         if (!_isToken(h.name)) return _invalid("invalid header name")
-        if (h.value.indexOf('\r') >= 0 || h.value.indexOf('\n') >= 0) return _invalid("invalid header value")
+        for (c in h.value) {
+            if (c == '\r' || c == '\n' || c.code > 0x7F) return _invalid("invalid header value")
+        }
     }
     val method = request.method
     if (method is real.posting.client.HttpMethod.Custom && !_isToken(method.name)) return _invalid("invalid method")
@@ -267,14 +271,14 @@ private fun _send(request: real.posting.client.Request): kotlin.Pair<real.postin
     var redirects = 0
     try {
         while (true) {
-            val response = _fetch(method, currentUrl, headers, request.body, timeout)
+            val response = _fetch(method, currentUrl, headers, request.body, timeout, currentUrl == request.url)
             val s = response.status.toInt()
             if (!follows || redirects >= 10 || !(s == 301 || s == 302 || s == 303 || s == 307 || s == 308)) {
                 return kotlin.Pair(response, null)
             }
-            val loc = response.headers.firstOrNull { it.name.equals("Location", ignoreCase = true) }
-                ?: return kotlin.Pair(response, null)
-            val ref = loc.value
+            val locs = response.headers.filter { it.name.equals("Location", ignoreCase = true) }
+            if (locs.isEmpty()) return kotlin.Pair(response, null)
+            val ref = locs.joinToString(", ") { it.value }
             if (!_urlCharsOk(ref)) return kotlin.Pair(response, null)
             val baseParts = _splitRef(currentUrl)
             val target = _resolve(baseParts, _splitRef(ref))
@@ -284,10 +288,11 @@ private fun _send(request: real.posting.client.Request): kotlin.Pair<real.postin
             val tAuth = tParts[1] ?: return kotlin.Pair(response, null)
             val tInfo = _hostInfo(tAuth) ?: return kotlin.Pair(response, null)
             val bInfo = _hostInfo(baseParts[1]!!) ?: return kotlin.Pair(response, null)
-            if (baseParts[0]!!.lowercase(java.util.Locale.ROOT) == "https" && tScheme == "http") {
+            val bScheme = baseParts[0]!!.lowercase(java.util.Locale.ROOT)
+            if (bScheme == "https" && tScheme == "http") {
                 return kotlin.Pair(response, null)
             }
-            if (_origin(baseParts, bInfo) != _origin(tParts, tInfo)) {
+            if (_origin(bScheme, bInfo) != _origin(tScheme, tInfo)) {
                 headers = headers.filter {
                     !(it.name.equals("Authorization", ignoreCase = true) ||
                         it.name.equals("Cookie", ignoreCase = true) ||
@@ -305,7 +310,7 @@ private fun _send(request: real.posting.client.Request): kotlin.Pair<real.postin
     }
 }
 
-private fun _readLine(input: java.io.InputStream): kotlin.String {
+private fun _readLine(input: java.io.InputStream): ByteArray {
     val buf = java.io.ByteArrayOutputStream()
     while (true) {
         val b = input.read()
@@ -317,7 +322,7 @@ private fun _readLine(input: java.io.InputStream): kotlin.String {
     val bytes = buf.toByteArray()
     var n = bytes.size
     if (n > 0 && bytes[n - 1] == '\r'.code.toByte()) n--
-    return String(bytes, 0, n, Charsets.ISO_8859_1)
+    return bytes.copyOf(n)
 }
 
 private fun _readExactly(input: java.io.InputStream, out: java.io.ByteArrayOutputStream, count: kotlin.Long, limit: kotlin.Long): kotlin.Unit {
@@ -332,8 +337,23 @@ private fun _readExactly(input: java.io.InputStream, out: java.io.ByteArrayOutpu
     }
 }
 
-private fun _decodeUtf8(bytes: ByteArray): kotlin.String {
+private fun _parseChunkSize(line: ByteArray): java.math.BigInteger {
+    var i = 0
+    val digits = StringBuilder()
+    while (i < line.size && _isHex((line[i].toInt() and 0xFF).toChar())) {
+        digits.append((line[i].toInt() and 0xFF).toChar())
+        i++
+    }
+    if (digits.isEmpty()) throw java.io.IOException("bad chunk size")
+    while (i < line.size && (line[i] == ' '.code.toByte() || line[i] == '\t'.code.toByte())) i++
+    if (i < line.size && line[i] != ';'.code.toByte()) throw java.io.IOException("bad chunk size")
+    return java.math.BigInteger(digits.toString(), 16)
+}
+
+// Returns decoded text and whether any ill-formed sequence was replaced.
+private fun _decodeUtf8(bytes: ByteArray): kotlin.Pair<kotlin.String, kotlin.Boolean> {
     val sb = StringBuilder(bytes.size)
+    var bad = false
     var i = 0
     val size = bytes.size
     while (i < size) {
@@ -360,6 +380,7 @@ private fun _decodeUtf8(bytes: ByteArray): kotlin.String {
         }
         if (n == 0) {
             sb.append('\uFFFD')
+            bad = true
             i++
             continue
         }
@@ -378,10 +399,43 @@ private fun _decodeUtf8(bytes: ByteArray): kotlin.String {
             j++
             k++
         }
-        if (complete) sb.appendCodePoint(cp) else sb.append('\uFFFD')
+        if (complete) {
+            sb.appendCodePoint(cp)
+        } else {
+            sb.append('\uFFFD')
+            bad = true
+        }
         i = j
     }
-    return sb.toString()
+    return kotlin.Pair(sb.toString(), bad)
+}
+
+private fun _trimSpHt(bytes: ByteArray, from: kotlin.Int): ByteArray {
+    var s = from
+    var e = bytes.size
+    while (s < e && (bytes[s] == ' '.code.toByte() || bytes[s] == '\t'.code.toByte())) s++
+    while (e > s && (bytes[e - 1] == ' '.code.toByte() || bytes[e - 1] == '\t'.code.toByte())) e--
+    return bytes.copyOfRange(s, e)
+}
+
+private fun _decodeHeaders(raw: List<kotlin.Pair<ByteArray, ByteArray>>): List<real.posting.client.Header> {
+    var allAscii = true
+    var utf8Ok = true
+    for (p in raw) {
+        for (part in arrayOf(p.first, p.second)) {
+            for (b in part) if (b.toInt() < 0) allAscii = false
+            if (!allAscii && _decodeUtf8(part).second) utf8Ok = false
+        }
+    }
+    val result = ArrayList<real.posting.client.Header>()
+    for (p in raw) {
+        if (allAscii || !utf8Ok) {
+            result.add(real.posting.client.Header(String(p.first, Charsets.ISO_8859_1), String(p.second, Charsets.ISO_8859_1)))
+        } else {
+            result.add(real.posting.client.Header(_decodeUtf8(p.first).first, _decodeUtf8(p.second).first))
+        }
+    }
+    return result
 }
 
 private fun _fetch(
@@ -389,36 +443,41 @@ private fun _fetch(
     url: kotlin.String,
     headers: List<real.posting.client.Header>,
     body: kotlin.String,
-    timeout: kotlin.Int
+    timeout: kotlin.Int,
+    initial: kotlin.Boolean
 ): real.posting.client.Response {
     val parts = _splitRef(url)
     val https = parts[0]!!.lowercase(java.util.Locale.ROOT) == "https"
     val info = _hostInfo(parts[1]!!) ?: throw java.io.IOException("invalid URL")
-    val rawHost = info[0]
+    val rawHost = info.first
     val bare = if (rawHost.startsWith("[")) rawHost.substring(1, rawHost.length - 1) else rawHost
     val defaultPort = if (https) 443 else 80
-    val port = if (info[1].isEmpty()) defaultPort else info[1].toInt()
+    val port = if (info.second < 0) defaultPort else info.second
     val limit = real.posting.client.MAX_RESPONSE_BODY_BYTES.toLong()
+    val wireMethod = _methodName(method)
     val plain = java.net.Socket()
     try {
         plain.connect(java.net.InetSocketAddress(bare, port), timeout)
         plain.soTimeout = timeout
         val socket: java.net.Socket = if (https) {
             val factory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
-            val ssl = factory.createSocket(plain, bare, port, true)
+            val ssl = factory.createSocket(plain, bare, port, true) as javax.net.ssl.SSLSocket
             ssl.soTimeout = timeout
-            (ssl as javax.net.ssl.SSLSocket).startHandshake()
+            val params = ssl.sslParameters
+            params.endpointIdentificationAlgorithm = "HTTPS"
+            ssl.sslParameters = params
+            ssl.startHandshake()
             ssl
         } else plain
 
-        var target = parts[2] ?: ""
+        var target = _removeDotSegments(parts[2] ?: "")
         if (target.isEmpty()) target = "/"
         if (parts[3] != null) target = target + "?" + parts[3]
         val sb = StringBuilder()
-        sb.append(_methodName(method)).append(' ').append(target).append(" HTTP/1.1\r\n")
+        sb.append(wireMethod).append(' ').append(target).append(" HTTP/1.1\r\n")
         if (headers.none { it.name.equals("Host", ignoreCase = true) }) {
             sb.append("Host: ").append(rawHost)
-            if (info[1].isNotEmpty() && port != defaultPort) sb.append(':').append(port)
+            if (port != defaultPort) sb.append(':').append(port)
             sb.append("\r\n")
         }
         for (h in headers) sb.append(h.name).append(": ").append(h.value).append("\r\n")
@@ -428,53 +487,68 @@ private fun _fetch(
         }
         sb.append("Connection: close\r\n\r\n")
         val out = socket.getOutputStream()
-        out.write(sb.toString().toByteArray(Charsets.UTF_8))
+        out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
         if (payload.isNotEmpty()) out.write(payload)
         out.flush()
 
         val input = java.io.BufferedInputStream(socket.getInputStream())
-        val statusLine = _readLine(input)
-        if (!statusLine.startsWith("HTTP/1.")) throw java.io.IOException("malformed status line")
-        val sp = statusLine.indexOf(' ')
-        if (sp < 0 || statusLine.length < sp + 4) throw java.io.IOException("malformed status line")
-        val code = statusLine.substring(sp + 1, sp + 4)
-        if (!code.all { it in '0'..'9' } || (statusLine.length > sp + 4 && statusLine[sp + 4] != ' ')) {
-            throw java.io.IOException("malformed status line")
-        }
-        val status = code.toInt()
-        val received = ArrayList<real.posting.client.Header>()
+        var status: kotlin.Int
+        var rawHeaders: ArrayList<kotlin.Pair<ByteArray, ByteArray>>
         while (true) {
-            val line = _readLine(input)
-            if (line.isEmpty()) break
-            val idx = line.indexOf(':')
-            if (idx < 0) throw java.io.IOException("malformed header line")
-            received.add(real.posting.client.Header(line.substring(0, idx), line.substring(idx + 1).trim(' ', '\t')))
+            val statusLine = String(_readLine(input), Charsets.ISO_8859_1)
+            if (!statusLine.startsWith("HTTP/1.") || statusLine.length < 12) throw java.io.IOException("malformed status line")
+            if (statusLine[7] !in '0'..'9' || statusLine[8] != ' ') throw java.io.IOException("malformed status line")
+            val code = statusLine.substring(9, 12)
+            if (!code.all { it in '0'..'9' } || (statusLine.length > 12 && statusLine[12] != ' ')) {
+                throw java.io.IOException("malformed status line")
+            }
+            status = code.toInt()
+            rawHeaders = ArrayList()
+            while (true) {
+                val line = _readLine(input)
+                if (line.isEmpty()) break
+                var idx = -1
+                for (i in line.indices) {
+                    if (line[i] == ':'.code.toByte()) { idx = i; break }
+                }
+                if (idx <= 0) throw java.io.IOException("malformed header line")
+                for (i in 0 until idx) {
+                    if (!_isTokenChar((line[i].toInt() and 0xFF).toChar())) throw java.io.IOException("malformed header name")
+                }
+                rawHeaders.add(kotlin.Pair(line.copyOf(idx), _trimSpHt(line, idx + 1)))
+            }
+            if (status == 101) throw java.io.IOException("unexpected protocol upgrade")
+            if (status == 100 || (status in 102..199)) continue
+            break
         }
         if (status < 100 || status > 599) throw java.io.IOException("status out of range")
+        val received = _decodeHeaders(rawHeaders)
 
         val bodyBytes = java.io.ByteArrayOutputStream()
-        val noBody = method is real.posting.client.HttpMethod.Head || status < 200 || status == 204 || status == 304
+        val noBody = wireMethod == "HEAD" || status == 204 || status == 304
         if (!noBody) {
-            val te = received.firstOrNull { it.name.equals("Transfer-Encoding", ignoreCase = true) }
+            val chunked = received.any {
+                it.name.equals("Transfer-Encoding", ignoreCase = true) &&
+                    it.value.lowercase(java.util.Locale.ROOT).contains("chunked")
+            }
             val cl = received.firstOrNull { it.name.equals("Content-Length", ignoreCase = true) }
-            if (te != null && te.value.lowercase(java.util.Locale.ROOT).contains("chunked")) {
+            if (chunked) {
                 while (true) {
-                    val sizeLine = _readLine(input)
-                    val semi = sizeLine.indexOf(';')
-                    val hex = (if (semi >= 0) sizeLine.substring(0, semi) else sizeLine).trim()
-                    if (hex.isEmpty() || !hex.all { _isHex(it) } || hex.length > 15) throw java.io.IOException("bad chunk size")
-                    val size = hex.toLong(16)
-                    if (size == 0L) {
+                    val size = _parseChunkSize(_readLine(input))
+                    if (size.signum() == 0) {
                         while (_readLine(input).isNotEmpty()) { }
                         break
                     }
-                    _readExactly(input, bodyBytes, size, limit)
-                    _readLine(input)
+                    if (size > java.math.BigInteger.valueOf(limit)) throw java.io.IOException("response body too large")
+                    _readExactly(input, bodyBytes, size.toLong(), limit)
+                    if (_readLine(input).isNotEmpty()) throw java.io.IOException("chunk not terminated by CRLF")
                 }
             } else if (cl != null) {
-                val v = cl.value.trim()
-                if (v.isEmpty() || !v.all { it in '0'..'9' } || v.length > 18) throw java.io.IOException("bad Content-Length")
-                _readExactly(input, bodyBytes, v.toLong(), limit)
+                val v = cl.value
+                if (v.isEmpty() || !v.all { it in '0'..'9' }) throw java.io.IOException("bad Content-Length")
+                val n = java.math.BigInteger(v)
+                if (n > java.math.BigInteger.valueOf(limit)) throw java.io.IOException("response body too large")
+                _readExactly(input, bodyBytes, n.toLong(), limit)
             } else {
                 val chunk = ByteArray(8192)
                 while (true) {
@@ -489,7 +563,7 @@ private fun _fetch(
             status.toUShort(),
             url,
             cott_runtime.CottList(received),
-            _decodeUtf8(bodyBytes.toByteArray())
+            _decodeUtf8(bodyBytes.toByteArray()).first
         )
     } finally {
         try {

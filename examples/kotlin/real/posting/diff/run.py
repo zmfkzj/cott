@@ -13,11 +13,13 @@ result streams, and prints one row per case:
     python3 run.py --python-only      # reference half only; checks the same expectations
     python3 run.py --kotlin-only      # Kotlin half only; checks the same expectations
     python3 run.py --fast --only redirect
+    python3 run.py --rule D12         # the cases of one contract rule or decision (a regex over the labels R1-R7, D1-D14, ...)
     python3 run.py --list
 
-Cases tagged ``port80`` need 127.0.0.1:80.  That port cannot be bound by an unprivileged process, so after the main
-pass a second pass re-executes this script inside a private user+network namespace (``unshare --user
---map-root-user --net``), where the port is bindable, for exactly the skipped cases; ``--no-namespace`` disables it.
+Cases tagged ``port80``, ``port65535`` or ``ipv6`` need a listener that a machine may not offer (127.0.0.1:80 is
+privileged; 127.0.0.1:65535 may be taken).  After the main pass a second pass re-executes this script inside a private
+user+network namespace (``unshare --user --map-root-user --net``), where those ports are free, for exactly the skipped
+cases; ``--no-namespace`` disables it.
 
 Exit status: 0 all cases pass; 1 a DIFF, FAIL, driver error or fixture violation; 2 the harness itself could not
 run; 3 the Kotlin half is pending (no module JAR) and the Python half is clean.
@@ -26,7 +28,6 @@ run; 3 the Kotlin half is pending (no module JAR) and the Python half is clean.
 from __future__ import annotations
 
 import argparse
-import copy
 import fcntl
 import hashlib
 import json
@@ -56,8 +57,8 @@ KOTLIN_PROJECT = HERE.parent
 PYTHON_PROJECT = KOTLIN_PROJECT.parents[2] / "real" / "posting"
 BUILD = HERE / "build"
 KNOWN_FNS = {"parse_method", "parse_arguments", "send_request", "render_response", "execute"}
-CAPABILITY_TAGS = {"ipv6", "port80"}  # a case with one of these needs a listener that may be unavailable
-KNOWN_TAGS = {"slow", "edge"} | CAPABILITY_TAGS
+CAPABILITY_TAGS = {"ipv6", "port80", "port65535"}  # a case with one of these needs a listener that may be unavailable
+KNOWN_TAGS = {"slow"} | CAPABILITY_TAGS
 TOOL_DIRS = [Path.home() / ".local/opt/kotlinc/bin", Path.home() / ".local/opt/jdk17/bin"]
 STANDARD_METHODS = {"Get", "Head", "Post", "Put", "Patch", "Delete", "Options"}
 
@@ -133,8 +134,6 @@ def validate_case(case: dict) -> None:
         _check_headers(ident, response.get("headers"))
     if "expect" in case:
         need(case, "expect", dict, "expect")
-    if "ignore" in case and not (isinstance(case["ignore"], list) and all(isinstance(path, str) for path in case["ignore"])):
-        raise HarnessError(f"{ident}: ignore must be a list of result paths")
 
 
 def load_cases(path: Path | None) -> list[dict]:
@@ -170,11 +169,11 @@ def select_cases(cases: list[dict], args: argparse.Namespace) -> list[dict]:
             continue
         if args.skip and any(re.search(pattern, ident) for pattern in args.skip):
             continue
+        if args.rule and not any(re.fullmatch(pattern, case.get("rule", "")) for pattern in args.rule):
+            continue
         if args.only_tag and not tags & set(args.only_tag):
             continue
         if args.fast and "slow" in tags:
-            continue
-        if args.no_edge and "edge" in tags:
             continue
         chosen.append(case)
     return chosen
@@ -335,26 +334,6 @@ def short(value, width: int = 160) -> str:
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
-def strip(result, paths: list[str]):
-    """A copy of ``result`` with the given dotted paths blanked (the contract leaves them open)."""
-    if not paths:
-        return result
-    out = copy.deepcopy(result)
-    for path in paths:
-        segments = path.split(".")
-        node = out
-        try:
-            for segment in segments[:-1]:
-                node = node[int(segment)] if isinstance(node, list) else node[segment]
-            if isinstance(node, list):
-                node[int(segments[-1])] = None
-            else:
-                node.pop(segments[-1], None)
-        except (KeyError, IndexError, TypeError, ValueError):
-            pass
-    return out
-
-
 def both_json(left: str, right: str):
     if not (left[:1] in "{[" and right[:1] in "{["):
         return None
@@ -455,13 +434,17 @@ class Tally:
     passes: int = 0
     diffs: int = 0
     fails: int = 0
-    edge_diffs: int = 0
     contract_cases: int = 0
     python_meets: int = 0
     kotlin_meets: int = 0
     violations: int = 0
     not_passing: list[list[str]] = field(default_factory=list)  # [status, id]
+    rules_of: dict[str, str] = field(default_factory=dict)  # id -> rule label, for the ids in not_passing
     seconds: dict[str, float] = field(default_factory=dict)
+
+    def mark(self, status: str, case: dict) -> None:
+        self.not_passing.append([status, case["id"]])
+        self.rules_of[case["id"]] = case.get("rule", "")
 
     def clean(self) -> bool:
         return not (self.diffs or self.fails or self.violations)
@@ -470,10 +453,9 @@ class Tally:
 def judge(case: dict, py, kt) -> tuple[str, list[str], list[str], list[str]]:
     """(status, python problems, kotlin problems, sides that raised) for one case."""
     expect = case.get("expect", {})
-    ignore = case.get("ignore", [])
     py_problems = check_assertions(expect, py) if py is not None else []
     kt_problems = check_assertions(expect, kt) if kt is not None else []
-    agree = py is not None and kt is not None and strip(py, ignore) == strip(kt, ignore)
+    agree = py is not None and kt is not None and py == kt
     raised = [side for side, result in (("python", py), ("kotlin", kt)) if result is not None and result.get("tag") == "Raise"]
     if not agree:
         return "DIFF", py_problems, kt_problems, raised
@@ -497,7 +479,7 @@ def report_single(cases: list[dict], half: Half, placeholders: Placeholders, ver
             tally.contract_cases += 1
         if result is None:
             tally.diffs += 1
-            tally.not_passing.append(["ERROR", case["id"]])
+            tally.mark("ERROR", case)
             print(f"{paint('ERROR ', '1;31')} {label(case)}\n        input:  {short(given_inputs(case), 400)}\n        {side}: {note}")
             continue
         problems = check_assertions(expect, result)
@@ -509,7 +491,7 @@ def report_single(cases: list[dict], half: Half, placeholders: Placeholders, ver
                 tally.kotlin_meets += 1
         if problems or raised:
             tally.fails += 1
-            tally.not_passing.append(["EXPECT" if problems else "RAISE", case["id"]])
+            tally.mark("EXPECT" if problems else "RAISE", case)
             print(f"{paint('EXPECT' if problems else 'RAISE ', '1;31')} {label(case)}")
             print(f"        input:  {short(given_inputs(case), 400)}")
             print(f"        {side}: {short(result, 100000 if verbose else 400)}")
@@ -540,10 +522,9 @@ def report_pair(cases: list[dict], python: Half, kotlin: Half, placeholders: Pla
             print(f"{paint('PASS', '32')}  {label(case)}{timing}")
             continue
         limit = 100000 if verbose else 400
-        tally.not_passing.append([status, ident])
+        tally.mark(status, case)
         if status == "DIFF":
             tally.diffs += 1
-            tally.edge_diffs += "edge" in case.get("tags", ())
         else:
             tally.fails += 1
         print(f"{paint(status, '1;31')}  {label(case)}")
@@ -552,8 +533,7 @@ def report_pair(cases: list[dict], python: Half, kotlin: Half, placeholders: Pla
         if status == "DIFF":
             print(f"        kotlin: {kt_note or short(kt, limit)}")
             if py is not None and kt is not None:
-                ignore = case.get("ignore", [])
-                for line in differences(strip(py, ignore), strip(kt, ignore)):
+                for line in differences(py, kt):
                     print(f"        differs: {line}")
         else:
             print("        kotlin: the same")
@@ -563,8 +543,6 @@ def report_pair(cases: list[dict], python: Half, kotlin: Half, placeholders: Pla
                     print(f"        {side} violates the contract: {'; '.join(problems[:3])}")
             if not py_problems and not kt_problems and py is not None and kt is not None:
                 print("        both meet the contract expectation")
-        elif "edge" in case.get("tags", ()):
-            print("        edge case: the contract leaves this open (no expectation)")
         for side in raised:
             print(f"        {side} raised (an implementation fault, never a PASS)")
         if case.get("note"):
@@ -595,8 +573,6 @@ def print_summary(title: str, tally: Tally, pair: bool) -> None:
     if pair:
         print(f"\n{title}: {tally.cases} cases: {tally.passes} PASS, {tally.diffs} DIFF, {tally.fails} FAIL  ({times})")
         print(f"         contract: {tally.contract_cases} cases carry an expectation; python meets {tally.python_meets}, kotlin meets {tally.kotlin_meets}")
-        if tally.edge_diffs:
-            print(f"         {tally.edge_diffs} DIFF row(s) are edge cases: behavior the contract leaves open")
     else:
         side = next(iter(tally.seconds))
         meets = tally.python_meets if side == "python" else tally.kotlin_meets
@@ -608,6 +584,13 @@ def print_summary(title: str, tally: Tally, pair: bool) -> None:
         shown = ", ".join(f"{status} {ident}" for status, ident in tally.not_passing[:40])
         more = len(tally.not_passing) - 40
         print(f"         not passing: {shown}" + (f" ... and {more} more" if more > 0 else ""))
+    if tally.not_passing:
+        by_rule: dict[str, int] = {}
+        for _, ident in tally.not_passing:
+            rule = tally.rules_of.get(ident, "") or "(none)"
+            by_rule[rule] = by_rule.get(rule, 0) + 1
+        order = sorted(by_rule, key=lambda rule: (rule[:1] != "D", rule[:1] != "R", rule.zfill(4), rule))
+        print("         not passing by rule: " + ", ".join(f"{rule} {by_rule[rule]}" for rule in order))
 
 
 NOT_COVERED = [
@@ -695,7 +678,7 @@ def run_namespace_pass(unshare: str, tags: list[str], python_only: bool) -> dict
             command += ["--only-tag", tag]
         if python_only and "--python-only" not in sys.argv:
             command.append("--python-only")
-        print(f"\n{'=' * 24} second pass: private user+network namespace (127.0.0.1:80 is bindable there) {'=' * 24}", flush=True)
+        print(f"\n{'=' * 24} second pass: private user+network namespace (127.0.0.1:80 and :65535 are free there) {'=' * 24}", flush=True)
         done = subprocess.run(command, check=False)
         if result_file.is_file():
             return json.loads(result_file.read_text(encoding="utf-8"))
@@ -716,7 +699,7 @@ def main() -> int:
     parser.add_argument("--skip", action="append", metavar="REGEX", help="skip cases whose id matches (repeatable)")
     parser.add_argument("--only-tag", action="append", metavar="TAG", help="run cases carrying this tag (repeatable)")
     parser.add_argument("--fast", action="store_true", help="skip cases tagged slow (64 MiB bodies, drip)")
-    parser.add_argument("--no-edge", action="store_true", help="skip cases tagged edge (behavior the contract leaves open)")
+    parser.add_argument("--rule", action="append", metavar="REGEX", help="run cases whose rule label matches (full match, repeatable), e.g. D12 or 'D.*'")
     parser.add_argument("--list", action="store_true", help="list the selected case ids and exit")
     parser.add_argument("--dump-cases", type=Path, metavar="FILE", help="write the selected cases as JSON and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="show timings and untruncated values")
@@ -775,7 +758,7 @@ def main() -> int:
         else:
             print("  a private user+network namespace is unavailable"
                   f"{' (--no-namespace)' if args.no_namespace else ''}: run `unshare --user --map-root-user --net "
-                  f"{sys.executable} {Path(__file__).resolve()} --in-namespace --only-tag port80` where it works")
+                  f"{sys.executable} {Path(__file__).resolve()} --in-namespace {' '.join('--only-tag ' + tag for tag in sorted(skipped))}` where it works")
             print("  skipped: " + ", ".join(sorted(ident for ids in skipped.values() for ident in ids))[:600])
     if args.result_json is not None:
         args.result_json.write_text(json.dumps({"tally": tally.__dict__ if tally else None}), encoding="utf-8")

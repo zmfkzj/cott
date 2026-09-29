@@ -31,13 +31,13 @@ public fun  execute(arguments: cott_runtime.CottList<kotlin.String>): cott_runti
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, real.posting.client.CottDescriptors_28e4366cc553a84d37a82cce.type_34228449f57e99c634fc7ef7()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val rendered = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(rendered, "\n\n"), "real.posting.client.execute", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 9056, endByte = 9113, startLine = 186, startColumn = 5, endLine = 186, endColumn = 62), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val rendered = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(rendered, "\n\n"), "real.posting.client.execute", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 12034, endByte = 12091, startLine = 225, startColumn = 5, endLine = 225, endColumn = 62), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("real.posting.client.PostingError.InvalidRequest", "real.posting.client.PostingError.NetworkFailed"), "real.posting.client.execute", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("real.posting.client.PostingError.InvalidRequest", "real.posting.client.PostingError.NetworkFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidArguments", "real.posting.client.execute", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 9119, endByte = 9198, startLine = 188, startColumn = 5, endLine = 188, endColumn = 84))
-        if (_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.execute", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 9203, endByte = 9236, startLine = 189, startColumn = 5, endLine = 189, endColumn = 38))
-        if (_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed", "real.posting.client.execute", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 9241, endByte = 9273, startLine = 190, startColumn = 5, endLine = 190, endColumn = 37))
+        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidArguments", "real.posting.client.execute", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 12097, endByte = 12176, startLine = 227, startColumn = 5, endLine = 227, endColumn = 84))
+        if (_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.execute", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 12181, endByte = 12214, startLine = 228, startColumn = 5, endLine = 228, endColumn = 38))
+        if (_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed", "real.posting.client.execute", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 12219, endByte = 12251, startLine = 229, startColumn = 5, endLine = 229, endColumn = 37))
     }
     return _cottResult
 }
@@ -142,9 +142,9 @@ public fun  render_response(response: real.posting.client.Response): kotlin.Stri
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(_cottResult, (_cottArg_response).url), "real.posting.client.render_response", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 8296, endByte = 8336, startLine = 169, startColumn = 5, endLine = 169, endColumn = 45), expected = "true", actual = "false")
-        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.endsWith(_cottResult, (_cottArg_response).body), "real.posting.client.render_response", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 8341, endByte = 8383, startLine = 170, startColumn = 5, endLine = 170, endColumn = 47), expected = "true", actual = "false")
-        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(_cottResult, "\n\n"), "real.posting.client.render_response", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 8388, endByte = 8422, startLine = 171, startColumn = 5, endLine = 171, endColumn = 39), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(_cottResult, (_cottArg_response).url), "real.posting.client.render_response", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 11274, endByte = 11314, startLine = 208, startColumn = 5, endLine = 208, endColumn = 45), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.endsWith(_cottResult, (_cottArg_response).body), "real.posting.client.render_response", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 11319, endByte = 11361, startLine = 209, startColumn = 5, endLine = 209, endColumn = 47), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(cott_runtime.CottRuntime.contains(_cottResult, "\n\n"), "real.posting.client.render_response", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 11366, endByte = 11400, startLine = 210, startColumn = 5, endLine = 210, endColumn = 39), expected = "true", actual = "false")
     }
     return _cottResult
 }
@@ -164,13 +164,20 @@ public fun  render_response(response: real.posting.client.Response): kotlin.Stri
  * 
  * The request target is the URL path ("/" when the path is empty), followed by
  * "?" and the query when the URL contains a "?" before any "#" (even when the
- * query is empty). The fragment is never sent. Percent-encoded octets are sent
- * exactly as written, neither decoded nor re-encoded. Unless request.headers has
+ * query is empty). The literal "." and ".." segments of the path are removed
+ * as in RFC 3986 section 5.2.4 (so /a/./b/../echo is sent as /a/echo);
+ * percent-encoded dots are not decoded and stay. The fragment is never sent.
+ * Percent-encoded octets are sent exactly as written, neither decoded nor
+ * re-encoded. Unless request.headers has
  * a header named Host (ASCII case-insensitive), a Host header is sent whose
  * value is the URL host exactly as written (ASCII case kept, an IPv6 literal
  * with its brackets, no userinfo), followed by ":" and the port only when the
- * URL gives a port other than the scheme default (80 for http, 443 for https).
- * URL userinfo is neither sent nor used for authentication, and Response.url
+ * port differs from the scheme default (80 for http, 443 for https). The port
+ * is a run of decimal digits whose decimal value is used (leading zeros are
+ * allowed and never shown, so ":080" on an http URL sends no port); an empty
+ * port means the scheme default. A port with a non-digit or a value above
+ * 65535 makes the request InvalidRequest, and port 0 is attempted and fails as
+ * NetworkFailed. URL userinfo is neither sent nor used for authentication, and Response.url
  * keeps the URL as given.
  * 
  * HttpMethod.Get and HttpMethod.Head requests follow 301, 302, 303, 307 and 308
@@ -185,13 +192,21 @@ public fun  render_response(response: real.posting.client.Response): kotlin.Stri
  * with "../../echo" resolves to http://h/echo, and the base http://h/a/b/c with
  * "..//g" resolves to http://h/a//g. A Location that does not consist only of
  * the URL characters above, or that resolves to a URL that is not http or https
- * or has no host, is not followed and that 3xx response is returned.
+ * or has no host, is not followed and that 3xx response is returned. When the
+ * response has several Location fields, the Location is their values in
+ * received order joined with ", "; such a value contains a space, so it is
+ * never valid and the 3xx response is returned. The scheme of a Location is
+ * case-insensitive: the resolved URL, which is used for the next request, for
+ * Response.url and for the origin comparison, has its scheme in lower case
+ * and otherwise keeps the rules above. A Location whose port contains a
+ * non-digit or is above 65535 is not followed and that 3xx response is
+ * returned.
  * 
  * A redirect is followed only when it does not leave https for http; a 3xx
  * response whose Location is an http:// URL while the current URL is https:// is
  * not followed and is returned as the result. When a followed redirect changes
  * the origin compared with the previous URL (scheme and host compared ASCII
- * case-insensitively, port compared after applying the scheme default), the request
+ * case-insensitively, port compared as its decimal value after applying the scheme default), the request
  * headers named Authorization, Cookie, Proxy-Authorization and Host (ASCII
  * case-insensitive name comparison) are not sent to the new origin; all other
  * request headers are still sent. A redirect within the same origin keeps every
@@ -201,26 +216,50 @@ public fun  render_response(response: real.posting.client.Response): kotlin.Stri
  * 
  * The Response holds the final status, the final URL (request.url when no
  * redirect was followed), the received headers in received order with
- * duplicates kept, and the body decoded as UTF-8 with each maximal subpart of
+ * duplicates kept, names as received and values with leading and trailing
+ * space and horizontal tab removed, and the body decoded as UTF-8 with each maximal subpart of
  * an ill-formed sequence (Unicode section 3.9, Table 3-8) replaced by one
  * U+FFFD, so the bytes ED A0 80 become three U+FFFD; a leading byte order mark
- * is kept as U+FEFF and NUL is kept; a Content-Type charset is ignored. A received
+ * is kept as U+FEFF and NUL is kept; a Content-Type charset is ignored. A received header field name is one or
+ * more HTTP token characters (as defined by real.posting.client.parse_method)
+ * immediately followed by ":"; any other field line (a name with a non-ASCII
+ * byte, "@" or another non-token character, an empty name, whitespace before
+ * the colon, or no colon) is NetworkFailed. The header values of the final
+ * response are decoded as a whole: when every value is ASCII they are used as
+ * is; otherwise, when every value is valid UTF-8 they are decoded as UTF-8;
+ * otherwise every value is decoded as ISO-8859-1. A received
  * status of 400 or above is still a successful Response, never an error.
  * 
  * The received body is limited to MAX_RESPONSE_BODY_BYTES (67108864) bytes,
  * counted before decoding; a body of more bytes is NetworkFailed and no partial
  * Response is returned.
  * 
+ * A response to a request whose wire method is exactly HEAD (HttpMethod.Head
+ * or a Custom name HEAD) has no body whatever its Content-Length or
+ * Transfer-Encoding say, and a response with status 204 or 304 has no body
+ * either. An interim response with status 100 or 102 to 199 is read together
+ * with its headers and discarded, and the next response is read; a 101 response
+ * is NetworkFailed because no protocol upgrade is ever requested. The status
+ * line is HTTP/1.x, a space and three digits, optionally followed by a space and
+ * a reason phrase that may be empty; a missing reason phrase is accepted.
+ * A chunk-size line starts with one or more hexadecimal digits, after which
+ * only nothing, spaces or horizontal tabs, or optional spaces or horizontal
+ * tabs followed by ";" and an ignored chunk extension may follow; any other
+ * line (leading whitespace, a "0x" prefix, other characters, no digits) is
+ * NetworkFailed. Trailer fields are read and discarded and are not part of
+ * Response.headers. A connection closed after the last chunk (size 0) but before
+ * the final empty line is NetworkFailed.
+ * 
  * InvalidRequest: timeout_ms is 0; the URL does not start with the lower-case
- * "http://" or "https://", has no host or has a character outside the URL
- * characters above; a header name is blank or not an
+ * "http://" or "https://", has no host, has a character outside the URL
+ * characters above or has an unusable port; a header name is blank or not an
  * HTTP token (as defined by real.posting.client.parse_method); a header value
- * contains CR or LF; or the method is a Custom name that is not an HTTP token.
+ * contains CR or LF or a character above U+007F; or the method is a Custom name that is not an HTTP token.
  * No connection is attempted for an InvalidRequest. NetworkFailed: name
  * resolution, connection, timeout, a connection closed before the empty line
  * that ends the header block, before all Content-Length bytes, or before the
  * terminating chunk of a chunked body, a response that does not start with an
- * HTTP/1.x status line, a header line without a colon, a response body larger
+ * HTTP/1.x status line, a header line whose name is not an HTTP token followed by a colon, a response body larger
  * than MAX_RESPONSE_BODY_BYTES, or a final status outside 100-599. No partial
  * Response is returned. When the response has neither a Content-Length nor
  * chunked transfer coding, the body extends to the connection close.
@@ -248,17 +287,17 @@ public fun  send_request(request: real.posting.client.Request): cott_runtime.Cot
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(real.posting.client.CottDescriptors_28e4366cc553a84d37a82cce.type_0d64e92393113410e1a6ea5d(), real.posting.client.CottDescriptors_28e4366cc553a84d37a82cce.type_34228449f57e99c634fc7ef7()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(java.math.BigInteger("100").toInt().toUShort(), (response).status) <= 0 && cott_runtime.CottRuntime.canonicalCompare((response).status, java.math.BigInteger("599").toInt().toUShort()) <= 0), "real.posting.client.send_request", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 7310, endByte = 7370, startLine = 150, startColumn = 5, endLine = 150, endColumn = 65), expected = "true", actual = "false"); true } } else true }
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract(((!(!((((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Get))) || ((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Head))))))) || ((cott_runtime.CottRuntime.canonicalEqual((response).url, (_cottArg_request).url)))), "real.posting.client.send_request", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 7375, endByte = 7514, startLine = 151, startColumn = 5, endLine = 151, endColumn = 144), expected = "true", actual = "false"); true } } else true }
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract(((!((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Head)))) || ((cott_runtime.CottRuntime.canonicalEqual((response).body, "")))), "real.posting.client.send_request", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 7519, endByte = 7608, startLine = 152, startColumn = 5, endLine = 152, endColumn = 94), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(java.math.BigInteger("100").toInt().toUShort(), (response).status) <= 0 && cott_runtime.CottRuntime.canonicalCompare((response).status, java.math.BigInteger("599").toInt().toUShort()) <= 0), "real.posting.client.send_request", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 10288, endByte = 10348, startLine = 189, startColumn = 5, endLine = 189, endColumn = 65), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract(((!(!((((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Get))) || ((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Head))))))) || ((cott_runtime.CottRuntime.canonicalEqual((response).url, (_cottArg_request).url)))), "real.posting.client.send_request", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 10353, endByte = 10492, startLine = 190, startColumn = 5, endLine = 190, endColumn = 144), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val response = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as real.posting.client.Response); run { cott_runtime.CottRuntime.checkContract(((!((cott_runtime.CottRuntime.canonicalEqual((_cottArg_request).method, real.posting.client.HttpMethod.Head)))) || ((cott_runtime.CottRuntime.canonicalEqual((response).body, "")))), "real.posting.client.send_request", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 10497, endByte = 10586, startLine = 191, startColumn = 5, endLine = 191, endColumn = 94), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("real.posting.client.PostingError.InvalidRequest", "real.posting.client.PostingError.NetworkFailed"), "real.posting.client.send_request", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("real.posting.client.PostingError.InvalidRequest", "real.posting.client.PostingError.NetworkFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:4") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 7614, endByte = 7676, startLine = 154, startColumn = 5, endLine = 154, endColumn = 67))
-        if (_cottExpectedErrorClause == "error:5") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 7681, endByte = 7801, startLine = 155, startColumn = 5, endLine = 155, endColumn = 125))
-        if (_cottExpectedErrorClause == "error:6") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:6", span = cott_runtime.CottSpan(startByte = 7806, endByte = 7887, startLine = 156, startColumn = 5, endLine = 156, endColumn = 86))
-        if (_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:7", span = cott_runtime.CottSpan(startByte = 7892, endByte = 7925, startLine = 157, startColumn = 5, endLine = 157, endColumn = 38))
-        if (_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed", "real.posting.client.send_request", "error", clause = "error:8", span = cott_runtime.CottSpan(startByte = 7930, endByte = 7962, startLine = 158, startColumn = 5, endLine = 158, endColumn = 37))
+        if (_cottExpectedErrorClause == "error:4") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 10592, endByte = 10654, startLine = 193, startColumn = 5, endLine = 193, endColumn = 67))
+        if (_cottExpectedErrorClause == "error:5") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 10659, endByte = 10779, startLine = 194, startColumn = 5, endLine = 194, endColumn = 125))
+        if (_cottExpectedErrorClause == "error:6") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:6", span = cott_runtime.CottSpan(startByte = 10784, endByte = 10865, startLine = 195, startColumn = 5, endLine = 195, endColumn = 86))
+        if (_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.InvalidRequest", "real.posting.client.send_request", "error", clause = "error:7", span = cott_runtime.CottSpan(startByte = 10870, endByte = 10903, startLine = 196, startColumn = 5, endLine = 196, endColumn = 38))
+        if (_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "real.posting.client.PostingError.NetworkFailed", "real.posting.client.send_request", "error", clause = "error:8", span = cott_runtime.CottSpan(startByte = 10908, endByte = 10940, startLine = 197, startColumn = 5, endLine = 197, endColumn = 37))
     }
     return _cottResult
 }

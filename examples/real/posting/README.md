@@ -51,7 +51,16 @@ arguments that are not valid UTF-8; a closed stdout (e.g. `| head`) exits 141 wi
   token rules in `doc`). Transport failures, oversized bodies, connections closed before the
   header block ends, before all `Content-Length` bytes or before the final chunk, a response
   without an HTTP/1.x status line and a header line without a colon are `NetworkFailed`
-  (no partial `Response`). The credential rule is requirement
+  (no partial `Response`). Also pinned: literal dot segments are removed from the request
+  target path; ports are decimal (leading zeros allowed, non-digit or above 65535 is
+  `InvalidRequest`, empty is the scheme default); header values above U+007F are
+  `InvalidRequest`; several `Location` fields are joined with `, ` (never followed); a
+  `Location` scheme is case-insensitive and lower-cased; responses to `HEAD` and 204/304 have
+  no body; interim 1xx responses are skipped (101 is `NetworkFailed`); the status line reason
+  phrase is optional; chunk extensions and trailers are ignored, a malformed chunk-size line (leading whitespace,
+  `0x`, non-hex) or a close before the final empty line is `NetworkFailed`, as is a received
+  header name that is not an HTTP token followed by a colon; received header values are trimmed
+  of SP/HTAB and decoded as ASCII, else UTF-8, else ISO-8859-1. The credential rule is requirement
   `SEND_REQUEST_STRIPS_CREDENTIALS_ACROSS_ORIGINS`, `unverified`: the fixture cannot observe
   sent headers.
 - `render_response`: the exact line format above.
@@ -89,5 +98,5 @@ Not observed by Cott evidence:
 - Token validation beyond the `"GET X"` case, and the header CR/LF rule.
 
 The differential harness of the Kotlin port (`examples/kotlin/real/posting/diff/`) exercises
-these behaviors against loopback servers for both implementations (1652 contract expectations,
+these behaviors against loopback servers for both implementations (2079 contract expectations,
 all met in the last run). That is external regression evidence, not Cott scenario evidence.

@@ -31,8 +31,8 @@ Routes (all methods are accepted everywhere):
   headers                    200 with duplicate/mixed-case/empty response headers in a fixed order
   echo                       200 JSON: method, version, target, body, selected request headers (+ their order)
   redir?status=S&to=LOC      status S with Location LOC (``to_hex=HEX`` sends raw bytes, ``nolocation=1`` omits
-                             it, ``dup=LOC2`` adds a second Location header); without ``to``/``to_hex`` it
-                             behaves like ``echo``
+                             it, ``dup=LOC2`` / ``dup2=LOC3`` add a second / third Location field, ``dupname=NAME``
+                             spells the second one's name); without ``to``/``to_hex`` it behaves like ``echo``
   chain?n=K                  K>0: 302 to /chain?n=K-1; K=0: 200 "end"
   loop                       302 to itself
   x-out                      302 to the peer server's /echo (cross-origin)
@@ -44,17 +44,21 @@ Routes (all methods are accepted everywhere):
   drop-mid-body              Content-Length 1000, 12 body bytes, close
   drop-mid-chunk             chunked body: one whole chunk, then close (no terminating chunk)
   drop-inside-chunk          chunked body: a chunk announces 16 bytes, 3 arrive, close
-  drop-mid-terminator        chunked body: whole chunk, "0\\r\\n", close (terminating chunk incomplete)
   garbage                    not HTTP at all
   status-line?hex=HEX        the raw status line HEX, then Content-Length 2 and the body "ok"
   bad-header-line            a header line without a colon between valid ones
   close-delimited            200 without Content-Length; body ends at connection close
   chunked                    200 with Transfer-Encoding: chunked
-  chunk-ext                  chunked with chunk extensions and a trailer field ("wikipedia")
-  chunk-bad-size             chunked with a non-hexadecimal chunk size
-  interim                    a 102 interim response, then a 200 "final"
-  hdr-ows                    response header values with leading/trailing spaces and tabs
-  hdr-nonascii               response header values with bytes >= 0x80 (Latin-1 and UTF-8 spellings)
+  chunk-raw?hex=HEX          200 with Transfer-Encoding: chunked, then exactly the bytes HEX as the body, then close
+  interim?codes=100,103      one interim response per code (each with ``X-Interim: CODE``; ``ihex=HEX`` adds raw header
+                             bytes to each; ``drop=1`` closes after them), then a 200 "final"
+  nobody?code=204&framing=cl 204/304 headers announcing Content-Length: 5 (framing=cl) or Transfer-Encoding: chunked
+                             (framing=te), no body bytes, then close
+  hdr-raw?hex=HEX            200 whose header lines are exactly the bytes HEX (CRLF-terminated lines), the blank line,
+                             the body "ok", then close (the case decides whether Content-Length is in the block)
+  hdr-redirect?to=LOC[&hex=HEX]
+                             302 to LOC carrying the raw header lines HEX (default ``X-First: caf\xe9``, ISO-8859-1),
+                             Content-Length: 0
   slow?ms=N                  wait N ms, then 200
   drip?chunks=C&gap_ms=G     Content-Length C*10; one 10-byte piece every G ms
   big?n=N[&chunked=1][&prefix_hex=HEX][&unit_hex=HEX]
@@ -285,7 +289,9 @@ def r_redir(c: Ctx) -> None:
         value = bytes.fromhex(c.q["to_hex"]).decode("latin-1") if "to_hex" in c.q else c.q["to"]
         extra.append(("Location", value))
         if "dup" in c.q:
-            extra.append(("Location", c.q["dup"]))
+            extra.append((c.q.get("dupname", "Location"), c.q["dup"]))
+        if "dup2" in c.q:
+            extra.append(("Location", c.q["dup2"]))
     c.respond(c.q.get("status", "302"), b"redirecting\n", extra=extra)
 
 
@@ -359,12 +365,6 @@ def r_drop_inside_chunk(c: Ctx) -> None:
     raise _Abort
 
 
-def r_drop_mid_terminator(c: Ctx) -> None:
-    c.send(_head("200", _CHUNKED_HEAD))
-    c.send(b"5\r\nhello\r\n0\r\n")
-    raise _Abort
-
-
 def r_garbage(c: Ctx) -> None:
     c.send(b"this is not http\r\n\r\n")
     raise _Abort
@@ -398,34 +398,34 @@ def r_chunked(c: Ctx) -> None:
     c.send(b"0\r\n\r\n")
 
 
-def r_chunk_ext(c: Ctx) -> None:
+def r_chunk_raw(c: Ctx) -> None:
     c.send(_head("200", _CHUNKED_HEAD))
     if not c.is_head:
-        c.send(b'4;ext=1\r\nwiki\r\n5;a=b;c="d"\r\npedia\r\n0;last\r\nX-Trailer: t\r\n\r\n')
-
-
-def r_chunk_bad_size(c: Ctx) -> None:
-    c.send(_head("200", _CHUNKED_HEAD))
-    if not c.is_head:
-        c.send(b"zz\r\nabc\r\n0\r\n\r\n")
+        c.send(bytes.fromhex(c.q["hex"]))
 
 
 def r_interim(c: Ctx) -> None:
-    c.send(b"HTTP/1.1 102 Processing\r\nX-Interim: yes\r\n\r\n")
+    extra = bytes.fromhex(c.q.get("ihex", ""))
+    for code in (int(part) for part in c.q.get("codes", "102").split(",") if part):
+        c.send(f"HTTP/1.1 {code} {_reason(str(code))}\r\nX-Interim: {code}\r\n".encode("latin-1") + extra + b"\r\n")
+    if c.q.get("drop") == "1":
+        raise _Abort
     c.respond(200, b"final")
 
 
-def r_hdr_ows(c: Ctx) -> None:
-    c.send(
-        b"HTTP/1.1 200 OK\r\nX-Lead:     lead\r\nX-Trail: trail    \r\nX-Tab: \ttab\t\r\nX-Both:   both  \r\n"
-        b"Content-Length: 2\r\nConnection: close\r\n\r\nok"
-    )
+def r_nobody(c: Ctx) -> None:
+    framing = [("Content-Length", "5")] if c.q.get("framing", "cl") == "cl" else [("Transfer-Encoding", "chunked")]
+    c.send(_head(c.q.get("code", "204"), framing + [("Connection", "close")]))
+    raise _Abort
 
 
-def r_hdr_nonascii(c: Ctx) -> None:
-    c.send(
-        b"HTTP/1.1 200 OK\r\nX-Latin1: caf\xe9\r\nX-Utf8: caf\xc3\xa9\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
-    )
+def r_hdr_raw(c: Ctx) -> None:
+    c.send(b"HTTP/1.1 200 OK\r\n" + bytes.fromhex(c.q["hex"]) + b"\r\n" + (b"" if c.is_head else b"ok"))
+
+
+def r_hdr_redirect(c: Ctx) -> None:
+    extra = bytes.fromhex(c.q["hex"]) if "hex" in c.q else b"X-First: caf\xe9\r\n"
+    c.send(b"HTTP/1.1 302 Found\r\nLocation: " + c.q["to"].encode("latin-1") + b"\r\n" + extra + b"Content-Length: 0\r\nConnection: close\r\n\r\n")
 
 
 def r_slow(c: Ctx) -> None:
@@ -512,17 +512,16 @@ ROUTES: dict[str, Callable[[Ctx], None]] = {
     "drop-mid-body": r_drop_mid_body,
     "drop-mid-chunk": r_drop_mid_chunk,
     "drop-inside-chunk": r_drop_inside_chunk,
-    "drop-mid-terminator": r_drop_mid_terminator,
     "garbage": r_garbage,
     "status-line": r_status_line,
     "bad-header-line": r_bad_header_line,
     "close-delimited": r_close_delimited,
     "chunked": r_chunked,
-    "chunk-ext": r_chunk_ext,
-    "chunk-bad-size": r_chunk_bad_size,
+    "chunk-raw": r_chunk_raw,
     "interim": r_interim,
-    "hdr-ows": r_hdr_ows,
-    "hdr-nonascii": r_hdr_nonascii,
+    "nobody": r_nobody,
+    "hdr-raw": r_hdr_raw,
+    "hdr-redirect": r_hdr_redirect,
     "slow": r_slow,
     "drip": r_drip,
     "big": r_big,
@@ -624,9 +623,10 @@ class Fixtures:
 
     ``a`` and ``b`` are two independent origins (cross-origin redirects go between them); ``never`` must never be
     contacted (InvalidRequest cases point at it); ``closed`` is a port that is bound but not listening, so
-    connecting to it is refused for the whole run.  Two listeners exist only where the machine allows them:
-    ``v6`` on ``[::1]`` and ``d80`` on ``127.0.0.1:80`` (a privileged port: bindable inside a private network
-    namespace, see run.py); ``available_tags()`` names the case tags they make runnable.
+    connecting to it is refused for the whole run.  Three listeners exist only where the machine allows them: ``v6`` on
+    ``[::1]``, ``d80`` on ``127.0.0.1:80`` (a privileged port: bindable inside a private network namespace, see run.py)
+    and ``d65535`` on ``127.0.0.1:65535`` (the largest port; bindable unless something already uses it);
+    ``available_tags()`` names the case tags they make runnable.
     """
 
     def __init__(self) -> None:
@@ -636,15 +636,16 @@ class Fixtures:
         self.never = Server("never")
         self.v6 = self._optional("ipv6", lambda: Server("v6", "::1", 0, socket.AF_INET6), "[::1]")
         self.d80 = self._optional("port80", lambda: Server("d80", "127.0.0.1", 80), "127.0.0.1:80")
+        self.d65535 = self._optional("port65535", lambda: Server("d65535", "127.0.0.1", 65535), "127.0.0.1:65535")
         self.a.peer_origin = self.b.origin
         self.b.peer_origin = self.a.origin
-        for server in (self.never, self.v6, self.d80):
+        for server in (self.never, self.v6, self.d80, self.d65535):
             if server is not None:
                 server.peer_origin = self.a.origin
         self._closed = socket.socket()
         self._closed.bind(("127.0.0.1", 0))
         self.closed_port: int = self._closed.getsockname()[1]
-        self.servers = [server for server in (self.a, self.b, self.never, self.v6, self.d80) if server is not None]
+        self.servers = [server for server in (self.a, self.b, self.never, self.v6, self.d80, self.d65535) if server is not None]
         for server in self.servers:
             server.start()
 
@@ -656,7 +657,7 @@ class Fixtures:
             return None
 
     def available_tags(self) -> set[str]:
-        return ({"ipv6"} if self.v6 else set()) | ({"port80"} if self.d80 else set())
+        return ({"ipv6"} if self.v6 else set()) | ({"port80"} if self.d80 else set()) | ({"port65535"} if self.d65535 else set())
 
     def variables(self) -> dict[str, str]:
         variables = {
@@ -668,7 +669,9 @@ class Fixtures:
             "B_PORT": str(self.b.port),
             "N": self.never.origin,
             "N_HOST": self.never.host,
+            "N_PORT": str(self.never.port),
             "CLOSED": f"http://127.0.0.1:{self.closed_port}",
+            "CLOSED_PORT": str(self.closed_port),
         }
         if self.v6 is not None:
             variables.update({"V6": self.v6.origin, "V6_HOST": self.v6.host, "V6_PORT": str(self.v6.port)})

@@ -107,7 +107,7 @@ def _authority(auth: str) -> tuple[str, int | None] | None:
             return None
     else:
         host, _, port_text = hostport.partition(":")
-        if ":" in port_text:
+        if ":" in port_text or "[" in host or "]" in host:
             return None
     if not host or host == "[]":
         return None
@@ -116,7 +116,10 @@ def _authority(auth: str) -> tuple[str, int | None] | None:
     for ch in port_text:
         if ch not in _DIGITS:
             return None
-    port = int(port_text)
+    digits = port_text.lstrip("0")
+    if len(digits) > 5:
+        return None
+    port = int(digits) if digits else 0
     if port > 65535:
         return None
     return host, port
@@ -124,31 +127,6 @@ def _authority(auth: str) -> tuple[str, int | None] | None:
 
 def _default_port(scheme: str) -> int:
     return 443 if scheme == "https" else 80
-
-
-def _parse_target(url: str) -> tuple[str, str, int, str, str] | None:
-    scheme, auth, path, query, _ = _split_ref(url)
-    if scheme not in ("http", "https") or auth is None:
-        return None
-    parsed = _authority(auth)
-    if parsed is None:
-        return None
-    host, port = parsed
-    default = _default_port(scheme)
-    host_header = host
-    if port is not None and port != default:
-        host_header = f"{host}:{port}"
-    target = path if path else "/"
-    if query is not None:
-        target = f"{target}?{query}"
-    return scheme, host, port if port is not None else default, host_header, target
-
-
-def _origin(url: str) -> tuple[str, str, int]:
-    parsed = _parse_target(url)
-    if parsed is None:
-        return "", "", 0
-    return parsed[0].lower(), parsed[1].lower(), parsed[2]
 
 
 def _remove_dots(path: str) -> str:
@@ -183,6 +161,33 @@ def _remove_dots(path: str) -> str:
     return "".join(out)
 
 
+def _parse_target(url: str) -> tuple[str, str, int, str, str] | None:
+    scheme, auth, path, query, _ = _split_ref(url)
+    if scheme not in ("http", "https") or auth is None:
+        return None
+    parsed = _authority(auth)
+    if parsed is None:
+        return None
+    host, port = parsed
+    default = _default_port(scheme)
+    host_header = host
+    if port is not None and port != default:
+        host_header = f"{host}:{port}"
+    target = _remove_dots(path)
+    if not target:
+        target = "/"
+    if query is not None:
+        target = f"{target}?{query}"
+    return scheme, host, port if port is not None else default, host_header, target
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    parsed = _parse_target(url)
+    if parsed is None:
+        return "", "", 0
+    return parsed[0].lower(), parsed[1].lower(), parsed[2]
+
+
 def _resolve(base: str, ref: str) -> str:
     bscheme, bauth, bpath, bquery, _ = _split_ref(base)
     scheme, auth, path, query, frag = _split_ref(ref)
@@ -210,15 +215,15 @@ def _resolve(base: str, ref: str) -> str:
                 else:
                     tpath = _remove_dots(bpath[:bpath.rfind("/") + 1] + path)
                 tquery = query
-    result = tscheme.lower() + ":"
+    joined = tscheme.lower() + ":"
     if tauth is not None:
-        result += "//" + tauth
-    result += tpath
+        joined += "//" + tauth
+    joined += tpath
     if tquery is not None:
-        result += "?" + tquery
+        joined += "?" + tquery
     if frag is not None:
-        result += "#" + frag
-    return result
+        joined += "#" + frag
+    return joined
 
 
 def _next_url(url: str, location: str) -> str | None:
@@ -275,17 +280,23 @@ def _read_length(sock: socket.socket, buf: bytearray, size: int) -> bytes:
     return bytes(buf[:size])
 
 
+def _chunk_size(line: bytes) -> int:
+    text = line.decode("latin-1")
+    i = 0
+    while i < len(text) and text[i] in _HEX:
+        i += 1
+    if i == 0:
+        raise ConnectionError("bad chunk size")
+    rest = text[i:].lstrip(" \t")
+    if rest and not rest.startswith(";"):
+        raise ConnectionError("bad chunk size")
+    return int(text[:i].lstrip("0") or "0", 16)
+
+
 def _read_chunked(sock: socket.socket, buf: bytearray) -> bytes:
     out = bytearray()
     while True:
-        line = _read_line(sock, buf)
-        size_text = line.split(b";", 1)[0].strip().decode("latin-1")
-        if not size_text:
-            raise ConnectionError("bad chunk size")
-        for ch in size_text:
-            if ch not in _HEX:
-                raise ConnectionError("bad chunk size")
-        size = int(size_text, 16)
+        size = _chunk_size(_read_line(sock, buf))
         if size == 0:
             trailer = _read_line(sock, buf)
             while trailer:
@@ -311,32 +322,45 @@ def _read_to_close(sock: socket.socket, buf: bytearray) -> bytes:
     return bytes(buf)
 
 
-def _parse_head(head: bytes) -> tuple[int, list[tuple[str, str]]]:
-    lines = head.split(b"\r\n")
-    status_line = lines[0].decode("latin-1")
-    parts = status_line.split(" ")
-    version = parts[0]
-    if not version.startswith("HTTP/1.") or len(version) <= 7:
+def _parse_status(line: bytes) -> int:
+    if not line.startswith(b"HTTP/1."):
         raise ConnectionError("response does not start with an HTTP/1.x status line")
-    for ch in version[7:]:
-        if ch not in _DIGITS:
-            raise ConnectionError("response does not start with an HTTP/1.x status line")
-    if len(parts) < 2 or len(parts[1]) != 3:
+    i = 7
+    while i < len(line) and line[i:i + 1] in (b"0", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9"):
+        i += 1
+    if i == 7 or line[i:i + 1] != b" ":
+        raise ConnectionError("response does not start with an HTTP/1.x status line")
+    code = line[i + 1:i + 4]
+    if len(code) != 3 or not code.isdigit() or not code.isascii():
         raise ConnectionError("invalid status line")
-    for ch in parts[1]:
-        if ch not in _DIGITS:
-            raise ConnectionError("invalid status line")
-    status = int(parts[1])
-    if status < 100 or status > 599:
-        raise ConnectionError("final status outside 100-599")
-    headers: list[tuple[str, str]] = []
-    for raw in lines[1:]:
-        text = raw.decode("utf-8", errors="replace")
-        name, sep, value = text.partition(":")
-        if not sep:
-            raise ConnectionError("header line without a colon")
-        headers.append((name, value.strip(" \t")))
-    return status, headers
+    if len(line) > i + 4 and line[i + 4:i + 5] != b" ":
+        raise ConnectionError("invalid status line")
+    return int(code)
+
+
+def _decode_headers(raw: list[tuple[bytes, bytes]]) -> list[tuple[str, str]]:
+    ascii_ok = True
+    for name, value in raw:
+        if not (name.isascii() and value.isascii()):
+            ascii_ok = False
+    if ascii_ok:
+        return [(name.decode("ascii"), value.decode("ascii")) for name, value in raw]
+    try:
+        return [(name.decode("utf-8"), value.decode("utf-8")) for name, value in raw]
+    except UnicodeDecodeError:
+        return [(name.decode("latin-1"), value.decode("latin-1")) for name, value in raw]
+
+
+def _parse_head(head: bytes) -> tuple[int, list[tuple[bytes, bytes]]]:
+    lines = head.split(b"\r\n")
+    status = _parse_status(lines[0])
+    raw: list[tuple[bytes, bytes]] = []
+    for line in lines[1:]:
+        name, sep, value = line.partition(b":")
+        if not sep or not _is_token(name.decode("latin-1")):
+            raise ConnectionError("invalid header line")
+        raw.append((name, value.strip(b" \t")))
+    return status, raw
 
 
 def _is_chunked(headers: list[tuple[str, str]]) -> bool:
@@ -355,13 +379,16 @@ def _content_length(headers: list[tuple[str, str]]) -> int | None:
         if name.lower() != "content-length":
             continue
         for item in value.split(","):
-            text = item.strip()
+            text = item.strip(" \t")
             if not text:
                 raise ConnectionError("bad Content-Length")
             for ch in text:
                 if ch not in _DIGITS:
                     raise ConnectionError("bad Content-Length")
-            number = int(text)
+            digits = text.lstrip("0")
+            if len(digits) > 20:
+                raise ConnectionError("response body too large")
+            number = int(digits) if digits else 0
             if found is not None and found != number:
                 raise ConnectionError("conflicting Content-Length")
             found = number
@@ -377,8 +404,17 @@ def _exchange(scheme: str, host: str, port: int, payload: bytes, method: str, ti
             sock = ssl.create_default_context().wrap_socket(raw, server_hostname=chost)
         sock.sendall(payload)
         buf = bytearray()
-        status, received = _parse_head(_read_head(sock, buf))
-        if method == "HEAD" or status < 200 or status in (204, 304):
+        while True:
+            status, raw_headers = _parse_head(_read_head(sock, buf))
+            if status < 100 or status > 599:
+                raise ConnectionError("final status outside 100-599")
+            if status == 101:
+                raise ConnectionError("unexpected protocol upgrade")
+            if status < 200:
+                continue
+            break
+        received = _decode_headers(raw_headers)
+        if method == "HEAD" or status in (204, 304):
             return status, received, b""
         if _is_chunked(received):
             return status, received, _read_chunked(sock, buf)
@@ -400,7 +436,7 @@ def send_request(request: Request) -> Result[Response, PostingError]:
     for header in request.headers:
         if not _is_token(header.name):
             return Err(error=PostingError_InvalidRequest(message=f"invalid header name: {header.name!r}"))
-        if "\r" in header.value or "\n" in header.value:
+        if "\r" in header.value or "\n" in header.value or any(ord(ch) > 127 for ch in header.value):
             return Err(error=PostingError_InvalidRequest(message=f"invalid header value for {header.name!r}"))
         headers.append((header.name, header.value))
     method = _method_name(request.method)
@@ -431,9 +467,9 @@ def send_request(request: Request) -> Result[Response, PostingError]:
             status, received, body = _exchange(scheme, host, port, payload, method, timeout)
         except (OSError, ValueError) as exc:
             return Err(error=PostingError_NetworkFailed(message=f"network failure: {exc!r}"))
-        location = next((value for name, value in received if name.lower() == "location"), None)
-        if follow and status in (301, 302, 303, 307, 308) and location is not None and redirects < _MAX_REDIRECTS:
-            next_url = _next_url(url, location)
+        locations = [value for name, value in received if name.lower() == "location"]
+        if follow and status in (301, 302, 303, 307, 308) and locations and redirects < _MAX_REDIRECTS:
+            next_url = _next_url(url, ", ".join(locations))
             if next_url is not None:
                 if _origin(next_url) != _origin(url):
                     headers = [(n, v) for n, v in headers if f" {n.lower()} " not in _STRIPPED]

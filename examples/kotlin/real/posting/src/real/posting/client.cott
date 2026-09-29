@@ -85,13 +85,20 @@ fn send_request(request: Request) -> Result[Response, PostingError]:
     
     The request target is the URL path ("/" when the path is empty), followed by
     "?" and the query when the URL contains a "?" before any "#" (even when the
-    query is empty). The fragment is never sent. Percent-encoded octets are sent
-    exactly as written, neither decoded nor re-encoded. Unless request.headers has
+    query is empty). The literal "." and ".." segments of the path are removed
+    as in RFC 3986 section 5.2.4 (so /a/./b/../echo is sent as /a/echo);
+    percent-encoded dots are not decoded and stay. The fragment is never sent.
+    Percent-encoded octets are sent exactly as written, neither decoded nor
+    re-encoded. Unless request.headers has
     a header named Host (ASCII case-insensitive), a Host header is sent whose
     value is the URL host exactly as written (ASCII case kept, an IPv6 literal
     with its brackets, no userinfo), followed by ":" and the port only when the
-    URL gives a port other than the scheme default (80 for http, 443 for https).
-    URL userinfo is neither sent nor used for authentication, and Response.url
+    port differs from the scheme default (80 for http, 443 for https). The port
+    is a run of decimal digits whose decimal value is used (leading zeros are
+    allowed and never shown, so ":080" on an http URL sends no port); an empty
+    port means the scheme default. A port with a non-digit or a value above
+    65535 makes the request InvalidRequest, and port 0 is attempted and fails as
+    NetworkFailed. URL userinfo is neither sent nor used for authentication, and Response.url
     keeps the URL as given.
     
     HttpMethod.Get and HttpMethod.Head requests follow 301, 302, 303, 307 and 308
@@ -106,13 +113,21 @@ fn send_request(request: Request) -> Result[Response, PostingError]:
     with "../../echo" resolves to http://h/echo, and the base http://h/a/b/c with
     "..//g" resolves to http://h/a//g. A Location that does not consist only of
     the URL characters above, or that resolves to a URL that is not http or https
-    or has no host, is not followed and that 3xx response is returned.
+    or has no host, is not followed and that 3xx response is returned. When the
+    response has several Location fields, the Location is their values in
+    received order joined with ", "; such a value contains a space, so it is
+    never valid and the 3xx response is returned. The scheme of a Location is
+    case-insensitive: the resolved URL, which is used for the next request, for
+    Response.url and for the origin comparison, has its scheme in lower case
+    and otherwise keeps the rules above. A Location whose port contains a
+    non-digit or is above 65535 is not followed and that 3xx response is
+    returned.
     
     A redirect is followed only when it does not leave https for http; a 3xx
     response whose Location is an http:// URL while the current URL is https:// is
     not followed and is returned as the result. When a followed redirect changes
     the origin compared with the previous URL (scheme and host compared ASCII
-    case-insensitively, port compared after applying the scheme default), the request
+    case-insensitively, port compared as its decimal value after applying the scheme default), the request
     headers named Authorization, Cookie, Proxy-Authorization and Host (ASCII
     case-insensitive name comparison) are not sent to the new origin; all other
     request headers are still sent. A redirect within the same origin keeps every
@@ -122,26 +137,50 @@ fn send_request(request: Request) -> Result[Response, PostingError]:
     
     The Response holds the final status, the final URL (request.url when no
     redirect was followed), the received headers in received order with
-    duplicates kept, and the body decoded as UTF-8 with each maximal subpart of
+    duplicates kept, names as received and values with leading and trailing
+    space and horizontal tab removed, and the body decoded as UTF-8 with each maximal subpart of
     an ill-formed sequence (Unicode section 3.9, Table 3-8) replaced by one
     U+FFFD, so the bytes ED A0 80 become three U+FFFD; a leading byte order mark
-    is kept as U+FEFF and NUL is kept; a Content-Type charset is ignored. A received
+    is kept as U+FEFF and NUL is kept; a Content-Type charset is ignored. A received header field name is one or
+    more HTTP token characters (as defined by real.posting.client.parse_method)
+    immediately followed by ":"; any other field line (a name with a non-ASCII
+    byte, "@" or another non-token character, an empty name, whitespace before
+    the colon, or no colon) is NetworkFailed. The header values of the final
+    response are decoded as a whole: when every value is ASCII they are used as
+    is; otherwise, when every value is valid UTF-8 they are decoded as UTF-8;
+    otherwise every value is decoded as ISO-8859-1. A received
     status of 400 or above is still a successful Response, never an error.
     
     The received body is limited to MAX_RESPONSE_BODY_BYTES (67108864) bytes,
     counted before decoding; a body of more bytes is NetworkFailed and no partial
     Response is returned.
     
+    A response to a request whose wire method is exactly HEAD (HttpMethod.Head
+    or a Custom name HEAD) has no body whatever its Content-Length or
+    Transfer-Encoding say, and a response with status 204 or 304 has no body
+    either. An interim response with status 100 or 102 to 199 is read together
+    with its headers and discarded, and the next response is read; a 101 response
+    is NetworkFailed because no protocol upgrade is ever requested. The status
+    line is HTTP/1.x, a space and three digits, optionally followed by a space and
+    a reason phrase that may be empty; a missing reason phrase is accepted.
+    A chunk-size line starts with one or more hexadecimal digits, after which
+    only nothing, spaces or horizontal tabs, or optional spaces or horizontal
+    tabs followed by ";" and an ignored chunk extension may follow; any other
+    line (leading whitespace, a "0x" prefix, other characters, no digits) is
+    NetworkFailed. Trailer fields are read and discarded and are not part of
+    Response.headers. A connection closed after the last chunk (size 0) but before
+    the final empty line is NetworkFailed.
+    
     InvalidRequest: timeout_ms is 0; the URL does not start with the lower-case
-    "http://" or "https://", has no host or has a character outside the URL
-    characters above; a header name is blank or not an
+    "http://" or "https://", has no host, has a character outside the URL
+    characters above or has an unusable port; a header name is blank or not an
     HTTP token (as defined by real.posting.client.parse_method); a header value
-    contains CR or LF; or the method is a Custom name that is not an HTTP token.
+    contains CR or LF or a character above U+007F; or the method is a Custom name that is not an HTTP token.
     No connection is attempted for an InvalidRequest. NetworkFailed: name
     resolution, connection, timeout, a connection closed before the empty line
     that ends the header block, before all Content-Length bytes, or before the
     terminating chunk of a chunked body, a response that does not start with an
-    HTTP/1.x status line, a header line without a colon, a response body larger
+    HTTP/1.x status line, a header line whose name is not an HTTP token followed by a colon, a response body larger
     than MAX_RESPONSE_BODY_BYTES, or a final status outside 100-599. No partial
     Response is returned. When the response has neither a Content-Length nor
     chunked transfer coding, the body extends to the connection close.

@@ -20,7 +20,7 @@ are not observed. The coverage policy is the Python project's strict policy exce
 rules allow `unknown`/`unobserved`; the pure callables stay strict.
 
 Behavioral equivalence with the Python implementation is checked by the differential harness in
-`diff/` (see `diff/README.md`), which calls both public facades with the same 1673 inputs against
+`diff/` (see `diff/README.md`), which calls both public facades with the same 2079 inputs against
 local HTTP servers. Expected values come from the contract text and independent RFC 3986 and
 Unicode oracles (`diff/oracle.py`), not from either implementation:
 
@@ -29,14 +29,16 @@ PATH="$HOME/.local/opt/kotlinc/bin:$HOME/.local/opt/jdk17/bin:$PATH" \
   python3 examples/kotlin/real/posting/diff/run.py
 ```
 
-Last run: 1669 PASS, 4 DIFF, 0 FAIL. Both implementations meet all 1652 contract expectations,
-including 20 cases where a lone-surrogate `Str` is rejected at the facade boundary by both
-runtimes. The 4 DIFFs are `edge` cases for behavior the contract does not state:
+Last run: 2079 PASS, 0 DIFF, 0 FAIL; every case carries a contract expectation and both
+implementations meet all of them, including lone-surrogate `Str` rejection at the facade boundary.
 
-- received header bytes ≥ 0x80: Python decodes UTF-8 with replacement, Kotlin decodes Latin-1;
-- interim `102` or `100 Continue` before the final response: Python returns the 1xx as the
-  Response, Kotlin skips to the final response;
-- a port with leading zeros: Python `NetworkFailed`, Kotlin `InvalidRequest`.
+The transport details the contract used to leave open (several Location fields, `HEAD`/204/304
+bodies, dot segments in the request target, Location scheme case, header whitespace and byte
+decoding, interim 1xx, status-line and chunk framing, ports, non-ASCII request header values,
+header field names) were decided from upstream posting 2.10.0 on httpx 0.28.1 / h11 0.16.0,
+observed against the harness fixtures. Where upstream conflicts with a rule the contract already
+pinned, or with RFC 3986/9112, the contract keeps its rule; `diff/README.md` lists each deviation
+from httpx.
 
 Not covered: https→http downgrade refusal, the https default-port Host and Location resolution
 against an https base (need a TLS listener trusted by both runtimes), connection-attempt
