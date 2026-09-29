@@ -601,6 +601,17 @@ class JsonFloat:
             raise CottContractViolation("JsonFloat.value must be a finite F64", phase="validation")
 
 
+def _cott_has_surrogate(value: str) -> bool:
+    """Report whether a str holds a surrogate code point (U+D800-U+DFFF), i.e. is not a Unicode scalar sequence."""
+    if value.isascii():
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 @_final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class JsonString:
@@ -608,7 +619,7 @@ class JsonString:
     __hash__ = None
 
     def __post_init__(self) -> None:
-        if type(self.value) is not str or any(0xD800 <= ord(char) <= 0xDFFF for char in self.value):
+        if type(self.value) is not str or _cott_has_surrogate(self.value):
             raise CottContractViolation("JsonString.value must contain no surrogates", phase="validation")
 
 
@@ -641,19 +652,18 @@ _COTT_JSON_ANNOTATION = object()
 
 @_final
 class _CottTraversal:
-    __slots__ = ("active", "completed", "nodes")
+    __slots__ = ("active", "completed", "failed")
 
     def __init__(self) -> None:
         self.active: set[tuple[int, object]] = set()
         self.completed: dict[tuple[int, object], object] = {}
-        self.nodes = 0
+        # Deterministic contract violations by (value id, annotation). The value is retained so its
+        # id cannot be reused while the memo lives; a repeated probe re-raises without traversing.
+        self.failed: dict[tuple[int, object], tuple[object, CottContractViolation]] = {}
 
     def enter(self, value: object, annotation: object, path: str, depth: int) -> tuple[tuple[int, object], object]:
         if depth > 64:
             raise _CottTraversalFailure(f"{path} exceeds ABI traversal depth 64", phase="validation")
-        self.nodes += 1
-        if self.nodes > 1024:
-            raise _CottTraversalFailure(f"{path} exceeds ABI traversal node limit 1024", phase="validation")
         try:
             key = (id(value), annotation)
             hash(key)
@@ -662,6 +672,9 @@ class _CottTraversal:
         cached = self.completed.get(key, _COTT_MISSING)
         if cached is not _COTT_MISSING:
             return key, cached
+        failure = self.failed.get(key)
+        if failure is not None:
+            raise failure[1].with_traceback(None)
         if key in self.active:
             raise _CottTraversalFailure(f"{path} contains an active value cycle", phase="validation")
         self.active.add(key)
@@ -671,8 +684,12 @@ class _CottTraversal:
         self.active.remove(key)
         self.completed[key] = value
 
-    def abandon(self, key: tuple[int, object]) -> None:
+    def abandon(self, key: tuple[int, object], value: object, error: BaseException) -> None:
         self.active.discard(key)
+        # Depth and cycle failures depend on the traversal path, so only value-determined
+        # violations are memoized.
+        if isinstance(error, CottContractViolation) and not isinstance(error, _CottTraversalFailure):
+            self.failed[key] = (value, error)
 
 
 def _cott_validate_json(value: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> None:
@@ -697,8 +714,8 @@ def _cott_validate_json(value: object, *, path: str = "$", _state: _CottTraversa
                 _cott_validate_json(item, path=f"{path}.value[{key_value!r}]", _state=state, _depth=_depth + 1)
         else:
             raise CottContractViolation(f"{path} is not a JsonValue", phase="validation")
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, value)
 
@@ -764,8 +781,8 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$", _s
         return cached
     try:
         result = _cott_validate_abi_value(value, annotation, path, state, _depth)
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, result)
     return result
@@ -792,7 +809,7 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         for candidate in args:
             nominal_candidate = _get_origin(candidate) or candidate
             # Nominal dataclass branches accept exact types only. Dispatch mismatches without
-            # recursively probing them; do not refund work or memo entries from failed probes.
+            # recursively probing them; failed probes are memoized by the traversal state.
             if isinstance(nominal_candidate, type) and _dataclasses.is_dataclass(nominal_candidate) and type(value) is not nominal_candidate:
                 continue
             try:
@@ -844,7 +861,9 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         return value
     if annotation is float and type(value) is float:
         return value
-    if annotation is str and type(value) is str and not any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+    if annotation is str and type(value) is str:
+        if _cott_has_surrogate(value):
+            raise CottContractViolation(f"{path} contains a surrogate code point", phase="validation")
         return value
     if annotation is bytes and type(value) is bytes:
         return value
@@ -925,8 +944,8 @@ def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$
         return cached
     try:
         result = _cott_normalize_f32_abi_value(value, annotation, path, state, _depth)
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, result)
     return result
@@ -1545,7 +1564,7 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
             phase=phase,
         )
 _COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
-_COTT_LOAD_CACHE: dict[tuple[str, str, str, str | None, str | None], tuple[_types.ModuleType, object, tuple[int, int, int, int, int], tuple[int, int, int, int, int]]] = {}
+_COTT_LOAD_CACHE: dict[tuple[object, ...], tuple[str, _types.ModuleType, object]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
 # Record-level validation depends only on the exact generation.json bytes, so its result is
 # reused for identical bytes; every load still reads and hashes the current record.
@@ -1581,21 +1600,6 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
 
-def _cott_regular_file_hash(path: _Path, label: str) -> str:
-    try:
-        if path.resolve(strict=True) != path:
-            raise _cott_violation(f"{label} contains a symlink")
-        descriptor = _os.open(path, _os.O_RDONLY | _os.O_NOFOLLOW)
-        with _os.fdopen(descriptor, "rb") as source:
-            metadata = _os.fstat(source.fileno())
-            if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise _cott_violation(f"{label} is not a regular file")
-            return "sha256:" + _hashlib.file_digest(source, "sha256").hexdigest()
-    except CottContractViolation:
-        raise
-    except (OSError, ValueError) as error:
-        raise _cott_violation(f"unable to hash {label}: {error}") from error
-
 
 def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
     try:
@@ -1613,17 +1617,6 @@ def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
 
 
 
-def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
-    try:
-        metadata = path.lstat()
-        if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise _cott_violation(f"{label} is not a regular file")
-        return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-    except CottContractViolation:
-        raise
-    except (OSError, ValueError) as error:
-        raise _cott_violation(f"unable to stat {label}: {error}") from error
-
 
 def _cott_sha256(value: bytes) -> str:
     return "sha256:" + _hashlib.sha256(value).hexdigest()
@@ -1639,12 +1632,12 @@ def _cott_expected_digest(value: object, label: str) -> str:
 
 
 def _cott_validate_python_tools(tools: object) -> None:
+    """Require a compatible Python runtime, not the machine that recorded the generation."""
     if type(tools) is not dict or type(tools.get("python")) is not dict:
         raise _cott_violation("generation record omitted Python tool provenance")
     recorded = tools["python"]
     expected = {
         "implementation": _sys.implementation.name,
-        "version": _platform.python_version(),
         "cache_tag": _sys.implementation.cache_tag,
         "os": _sys.platform,
         "machine": _platform.machine(),
@@ -1653,22 +1646,17 @@ def _cott_validate_python_tools(tools: object) -> None:
     for key, actual in expected.items():
         if recorded.get(key) != actual:
             raise _cott_violation(f"Python runtime {key} mismatch")
+    recorded_version = recorded.get("version")
+    if type(recorded_version) is not str or recorded_version.split(".")[:2] != _platform.python_version().split(".")[:2]:
+        raise _cott_violation("Python runtime version mismatch")
     has_executable = "executable" in recorded
     has_hash = "content_hash" in recorded
     if has_executable != has_hash:
         raise _cott_violation("Python executable provenance is incomplete")
     if has_executable:
-        try:
-            runtime_executable = _Path(_sys.executable).resolve(strict=True)
-            if _Path(recorded["executable"]).resolve(strict=True) != runtime_executable:
-                raise _cott_violation("Python executable path mismatch")
-        except CottContractViolation:
-            raise
-        except (OSError, TypeError, ValueError) as error:
-            raise _cott_violation(f"invalid Python executable provenance: {error}") from error
-        executable_hash = _cott_expected_digest(recorded.get("content_hash"), "Python executable hash")
-        if _cott_regular_file_hash(runtime_executable, "Python executable") != executable_hash:
-            raise _cott_violation("Python executable hash mismatch")
+        if type(recorded["executable"]) is not str:
+            raise _cott_violation("Python executable provenance is malformed")
+        _cott_expected_digest(recorded["content_hash"], "Python executable hash")
     runtime = tools.get("runtime")
     if type(runtime) is not dict or runtime.get("abi") != _COTT_RUNTIME_ABI or runtime.get("version") != _COTT_RUNTIME_VERSION:
         raise _cott_violation("Cott runtime ABI or version mismatch")
@@ -2269,7 +2257,7 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     _cott_validate_python_tools(current["tools"])
     _cott_validate_dependencies(current["dependencies"], source, current["public_python_symbols"])
     implementations = current["implementations"]
-    selected_origin = (("python/" if root.name == "python" else "") + relative_path)
+    selected_origin = "python/" + relative_path
     selected_python_symbol = f"{relative_path[:-3].replace('/', '.')}:{symbol}"
     matches = []
     for implementation in implementations:
@@ -2301,6 +2289,16 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
 
 
 def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_name: str | None = None, *, expected_project_name: str | None = None, expected_cott_symbol: str | None = None):
+    # Hot path: after the first authenticated load of an argument tuple, return the cached
+    # implementation with no lock and no filesystem access. Later on-disk changes are caught
+    # by the next process's first load.
+    raw_key = (relative_path, expected_sha256, symbol, project_name, expected_project_name, expected_cott_symbol)
+    try:
+        cached_load = _COTT_LOAD_CACHE.get(raw_key)
+    except TypeError:
+        cached_load = None
+    if cached_load is not None and _sys.modules.get(cached_load[0]) is cached_load[1]:
+        return cached_load[2]
     if project_name is not None and expected_project_name is not None and project_name != expected_project_name:
         raise _cott_violation("conflicting project identities", phase="facade-import")
     expected_project = project_name if expected_project_name is None else expected_project_name
@@ -2322,19 +2320,6 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
     digest_input = _cott_expected_digest(expected_sha256, "binding hash")
     root = _Path(__file__).resolve().parent.parent
     path = root.joinpath(*parts)
-    generation_path = (root.parent if root.name == "python" else root) / "generation.json"
-    cache_key = (relative_path, digest_input, symbol, expected_project, expected_cott_symbol)
-    with _COTT_LOAD_LOCK:
-        cached_load = _COTT_LOAD_CACHE.get(cache_key)
-        if cached_load is not None:
-            module, implementation, implementation_stamp, generation_stamp = cached_load
-            if (
-                _sys.modules.get(module_name) is module
-                and _cott_file_stamp(path, f"binding {relative_path}") == implementation_stamp
-                and _cott_file_stamp(generation_path, "generation record") == generation_stamp
-            ):
-                return implementation
-            del _COTT_LOAD_CACHE[cache_key]
 
     source = _cott_regular_file_bytes(path, f"binding {relative_path}")
     digest = _cott_sha256(source)
@@ -2352,12 +2337,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
                 implementation = getattr(module, symbol)
             except AttributeError as error:
                 raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
-            _COTT_LOAD_CACHE[cache_key] = (
-                module,
-                implementation,
-                _cott_file_stamp(path, f"binding {relative_path}"),
-                _cott_file_stamp(generation_path, "generation record"),
-            )
+            _COTT_LOAD_CACHE[raw_key] = (module_name, module, implementation)
             return implementation
         if module_name in _sys.modules:
             raise _cott_violation(f"direct implementation import is not allowed: {module_name}")
@@ -2388,12 +2368,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             if _sys.modules.get(module_name) is module:
                 del _sys.modules[module_name]
             raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
-        _COTT_LOAD_CACHE[cache_key] = (
-            module,
-            implementation,
-            _cott_file_stamp(path, f"binding {relative_path}"),
-            _cott_file_stamp(generation_path, "generation record"),
-        )
+        _COTT_LOAD_CACHE[raw_key] = (module_name, module, implementation)
         return implementation
 
 

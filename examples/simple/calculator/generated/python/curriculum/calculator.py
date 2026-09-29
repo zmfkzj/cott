@@ -20,7 +20,7 @@ def calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, Calc
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (_cott_contract_condition((((operator == CalculatorOp_Divide()) and (right == 0))), "curriculum.calculator.calculate", "error:2:condition")):
+    if _expected_error is None and (_cott_contract_condition((((operator == CalculatorOp_Divide()) and (right == 0.0))), "curriculum.calculator.calculate", "error:2:condition")):
         _expected_error = CalculatorError_DivideByZero
         _expected_error_span = {"end_byte":707,"end_column":93,"end_line":19,"start_byte":619,"start_column":5,"start_line":19}
         _expected_error_clause = "error:2"
@@ -52,7 +52,7 @@ def calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, Calc
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             value = _cott_match_value.value
-            return (_cott_contract_condition(((((((operator == CalculatorOp_Add()) and (value == (left + right))) or ((operator == CalculatorOp_Subtract()) and (value == (left - right)))) or ((operator == CalculatorOp_Multiply()) and (value == (left * right)))) or (((operator == CalculatorOp_Divide()) and (right != 0)) and (value == (left / right))))), "curriculum.calculator.calculate", "ensures:1"))
+            return (_cott_contract_condition(((((((operator == CalculatorOp_Add()) and (value == (left + right))) or ((operator == CalculatorOp_Subtract()) and (value == (left - right)))) or ((operator == CalculatorOp_Multiply()) and (value == (left * right)))) or (((operator == CalculatorOp_Divide()) and (right != 0.0)) and (value == (left / right))))), "curriculum.calculator.calculate", "ensures:1"))
         _cott_contract_condition((False), "curriculum.calculator.calculate", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):

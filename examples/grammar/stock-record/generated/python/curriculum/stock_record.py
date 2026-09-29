@@ -20,7 +20,7 @@ ValuationOverflow is returned when the product is not finite."""
     record = _cott_validate_abi(record, StockRecord, path="$.record")
     if not (_cott_contract_condition((((record).shares >= 0)), "curriculum.stock_record.value_record", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.stock_record.value_record", clause="requires:1", phase="requires", span={"end_byte":671,"end_column":32,"end_line":25,"start_byte":644,"start_column":5,"start_line":25}, expected="true", actual="false")
-    if not (_cott_contract_condition((((record).price >= 0)), "curriculum.stock_record.value_record", "requires:2")):
+    if not (_cott_contract_condition((((record).price >= 0.0)), "curriculum.stock_record.value_record", "requires:2")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.stock_record.value_record", clause="requires:2", phase="requires", span={"end_byte":704,"end_column":33,"end_line":26,"start_byte":676,"start_column":5,"start_line":26}, expected="true", actual="false")
     _expected_error = None
     _expected_error_span = None
@@ -55,7 +55,7 @@ ValuationOverflow is returned when the product is not finite."""
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             value = _cott_match_value.value
-            return (_cott_contract_condition(((0 <= value <= MAX_F64)), "curriculum.stock_record.value_record", "ensures:3"))
+            return (_cott_contract_condition(((0.0 <= value <= MAX_F64)), "curriculum.stock_record.value_record", "ensures:3"))
         _cott_contract_condition((False), "curriculum.stock_record.value_record", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
@@ -84,7 +84,7 @@ including ValuationOverflow, unchanged."""
         _expected_error = StockRecordError_NonFinitePrice
         _expected_error_span = {"end_byte":1421,"end_column":89,"end_line":44,"start_byte":1337,"start_column":5,"start_line":44}
         _expected_error_clause = "error:4"
-    if _expected_error is None and (_cott_contract_condition((((record).price < 0)), "curriculum.stock_record.value_stock_record", "error:5:condition")):
+    if _expected_error is None and (_cott_contract_condition((((record).price < 0.0)), "curriculum.stock_record.value_stock_record", "error:5:condition")):
         _expected_error = StockRecordError_NegativePrice
         _expected_error_span = {"end_byte":1486,"end_column":65,"end_line":45,"start_byte":1426,"start_column":5,"start_line":45}
         _expected_error_clause = "error:5"
@@ -118,7 +118,7 @@ including ValuationOverflow, unchanged."""
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             value = _cott_match_value.value
-            return (_cott_contract_condition(((0 <= value <= MAX_F64)), "curriculum.stock_record.value_stock_record", "ensures:1"))
+            return (_cott_contract_condition(((0.0 <= value <= MAX_F64)), "curriculum.stock_record.value_stock_record", "ensures:1"))
         _cott_contract_condition((False), "curriculum.stock_record.value_stock_record", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):

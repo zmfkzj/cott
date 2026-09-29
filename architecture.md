@@ -1585,7 +1585,7 @@ verification result를 해당 target의 닫힌 schema로 기록한다. 결정적
 
 ## 16. Python 대상 생성
 
-MVP compiler host와 runtime target은 `x86_64` 또는 `arm64` Linux/macOS의 CPython 3.14이다. interpreter의 canonical path, full version, `sys.implementation.cache_tag`, `sys.platform`, normalized `platform.machine()`과 `sysconfig.get_platform()`을 provenance에 기록한다. configured interpreter가 compiler host의 OS family·architecture와 다르거나 다른 Python implementation·minor version이면 거부한다. generated artifact는 configured CPython full patch version에 고정되므로 Python patch upgrade 뒤에는 `cott emit`·full `cott verify`와 package rebuild가 필요하다.
+MVP compiler host와 runtime target은 `x86_64` 또는 `arm64` Linux/macOS의 CPython 3.14이다. interpreter의 canonical path, full version, `sys.implementation.cache_tag`, `sys.platform`, normalized `platform.machine()`과 `sysconfig.get_platform()`을 provenance에 기록한다. configured interpreter가 compiler host의 OS family·architecture와 다르거나 다른 Python implementation·minor version이면 거부한다. verify와 `generation_id`는 이 exact identity를 기록하지만 installed runtime은 compatibility만 요구한다: implementation, `cache_tag`, OS, machine, `sysconfig` platform과 CPython major.minor가 같아야 하며 patch version, interpreter path와 executable content hash는 load 시 비교하지 않는다. 따라서 같은 minor의 다른 patch 또는 다른 위치의 동일 interpreter·venv로 배포 산출물을 옮겨도 재생성·재검증 없이 load된다.
 
 ### 16.1 기본 생성물
 
@@ -1925,7 +1925,7 @@ free-function wrapper order는 고정한다: statically concrete argument `F32` 
 
 facade의 always-on ABI pass는 expected type에서 statically concrete `F32` path만 recursive traversal한다. 값이 반올림되면 같은 immutable cott carrier를 다시 만들며 raw Python container를 convert하지 않는다. 이 path의 shape mismatch는 `off`에서도 ABI violation이고 erased `TypeVar` 내부는 static-only다. 이와 별도로 newtype 생성자는 6.2의 carrier ABI와 refinement를 항상 재귀 검사한다.
 
-validator는 alias를 해소하고 cott_runtime nominal class, struct·enum field, container element와 newtype refinement를 재귀 검사한다. ABI traversal has hard depth limit `64` and node limit `1024`, distinct from the contract-test candidate budget. A nominal dataclass union branch with a different exact runtime class is skipped before traversal; recursive failed probes do not refund nodes or retain uncharged work. An active nominal cycle is rejected, while memoized sharing of an already validated non-active object is accepted without re-traversal. `Dyn`은 sealed wrapper, exact compiler-owned concrete carrier, exact trait origin·specialization을 검사한다. trait Protocol member-presence는 non-`Dyn` structural boundary check일 뿐이다. `Never` 값은 항상 실패하고 `Opaque`는 wrapper identity와 literal tag를 확인한다. sync lazy protocol은 boundary에서 return object만 검사하고 consumption, yield/send, completion, `close`를 미리 실행하거나 전부 validated라고 주장하지 않는다. async lazy protocol은 `off`에서 신뢰 선언이고 다른 mode에서는 wrapper가 실제 operation마다 검사한다.
+validator는 alias를 해소하고 cott_runtime nominal class, struct·enum field, container element와 newtype refinement를 재귀 검사한다. Python ABI traversal has hard depth limit `64` and no node-count limit; value width is bounded only by the caller's data, distinct from the contract-test candidate budget. A nominal dataclass union branch with a different exact runtime class is skipped before traversal. A failed probe of an exact `(value, annotation)` pair is memoized for the rest of that traversal (pinning the value), so repeated union probing re-raises instead of re-traversing and total work stays proportional to distinct pairs. An active nominal cycle is rejected, while memoized sharing of an already validated non-active object is accepted without re-traversal. `Dyn`은 sealed wrapper, exact compiler-owned concrete carrier, exact trait origin·specialization을 검사한다. trait Protocol member-presence는 non-`Dyn` structural boundary check일 뿐이다. `Never` 값은 항상 실패하고 `Opaque`는 wrapper identity와 literal tag를 확인한다. sync lazy protocol은 boundary에서 return object만 검사하고 consumption, yield/send, completion, `close`를 미리 실행하거나 전부 validated라고 주장하지 않는다. async lazy protocol은 `off`에서 신뢰 선언이고 다른 mode에서는 wrapper가 실제 operation마다 검사한다.
 
 `test-only` context는 cott 계약 테스트 실행기만 활성화하며 일반 환경 변수로 켤 수 없다. `runtime_validation` 값은 emit 시 facade·wrapper bytes에 compile-time specialize되어 managed file hash에 포함된다. 설치된 runtime은 `cott.toml`, `generation.json`이나 environment에서 mode를 다시 읽지 않는다.
 
@@ -2044,18 +2044,18 @@ cott는 `generated/python/foo/bar.py`에 fully typed free-function wrapper와 im
 
 각 free-function wrapper와 impl class/method wrapper에는 project identity·expected `cott_runtime` ABI version, compile-time specialized `runtime_validation`, implementation의 canonical module·symbol, `generated/python` relative `runtime_origin`·content hash, exact CPython full version·cache tag·OS family·architecture와 16.1의 external dependency record를 immutable constant로 embed한다. impl class shell additionally embeds ordered state layout, defaults, init/invariant and method `modifies` metadata; helper symbol is `<module>.<Concrete>.<method>`. full `sysconfig` platform string은 generation provenance에만 둔다. durable `source_origin`은 `generation.json`에만 남고 verify가 generated copy와 byte identity를 확인한다. installed package에 project-side record가 없어도 검사는 동작한다.
 
-`cott_runtime` verified loader는 먼저 facade와 runtime의 project identity·ABI version 및 embedded CPython full version·cache tag·OS family·architecture가 현재 runtime과 같은지 확인하며 OS point version은 비교하지 않는다. CPython patch version mismatch도 거부하며 16장의 재생성·재검증이 필요하다. 구현별 process 최초 resolution은 ordinary import보다 먼저 자신의 package 위치에서 generated root를 정하고 embedded `runtime_origin`을 no-follow로 열어 exact bytes의 hash와 provenance를 검사한다. 성공하면 canonical module name으로 단 하나의 module object를 만들고 실행 전에 `sys.modules`에 등록한 뒤 검증한 bytes 자체를 compile·execute한다. 실패하면 등록을 되돌린다.
+`cott_runtime` verified loader는 먼저 facade와 runtime의 project identity·ABI version 및 recorded CPython implementation·major.minor·cache tag·OS family·architecture·platform이 현재 runtime과 같은지 확인하며 OS point version, CPython patch version, interpreter path와 executable hash는 비교하지 않는다. minor version이나 cache tag가 다르면 거부하며 16장의 재생성·재검증이 필요하다. 구현별 process 최초 resolution은 ordinary import보다 먼저 자신의 package 위치에서 generated root를 정하고 embedded `runtime_origin`을 no-follow로 열어 exact bytes의 hash와 provenance를 검사한다. 성공하면 canonical module name으로 단 하나의 module object를 만들고 실행 전에 `sys.modules`에 등록한 뒤 검증한 bytes 자체를 compile·execute한다. 실패하면 등록을 되돌린다.
 
-이미 같은 canonical name이 `sys.modules`에 있으면 cott loader registry가 동일 object·origin·hash를 앞서 검증한 경우에만 재사용하고, 일반 import로 먼저 실행된 module은 거부한다. 검증된 symbol cache는 runtime origin과 `generation.json`의 regular-file identity·size·mtime·ctime을 함께 기록한다. 이후 같은 process의 호출은 이 두 stamp만 비교하며, 어느 하나라도 바뀌면 cache를 버리고 exact bytes hash·provenance preflight를 다시 수행한다. 이 stat fast path는 정상 호출의 file read·hash·JSON parse를 피하는 성능 최적화이며 metadata 위조를 방어하는 보안 경계는 아니다. 구현별 preflight는 매번 `generation.json` bytes를 읽고 SHA-256을 계산하지만, JSON parse·snapshot 해석·snapshot digest·generation identity처럼 record bytes에만 의존하는 결과는 exact content digest별 process cache에서 재사용한다. bytes가 하나라도 다르면 전체 record 검증을 다시 수행하고, 현재 interpreter executable identity·source별 dependency 검사·implementation provenance 일치는 cache miss 경로에서 항상 다시 수행한다. process-global registry와 load transition은 canonical name별 reentrant lock으로 보호해 concurrent caller가 같은 module object 또는 같은 실패를 관찰하게 한다. 구현 module 직접 import는 지원 API가 아니다. custom loader, relative import 또는 실행이 필요한 parent `__init__.py`는 MVP에서 거부한다. compiler-owned empty parent package만 만들며 검증된 symbol을 cache한다.
+이미 같은 canonical name이 `sys.modules`에 있으면 cott loader registry가 동일 object·origin·hash를 앞서 검증한 경우에만 재사용하고, 일반 import로 먼저 실행된 module은 거부한다. 검증된 symbol은 exact loader argument별 process cache에 저장한다. 이후 같은 process의 호출은 lock이나 filesystem syscall 없이 cache에서 symbol을 반환하며 registry의 module object가 그대로인지만 확인한다. 이미 실행된 module code는 on-disk 변경의 영향을 받지 않으므로 load 뒤 파일 변조는 다음 process의 최초 resolution에서 거부된다. 최초 preflight는 `generation.json` bytes를 읽고 SHA-256을 계산하며, JSON parse·snapshot 해석·snapshot digest·generation identity처럼 record bytes에만 의존하는 결과는 exact content digest별 process cache에서 재사용한다. bytes가 하나라도 다르면 전체 record 검증을 다시 수행하고, interpreter compatibility·source별 dependency 검사·implementation provenance 일치는 cache miss 경로에서 항상 다시 수행한다. process-global registry와 load transition은 reentrant lock으로 보호해 concurrent caller가 같은 module object 또는 같은 실패를 관찰하게 한다. 구현 module 직접 import는 지원 API가 아니다. custom loader, relative import 또는 실행이 필요한 parent `__init__.py`는 MVP에서 거부한다. compiler-owned empty parent package만 만들며 검증된 symbol을 cache한다.
 implementation에서 import한 cott facade도 compiler-owned generated root에서만 해석하며 source root나 `_cott_impl`로 fallback하지 않는다. facade call chain의 각 edge는 해당 wrapper의 verified-loader 경계를 다시 통과한다.
 
-cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 recorded direct external module의 distribution identity·version·regular module-relative origin·content hash를 import 없이 확인하고, 이미 load된 module의 `__file__` origin이 다르면 실패한다. 이 preflight는 preloaded module이 과거에 같은 bytes로 실행됐거나 distribution의 transitive file·standard library 전체가 변조되지 않았음을 증명하지 않는다. external execution은 lockfile packaging과 exact CPython installation에 대한 신뢰 선언으로 보고한다.
+cache miss의 loader preflight는 target 실행 전에 recorded direct external module의 distribution identity·version·regular module-relative origin·content hash를 import 없이 확인하고, 이미 load된 module의 `__file__` origin이 다르면 실패한다. 이 preflight는 preloaded module이 과거에 같은 bytes로 실행됐거나 distribution의 transitive file·standard library 전체가 변조되지 않았음을 증명하지 않는다. external execution은 lockfile packaging과 compatible CPython installation에 대한 신뢰 선언으로 보고한다.
 
 Runtime import ownership is recomputed from current distribution inventories and live file existence for the requested modules and their parent initializers. It does not cache the final owner map: an existing `RECORD` edit or a previously missing recorded module appearing must trigger ambiguity checks even when `sys.path` and directory timestamps are unchanged. Unrelated distribution files need no module-origin stat, and legacy inventory resolution remains CPython-owned. Resolved nominal field annotations are cached only after successful resolution; each value still undergoes ABI checks. `ctypes` and `_ctypes` remain forbidden implementation introspection paths: arbitrary native pointers must not expose private contract evidence.
 
 `runtime_validation`은 16.4 표의 optional free-function/method ABI와 contract checks만 제어하며 provenance loader, impl init/state snapshot/invariant/modifies checks를 끄거나 직접 implementation re-export로 바꾸지 않는다. 구현 위치와 mode가 달라도 facade callable의 signature와 module identity는 같다.
 
-`target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. independent installed-wheel whole-origin verification과 package installation은 v1.0 범위에서 제외하고 post-v1.0 roadmap으로 남긴다. v1.0에서는 embedded provenance check, 즉 exact metadata와 실제 imported regular-file origin·content hash의 preflight를 필수로 한다.
+`target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. `cott deploy`는 18.7.1의 installable wheel을 만들지만 independent installed-wheel whole-origin verification은 v1.0 범위에서 제외한다. v1.0에서는 embedded provenance check, 즉 exact metadata와 실제 imported regular-file origin·content hash의 preflight를 필수로 한다.
 
 해석된 public free function과 every emitted impl class만 facade와 `__all__`에 포함한다. 미구현 free function 또는 impl method에는 placeholder를 만들지 않고 `.snapshots[.current].unresolved`에 기록하며, unresolved method가 있는 impl class 자체도 emit하지 않는다. `cott verify`는 unresolved pending이 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다. 현재 facade에 없는 옛 managed implementation은 export하지 않는다.
 
@@ -2101,7 +2101,7 @@ verify는 모든 evidence를 먼저 finalize하고 `.snapshots[.current].verifie
 
 ### 16.10 유지 example generation-first policy
 
-작성된 inventory는 Python project 26개, Kotlin project 20개, Dart/Flutter project 1개다. Python set은 grammar
+작성된 inventory는 Python project 26개, Kotlin project 21개, Dart/Flutter project 1개다. Python set은 grammar
 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`,
 `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수
 complex curriculum `artifact-pipeline`, 별도 full-generation fixture `process-bar`, focused
@@ -2109,7 +2109,7 @@ feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`
 `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`,
 FastAPI external projection `fastapi-hello`, real-world generation-first 6개(`real/yt-dlp`,
 `real/harlequin`, `real/pgcli`, `real/posting`, `real/toolong`, `real/frogmouth`)다.
-`examples/kotlin/`에는 19개 Kotlin lesson/fixture가 있고 `integrations/android-counter`는
+`examples/kotlin/`에는 19개 Kotlin lesson/fixture와 `real/posting` 계약의 Kotlin generation인 `kotlin/real/posting`이 있고 `integrations/android-counter`는
 Kotlin/JVM module과 standard Android consumer다. `integrations/flutter-counter`는 Dart module과
 standard Flutter consumer다. `process-bar`는 curriculum count에 넣지 않는다.
 
@@ -2647,7 +2647,7 @@ Source retry와 parallel wave에도 동일한 선택을 사용하고 실제 sele
 * 에이전트 executable과 각 인자는 별도 argv로 전달하며 shell 문자열로 조합하거나 재해석하지 않는다. Compiler-owned 고정 `/bin/sh` startup gate만 scope 확인을 기다린 뒤 `exec "$@"`로 bubblewrap을 실행한다.
 * main process 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다. Claude native-entrypoint rejection은 위와 같이 `claude --version` probe 전에 수행한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
-* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path, OMP native-addon cache와 위에서 검증한 OMP runtime/package closure만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
+* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path, OMP native-addon cache와 위에서 검증한 OMP runtime/package closure만 project 밖에서 read-only로 열며, OMP의 `config.yml`, `agent.db`와 model catalog `models.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
 * prompt는 shell 문자열로 조합하지 않는다. Codex와 Claude만 stdin을 사용하며, OMP의 prompt file은 workspace mutation audit 범위 밖의 scratch에만 둔다.
 * 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
@@ -3043,9 +3043,23 @@ hardlink를 허용하지 않는다. 읽은 input snapshot을 publication 직전�
 
 Python payload는 `python/` 아래 managed facade/type/runtime/implementation, authored runtime
 adapter, byte-identical `generation.json`, exact `.python-version`, production
-`requirements.txt`다. Existing facade-only audit와 uv frozen offline export 규칙은 그대로다.
-`.cott`, manifest, IR, stub, strategy/test, authored private copy와 original generated path는
-제외하며 non-Python application resource를 추론하지 않는다.
+`requirements.txt`와 deployment root의 `<dist>-<version>-py3-none-any.whl`이다. Existing
+facade-only audit와 uv frozen offline export 규칙은 그대로다. `.cott`, manifest, IR, stub,
+strategy/test, authored private copy와 original generated path는 제외하며 non-Python application
+resource를 추론하지 않는다.
+
+Wheel은 같은 `python/` payload(source-root marker `python/__init__.py` 제외)를 prefix 없이 flat purelib root에 두고 `generation.json`을 그
+root에 둔다(runtime의 flat-layout record lookup). `dist`는 PEP 503 normalized project name의
+`_` spelling, version은 manifest project version이다. `.dist-info`는 Metadata 2.1(`Name`,
+`Version`, `python/pyproject.toml`의 `requires-python`과 `[project].dependencies` 그대로의
+`Requires-Dist`), `WHEEL`(`py3-none-any`, purelib), sha256 `RECORD`와
+`[project.scripts]`가 있으면 `entry_points.txt` `[console_scripts]`를 가진다. script target의
+top-level module은 deploy되는 authored adapter여야 하며 `_cott_impl`, `cott_runtime` 또는
+generated Cott package를 가리키면 deploy가 실패한다. entry 순서·timestamp·permission을 고정해
+같은 입력은 같은 wheel bytes를 만든다. hash-pinned `requirements.txt`가 reproducible dependency
+install 경로다. runtime의 single-link 검사 때문에 hardlink 설치(uv 기본 link mode)는 거부되므로
+`uv pip install --link-mode=copy` 또는 pip를 사용한다. 한 Python environment에는 cott project
+하나만 설치한다.
 
 Kotlin payload는 `cott-module.jar`, byte-identical `generation.json`, schema-1
 `dependencies.json`, `runtime-libs/kotlinx-coroutines-core-jvm.jar`와 verified
@@ -3695,7 +3709,7 @@ BasedPyright 검증은 user config가 아니라 compiler-owned strict config를 
 
 ### 결정 24
 
-MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64` 또는 `arm64` Linux/macOS CPython 3.14이며, generated artifact는 configured CPython full patch version에 고정되고 Python environment당 cott project 하나다.
+MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64` 또는 `arm64` Linux/macOS CPython 3.14이며, verify는 configured CPython full identity를 기록하지만 installed runtime은 같은 implementation·minor·cache tag·platform만 요구하고 Python environment당 cott project 하나다.
 
 ### 결정 25
 

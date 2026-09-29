@@ -8,7 +8,7 @@ from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, P
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 from cott_runtime import _cott_contract_condition
-MAX_F64: Final[F64] = 179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+MAX_F64: Final[F64] = 1.7976931348623157e308
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -17,7 +17,7 @@ class PositiveStep:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, F64, path="$.value"))
-        if not (_cott_contract_condition(((self.value > 0)), "curriculum.fractional_range_values.PositiveStep", "refinement")):
+        if not (_cott_contract_condition(((self.value > 0.0)), "curriculum.fractional_range_values.PositiveStep", "refinement")):
             raise CottContractViolation("PositiveStep refinement failed", symbol="curriculum.fractional_range_values.PositiveStep", phase="refinement", span={"end_byte":134,"end_column":21,"end_line":6,"start_byte":124,"start_column":11,"start_line":6}, expected="true", actual="false")
 
     __hash__ = None

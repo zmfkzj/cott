@@ -1,0 +1,51 @@
+[project]
+name = "real-posting"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = "kotlinc"
+java = "java"
+jvm_target = 17
+runtime_validation = "boundary"
+
+[generator]
+rules = "generator.rules"
+timeout_seconds = 900
+
+[[verification.coverage.rules]]
+symbol = "real.posting.client.parse_method"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.posting.client.parse_arguments"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.posting.client.send_request"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "error:4", "error:5", "error:6", "error:7", "error:8"]
+allow_unobserved = true
+allow_trust_declaration = false
+allow_unknown = true
+
+[[verification.coverage.rules]]
+symbol = "real.posting.client.render_response"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.posting.client.execute"
+clauses = ["ensures:1", "error:2", "error:3", "error:4"]
+allow_unobserved = true
+allow_trust_declaration = false
+allow_unknown = true

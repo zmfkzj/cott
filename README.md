@@ -518,11 +518,12 @@ app and does not run Python on-device.
 
 ## Reduced example index
 
-The authored inventory contains 26 Python projects, 20 Kotlin projects and one Dart/Flutter project.
+The authored inventory contains 26 Python projects, 21 Kotlin projects and one Dart/Flutter project.
 The Python set has six grammar lessons, three simple lessons, one complex curriculum project, the
 separate `process-bar` fixture, seven features, one modular project, one FastAPI integration and six
-real-world projects. `examples/kotlin/` contains 19 corresponding Kotlin lessons/fixtures, with
-`integrations/android-counter` as the twentieth Kotlin project.
+real-world projects. `examples/kotlin/` contains 19 corresponding Kotlin lessons/fixtures plus
+`kotlin/real/posting`, a Kotlin generation of the `real/posting` contract with a Python-vs-Kotlin
+differential harness; `integrations/android-counter` is the twenty-first Kotlin project.
 `integrations/flutter-counter` is the Dart module and standard Flutter consumer.
 
 ### Grammar — 6

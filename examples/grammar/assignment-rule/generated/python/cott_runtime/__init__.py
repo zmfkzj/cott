@@ -7,6 +7,7 @@ import dataclasses as _dataclasses
 import ast as _ast
 import contextlib as _contextlib
 import contextvars as _contextvars
+import errno as _errno
 import hashlib as _hashlib
 import importlib.metadata as _metadata
 import importlib.machinery as _machinery
@@ -14,6 +15,8 @@ import json as _json
 import math as _math
 import os as _os
 import platform as _platform
+import random as _random
+import signal as _signal
 import stat as _stat
 import struct as _struct
 import sys as _sys
@@ -27,8 +30,17 @@ from dataclasses import dataclass
 from pathlib import Path as _Path
 from typing import Annotated, Any, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
 _COTT_PATH_TYPE = type(_Path())
+# Resolved field annotations of a nominal class never change once they resolve; evaluating their
+# forward references per value dominates construction cost. Failures are not cached.
+_COTT_TYPE_HINTS: dict[type, dict[str, Any]] = {}
 
 
+def _cott_type_hints(nominal: type) -> dict[str, Any]:
+    hints = _COTT_TYPE_HINTS.get(nominal)
+    if hints is None:
+        hints = _get_type_hints(nominal, include_extras=True)
+        _COTT_TYPE_HINTS[nominal] = hints
+    return hints
 
 
 # The compiler embeds this value in every generated runtime.
@@ -585,6 +597,17 @@ class JsonFloat:
             raise CottContractViolation("JsonFloat.value must be a finite F64", phase="validation")
 
 
+def _cott_has_surrogate(value: str) -> bool:
+    """Report whether a str holds a surrogate code point (U+D800-U+DFFF), i.e. is not a Unicode scalar sequence."""
+    if value.isascii():
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 @_final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class JsonString:
@@ -592,7 +615,7 @@ class JsonString:
     __hash__ = None
 
     def __post_init__(self) -> None:
-        if type(self.value) is not str or any(0xD800 <= ord(char) <= 0xDFFF for char in self.value):
+        if type(self.value) is not str or _cott_has_surrogate(self.value):
             raise CottContractViolation("JsonString.value must contain no surrogates", phase="validation")
 
 
@@ -625,19 +648,18 @@ _COTT_JSON_ANNOTATION = object()
 
 @_final
 class _CottTraversal:
-    __slots__ = ("active", "completed", "nodes")
+    __slots__ = ("active", "completed", "failed")
 
     def __init__(self) -> None:
         self.active: set[tuple[int, object]] = set()
         self.completed: dict[tuple[int, object], object] = {}
-        self.nodes = 0
+        # Deterministic contract violations by (value id, annotation). The value is retained so its
+        # id cannot be reused while the memo lives; a repeated probe re-raises without traversing.
+        self.failed: dict[tuple[int, object], tuple[object, CottContractViolation]] = {}
 
     def enter(self, value: object, annotation: object, path: str, depth: int) -> tuple[tuple[int, object], object]:
         if depth > 64:
             raise _CottTraversalFailure(f"{path} exceeds ABI traversal depth 64", phase="validation")
-        self.nodes += 1
-        if self.nodes > 1024:
-            raise _CottTraversalFailure(f"{path} exceeds ABI traversal node limit 1024", phase="validation")
         try:
             key = (id(value), annotation)
             hash(key)
@@ -646,6 +668,9 @@ class _CottTraversal:
         cached = self.completed.get(key, _COTT_MISSING)
         if cached is not _COTT_MISSING:
             return key, cached
+        failure = self.failed.get(key)
+        if failure is not None:
+            raise failure[1].with_traceback(None)
         if key in self.active:
             raise _CottTraversalFailure(f"{path} contains an active value cycle", phase="validation")
         self.active.add(key)
@@ -655,8 +680,12 @@ class _CottTraversal:
         self.active.remove(key)
         self.completed[key] = value
 
-    def abandon(self, key: tuple[int, object]) -> None:
+    def abandon(self, key: tuple[int, object], value: object, error: BaseException) -> None:
         self.active.discard(key)
+        # Depth and cycle failures depend on the traversal path, so only value-determined
+        # violations are memoized.
+        if isinstance(error, CottContractViolation) and not isinstance(error, _CottTraversalFailure):
+            self.failed[key] = (value, error)
 
 
 def _cott_validate_json(value: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> None:
@@ -681,8 +710,8 @@ def _cott_validate_json(value: object, *, path: str = "$", _state: _CottTraversa
                 _cott_validate_json(item, path=f"{path}.value[{key_value!r}]", _state=state, _depth=_depth + 1)
         else:
             raise CottContractViolation(f"{path} is not a JsonValue", phase="validation")
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, value)
 
@@ -748,8 +777,8 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$", _s
         return cached
     try:
         result = _cott_validate_abi_value(value, annotation, path, state, _depth)
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, result)
     return result
@@ -774,6 +803,11 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         return _cott_validate_abi(normalized, args[0], path=path, _state=state, _depth=depth + 1)
     if origin in (Union, _types.UnionType):
         for candidate in args:
+            nominal_candidate = _get_origin(candidate) or candidate
+            # Nominal dataclass branches accept exact types only. Dispatch mismatches without
+            # recursively probing them; failed probes are memoized by the traversal state.
+            if isinstance(nominal_candidate, type) and _dataclasses.is_dataclass(nominal_candidate) and type(value) is not nominal_candidate:
+                continue
             try:
                 return _cott_validate_abi(value, candidate, path=path, _state=state, _depth=depth + 1)
             except _CottTraversalFailure:
@@ -823,7 +857,9 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         return value
     if annotation is float and type(value) is float:
         return value
-    if annotation is str and type(value) is str and not any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+    if annotation is str and type(value) is str:
+        if _cott_has_surrogate(value):
+            raise CottContractViolation(f"{path} contains a surrogate code point", phase="validation")
         return value
     if annotation is bytes and type(value) is bytes:
         return value
@@ -879,7 +915,7 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
             return value
         if _dataclasses.is_dataclass(nominal):
             substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-            hints = _get_type_hints(nominal, include_extras=True)
+            hints = _cott_type_hints(nominal)
             fields = {
                 field.name: _cott_validate_abi(
                     getattr(value, field.name),
@@ -904,8 +940,8 @@ def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$
         return cached
     try:
         result = _cott_normalize_f32_abi_value(value, annotation, path, state, _depth)
-    except BaseException:
-        state.abandon(key)
+    except BaseException as error:
+        state.abandon(key, value, error)
         raise
     state.complete(key, result)
     return result
@@ -951,7 +987,7 @@ def _cott_normalize_f32_abi_value(value: object, annotation: object, path: str, 
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-        hints = _get_type_hints(nominal, include_extras=True)
+        hints = _cott_type_hints(nominal)
         return nominal(**{
             field.name: _cott_normalize_f32_abi(getattr(value, field.name), _cott_substitute_type(hints.get(field.name, Any), substitutions), path=f"{path}.{field.name}", _state=state, _depth=depth + 1)
             for field in _dataclasses.fields(nominal)
@@ -1007,6 +1043,8 @@ class _CottFixtureState:
     root: _Path
     http_url: str | None
     clock: int | None
+    random: _random.Random | None
+    database: bool
     failures: dict[str, tuple[int, str]]
     transcript_limit: int
     transcript: list[dict[str, object]]
@@ -1038,7 +1076,28 @@ def _cott_fixture_maybe_fail(state: _CottFixtureState, point: str) -> None:
         return
     state.failures[point] = (0, error)
     _cott_fixture_record(state, "failure", point=point, error=error)
-    raise OSError(error)
+    if error == "interrupted":
+        if (
+            not state.database
+            or not point.startswith("database.")
+            or _threading.current_thread() is not _threading.main_thread()
+            or _signal.getsignal(_signal.SIGINT) is not _signal.default_int_handler
+            or not hasattr(_signal, "pthread_sigmask")
+            or _signal.SIGINT in _signal.pthread_sigmask(_signal.SIG_BLOCK, [])
+        ):
+            raise CottContractViolation("fixture interrupt requires an active main-thread database boundary", phase="fixture")
+        _signal.raise_signal(_signal.SIGINT)
+        raise CottContractViolation("fixture SIGINT was not delivered", phase="fixture")
+    code = {
+        "permission_denied": _errno.EACCES,
+        "not_found": _errno.ENOENT,
+        "disk_full": _errno.ENOSPC,
+        "timeout": _errno.ETIMEDOUT,
+        "connection_reset": _errno.ECONNRESET,
+    }.get(error)
+    if code is None:
+        raise CottContractViolation("unknown fixture failure error", phase="fixture")
+    raise OSError(code, error)
 
 
 @_contextlib.contextmanager
@@ -1048,6 +1107,8 @@ def _cott_fixture_activate(
     root: object,
     http_url: object,
     clock: object,
+    random_seed: object,
+    database: object,
     failures: object,
     transcript_limit: object,
 ) -> Iterator[_CottFixtureContext]:
@@ -1055,7 +1116,13 @@ def _cott_fixture_activate(
         raise CottContractViolation("fixture activation is runner-only", phase="fixture")
     if getattr(_COTT_FIXTURE_STATE, "value", None) is not None:
         raise CottContractViolation("fixture activation is already active", phase="fixture")
-    if (clock is not None and type(clock) is not int) or type(transcript_limit) is not int or not 0 < transcript_limit <= _COTT_FIXTURE_TRANSCRIPT_LIMIT:
+    if (
+        (clock is not None and type(clock) is not int)
+        or (random_seed is not None and (type(random_seed) is not int or not 0 <= random_seed < 1 << 64))
+        or type(database) is not bool
+        or type(transcript_limit) is not int
+        or not 0 < transcript_limit <= _COTT_FIXTURE_TRANSCRIPT_LIMIT
+    ):
         raise CottContractViolation("fixture activation limits are invalid", phase="fixture")
     if http_url is not None:
         if type(http_url) is not str:
@@ -1094,6 +1161,8 @@ def _cott_fixture_activate(
         root=fixture_root,
         http_url=http_url,
         clock=clock,
+        random=None if random_seed is None else _random.Random(random_seed),
+        database=database,
         failures={point: (value["occurrence"], value["error"]) for point, value in failures.items()},
         transcript_limit=transcript_limit,
         transcript=[],
@@ -1146,31 +1215,76 @@ def _cott_fixture_write(path: object, data: bytes) -> None:
     _cott_fixture_record(state, "filesystem.write", path=relative, bytes=len(data))
 
 
-def _cott_fixture_replace(path: object, data: bytes) -> None:
+def _cott_fixture_replace(path: object, data: bytes, *, create_parents: bool = True) -> None:
     state = _cott_fixture_state()
-    relative, target = _cott_fixture_path(state, path)
-    if type(data) is not bytes:
-        raise CottContractViolation("fixture replacement data must be bytes", phase="fixture")
+    relative, _ = _cott_fixture_path(state, path)
+    if type(data) is not bytes or type(create_parents) is not bool:
+        raise CottContractViolation("fixture replacement requires bytes and a boolean parent policy", phase="fixture")
     _cott_fixture_maybe_fail(state, "file.open")
     _cott_fixture_maybe_fail(state, "file.write")
-    temporary = target.with_name(f".{target.name}.cott.tmp")
+    parts = relative.split("/")
+    leaf = parts[-1]
+    temporary = f".{leaf}.cott.tmp"
+    parent = None
+    temporary_owned = False
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = _os.open(temporary, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o600)
-        with _os.fdopen(descriptor, "wb") as output:
-            output.write(data)
-            output.flush()
-            _cott_fixture_maybe_fail(state, "file.flush")
-            _os.fsync(output.fileno())
-        _cott_fixture_maybe_fail(state, "file.replace")
-        _os.replace(temporary, target)
-    except OSError as error:
         try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+            directory_flags = _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW
+            parent = _os.open(state.root, directory_flags)
+            for component in parts[:-1]:
+                if create_parents:
+                    try:
+                        _os.mkdir(component, mode=0o700, dir_fd=parent)
+                    except FileExistsError:
+                        pass
+                child = _os.open(component, directory_flags, dir_fd=parent)
+                _os.close(parent)
+                parent = child
+            try:
+                existing = _os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and not _stat.S_ISREG(existing.st_mode):
+                if _stat.S_ISDIR(existing.st_mode):
+                    raise IsADirectoryError(_errno.EISDIR, "fixture replacement target is a directory")
+                raise OSError(_errno.EINVAL, "fixture replacement target is not a regular file")
+            descriptor = _os.open(
+                temporary, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL | _os.O_NOFOLLOW,
+                0o600, dir_fd=parent,
+            )
+            temporary_owned = True
+            with _os.fdopen(descriptor, "wb") as output:
+                output.write(data)
+                output.flush()
+                _cott_fixture_maybe_fail(state, "file.flush")
+                _os.fsync(output.fileno())
+            _cott_fixture_maybe_fail(state, "file.replace")
+            _os.replace(temporary, leaf, src_dir_fd=parent, dst_dir_fd=parent)
+            temporary_owned = False
+            _os.fsync(parent)
+        finally:
+            try:
+                if temporary_owned:
+                    _os.unlink(temporary, dir_fd=parent)
+            finally:
+                if parent is not None:
+                    _os.close(parent)
+    except (AttributeError, NotImplementedError) as error:
+        raise CottContractViolation("fixture replacement safety primitives are unavailable", phase="fixture") from error
+    except OSError as error:
         raise CottContractViolation(f"fixture replacement failed: {error}", phase="fixture") from error
     _cott_fixture_record(state, "filesystem.replace", path=relative, bytes=len(data))
+
+
+def _cott_fixture_remove(path: object) -> None:
+    state = _cott_fixture_state()
+    relative, target = _cott_fixture_path(state, path)
+    _cott_fixture_maybe_fail(state, "file.write")
+    try:
+        target.unlink()
+    except OSError as error:
+        raise CottContractViolation(f"fixture removal failed: {error}", phase="fixture") from error
+    _cott_fixture_record(state, "filesystem.remove", path=relative)
 
 
 def _cott_fixture_http(url: object) -> bytes:
@@ -1200,6 +1314,27 @@ def _cott_fixture_now() -> int:
     _cott_fixture_maybe_fail(state, "clock.read")
     _cott_fixture_record(state, "clock.read")
     return state.clock
+
+
+def _cott_fixture_shuffle(values: list[Any]) -> None:
+    state = _cott_fixture_state()
+    if state.random is None:
+        raise CottContractViolation("fixture random source is unavailable", phase="fixture")
+    if type(values) is not list:
+        raise CottContractViolation("fixture shuffle requires a list", phase="fixture")
+    _cott_fixture_record(state, "random.shuffle", items=len(values))
+    state.random.shuffle(values)
+
+
+def _cott_fixture_database(operation: str) -> None:
+    state = _cott_fixture_state()
+    if not state.database:
+        raise CottContractViolation("fixture database authority is unavailable", phase="fixture")
+    if type(operation) is not str or operation not in ("connect", "read", "write", "commit", "rollback", "close", "cancel"):
+        raise CottContractViolation("fixture database operation is invalid", phase="fixture")
+    point = "database." + operation
+    _cott_fixture_maybe_fail(state, point)
+    _cott_fixture_record(state, point)
 
 
 def _cott_fixture_fail(point: object) -> None:
@@ -1398,7 +1533,7 @@ def _cott_wrap_async_protocol(value: object, annotation: object, *, path: str = 
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-        hints = _get_type_hints(nominal, include_extras=True)
+        hints = _cott_type_hints(nominal)
         return nominal(**{
             field.name: _cott_wrap_async_protocol(
                 getattr(value, field.name),
@@ -1425,8 +1560,11 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
             phase=phase,
         )
 _COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
-_COTT_LOAD_CACHE: dict[tuple[str, str, str, str | None, str | None], tuple[_types.ModuleType, object, tuple[int, int, int, int, int], tuple[int, int, int, int, int]]] = {}
+_COTT_LOAD_CACHE: dict[tuple[object, ...], tuple[str, _types.ModuleType, object]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
+# Record-level validation depends only on the exact generation.json bytes, so its result is
+# reused for identical bytes; every load still reads and hashes the current record.
+_COTT_GENERATION_CACHE: dict[str, tuple[dict[object, object], str]] = {}
 
 
 class _CottImplementationImportBlocker:
@@ -1457,6 +1595,8 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+
+
 def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
     try:
         resolved = path.resolve(strict=True)
@@ -1473,17 +1613,6 @@ def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
 
 
 
-def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
-    try:
-        metadata = path.lstat()
-        if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise _cott_violation(f"{label} is not a regular file")
-        return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-    except CottContractViolation:
-        raise
-    except (OSError, ValueError) as error:
-        raise _cott_violation(f"unable to stat {label}: {error}") from error
-
 
 def _cott_sha256(value: bytes) -> str:
     return "sha256:" + _hashlib.sha256(value).hexdigest()
@@ -1499,12 +1628,12 @@ def _cott_expected_digest(value: object, label: str) -> str:
 
 
 def _cott_validate_python_tools(tools: object) -> None:
+    """Require a compatible Python runtime, not the machine that recorded the generation."""
     if type(tools) is not dict or type(tools.get("python")) is not dict:
         raise _cott_violation("generation record omitted Python tool provenance")
     recorded = tools["python"]
     expected = {
         "implementation": _sys.implementation.name,
-        "version": _platform.python_version(),
         "cache_tag": _sys.implementation.cache_tag,
         "os": _sys.platform,
         "machine": _platform.machine(),
@@ -1513,26 +1642,23 @@ def _cott_validate_python_tools(tools: object) -> None:
     for key, actual in expected.items():
         if recorded.get(key) != actual:
             raise _cott_violation(f"Python runtime {key} mismatch")
+    recorded_version = recorded.get("version")
+    if type(recorded_version) is not str or recorded_version.split(".")[:2] != _platform.python_version().split(".")[:2]:
+        raise _cott_violation("Python runtime version mismatch")
     has_executable = "executable" in recorded
     has_hash = "content_hash" in recorded
     if has_executable != has_hash:
         raise _cott_violation("Python executable provenance is incomplete")
     if has_executable:
-        try:
-            runtime_executable = _Path(_sys.executable).resolve(strict=True)
-            if _Path(recorded["executable"]).resolve(strict=True) != runtime_executable:
-                raise _cott_violation("Python executable path mismatch")
-        except CottContractViolation:
-            raise
-        except (OSError, TypeError, ValueError) as error:
-            raise _cott_violation(f"invalid Python executable provenance: {error}") from error
-        executable_hash = _cott_expected_digest(recorded.get("content_hash"), "Python executable hash")
-        executable = _cott_regular_file_bytes(runtime_executable, "Python executable")
-        if _cott_sha256(executable) != executable_hash:
-            raise _cott_violation("Python executable hash mismatch")
+        if type(recorded["executable"]) is not str:
+            raise _cott_violation("Python executable provenance is malformed")
+        _cott_expected_digest(recorded["content_hash"], "Python executable hash")
     runtime = tools.get("runtime")
     if type(runtime) is not dict or runtime.get("abi") != _COTT_RUNTIME_ABI or runtime.get("version") != _COTT_RUNTIME_VERSION:
         raise _cott_violation("Cott runtime ABI or version mismatch")
+
+
+import csv as _csv
 
 
 def _cott_import_module_name(path):
@@ -1549,11 +1675,32 @@ def _cott_import_module_name(path):
     return module if module and all(part.isidentifier() for part in module.split(".")) else None
 
 
-def _cott_installed_import_owners():
+def _cott_installed_import_owners(modules=None):
     owners = {}
     for distribution in _metadata.distributions():
         by_module = {}
-        for relative in distribution.files or ():
+        record = distribution.read_text("RECORD") if modules is not None else None
+        if record:
+            # Only requested modules can be owners of this import. Avoid constructing and
+            # stat-ing unrelated distribution files, but re-read ownership and existence.
+            files = []
+            for row in _csv.reader(record.splitlines()):
+                if not 1 <= len(row) <= 3:
+                    raise ValueError("installed distribution RECORD row is malformed")
+                if len(row) > 1 and row[1]:
+                    _metadata.FileHash(row[1])
+                if len(row) > 2 and row[2]:
+                    int(row[2])
+                if not row[0].endswith((".py", ".so", ".pyd")):
+                    continue
+                relative = _Path(row[0])
+                module = _cott_import_module_name(relative.as_posix())
+                if module in modules and _Path(distribution.locate_file(relative)).exists():
+                    files.append(relative)
+        else:
+            # Let CPython resolve the legacy installed-files/SOURCES inventory semantics.
+            files = distribution.files or ()
+        for relative in files:
             module = _cott_import_module_name(relative.as_posix())
             if module is not None:
                 by_module.setdefault(module, []).append(relative)
@@ -1640,7 +1787,11 @@ def _cott_owned_external_imports(source, project_modules, owners=None):
     if not imports:
         return []
     if owners is None:
-        owners = _cott_installed_import_owners()
+        modules = set()
+        for imported in imports:
+            parts = imported.split(".")
+            modules.update(".".join(parts[:end]) for end in range(1, len(parts) + 1))
+        owners = _cott_installed_import_owners(modules)
     resolved = []
     seen = set()
     for imported in sorted(imports):
@@ -2228,29 +2379,36 @@ def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
 def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:
     artifact_root = root.parent if root.name == "python" else root
     generation_path = artifact_root / "generation.json"
-    try:
-        current_record = _json.loads(
-            _cott_regular_file_bytes(generation_path, "generation record"),
-            object_pairs_hook=_cott_json_object,
-            parse_int=_cott_json_integer,
-            parse_constant=_cott_json_constant,
-        )
-    except (TypeError, ValueError) as error:
-        raise _cott_violation(f"generation record is malformed: {error}") from error
-    current, last_verified = _cott_resolve_generation_record(current_record)
-    current = _cott_validate_generation_snapshot(current, "current")
-    if last_verified is not None:
-        last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
-        if not last_verified["verified"]:
-            raise _cott_violation("last verified generation snapshot is not verified")
-        _cott_validate_generation_identity(last_verified)
-    generation_id = _cott_validate_generation_identity(current)
-    if current["project_version"] != PROJECT_VERSION:
-        raise _cott_violation("generation project version mismatch")
+    record_bytes = _cott_regular_file_bytes(generation_path, "generation record")
+    record_digest = _cott_sha256(record_bytes)
+    cached_generation = _COTT_GENERATION_CACHE.get(record_digest)
+    if cached_generation is None:
+        try:
+            current_record = _json.loads(
+                record_bytes,
+                object_pairs_hook=_cott_json_object,
+                parse_int=_cott_json_integer,
+                parse_constant=_cott_json_constant,
+            )
+        except (TypeError, ValueError) as error:
+            raise _cott_violation(f"generation record is malformed: {error}") from error
+        current, last_verified = _cott_resolve_generation_record(current_record)
+        current = _cott_validate_generation_snapshot(current, "current")
+        if last_verified is not None:
+            last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
+            if not last_verified["verified"]:
+                raise _cott_violation("last verified generation snapshot is not verified")
+            _cott_validate_generation_identity(last_verified)
+        generation_id = _cott_validate_generation_identity(current)
+        if current["project_version"] != PROJECT_VERSION:
+            raise _cott_violation("generation project version mismatch")
+        _COTT_GENERATION_CACHE[record_digest] = (current, generation_id)
+    else:
+        current, generation_id = cached_generation
     _cott_validate_python_tools(current["tools"])
     _cott_validate_dependencies(current["dependencies"], source, current["public_python_symbols"])
     implementations = current["implementations"]
-    selected_origin = (("python/" if root.name == "python" else "") + relative_path)
+    selected_origin = "python/" + relative_path
     selected_python_symbol = f"{relative_path[:-3].replace('/', '.')}:{symbol}"
     matches = []
     for implementation in implementations:
@@ -2282,6 +2440,16 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
 
 
 def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_name: str | None = None, *, expected_project_name: str | None = None, expected_cott_symbol: str | None = None):
+    # Hot path: after the first authenticated load of an argument tuple, return the cached
+    # implementation with no lock and no filesystem access. Later on-disk changes are caught
+    # by the next process's first load.
+    raw_key = (relative_path, expected_sha256, symbol, project_name, expected_project_name, expected_cott_symbol)
+    try:
+        cached_load = _COTT_LOAD_CACHE.get(raw_key)
+    except TypeError:
+        cached_load = None
+    if cached_load is not None and _sys.modules.get(cached_load[0]) is cached_load[1]:
+        return cached_load[2]
     if project_name is not None and expected_project_name is not None and project_name != expected_project_name:
         raise _cott_violation("conflicting project identities", phase="facade-import")
     expected_project = project_name if expected_project_name is None else expected_project_name
@@ -2303,19 +2471,6 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
     digest_input = _cott_expected_digest(expected_sha256, "binding hash")
     root = _Path(__file__).resolve().parent.parent
     path = root.joinpath(*parts)
-    generation_path = (root.parent if root.name == "python" else root) / "generation.json"
-    cache_key = (relative_path, digest_input, symbol, expected_project, expected_cott_symbol)
-    with _COTT_LOAD_LOCK:
-        cached_load = _COTT_LOAD_CACHE.get(cache_key)
-        if cached_load is not None:
-            module, implementation, implementation_stamp, generation_stamp = cached_load
-            if (
-                _sys.modules.get(module_name) is module
-                and _cott_file_stamp(path, f"binding {relative_path}") == implementation_stamp
-                and _cott_file_stamp(generation_path, "generation record") == generation_stamp
-            ):
-                return implementation
-            del _COTT_LOAD_CACHE[cache_key]
 
     source = _cott_regular_file_bytes(path, f"binding {relative_path}")
     digest = _cott_sha256(source)
@@ -2333,12 +2488,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
                 implementation = getattr(module, symbol)
             except AttributeError as error:
                 raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
-            _COTT_LOAD_CACHE[cache_key] = (
-                module,
-                implementation,
-                _cott_file_stamp(path, f"binding {relative_path}"),
-                _cott_file_stamp(generation_path, "generation record"),
-            )
+            _COTT_LOAD_CACHE[raw_key] = (module_name, module, implementation)
             return implementation
         if module_name in _sys.modules:
             raise _cott_violation(f"direct implementation import is not allowed: {module_name}")
@@ -2369,12 +2519,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             if _sys.modules.get(module_name) is module:
                 del _sys.modules[module_name]
             raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
-        _COTT_LOAD_CACHE[cache_key] = (
-            module,
-            implementation,
-            _cott_file_stamp(path, f"binding {relative_path}"),
-            _cott_file_stamp(generation_path, "generation record"),
-        )
+        _COTT_LOAD_CACHE[raw_key] = (module_name, module, implementation)
         return implementation
 
 

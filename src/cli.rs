@@ -1133,6 +1133,7 @@ fn deployment_files(
                 .map(|top| PathBuf::from(top.as_os_str()).with_extension(""))
         })
         .collect::<BTreeSet<_>>();
+    let mut adapters = BTreeSet::new();
     for (path, bytes) in crate::deploy::adapter_files(paths, &record)? {
         let relative = path
             .strip_prefix("python")
@@ -1153,8 +1154,20 @@ fn deployment_files(
                 path.display()
             ));
         }
+        adapters.insert(path.clone());
         files.insert(path, bytes);
     }
+    let pyproject = fs::read(paths.python_source_dir.join("pyproject.toml"))
+        .map_err(|error| format!("read wheel metadata: {error}"))?;
+    let wheel = crate::wheel::build(&crate::wheel::WheelInput {
+        name: &config.project.name,
+        version: &config.project.version,
+        pyproject: &pyproject,
+        generation: &bytes,
+        files: &files,
+        adapters: &adapters,
+    })?;
+    files.insert(PathBuf::from(wheel.file_name), wheel.bytes);
     let version = record.current.tools["python"]["version"]
         .as_str()
         .ok_or("missing target Python version")?;

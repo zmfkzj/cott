@@ -18,39 +18,39 @@ def load_local_document(path: str) -> Result[Document, LoadError]:
     """Read the Markdown file at path from the file system the program runs
 against: the fs fixture root while a Cott scenario with an fs fixture is
 active, otherwise the host file system, where a relative path is relative
-to the process working directory. The bytes are decoded as strict UTF-8
-and each "\\r\\n" or lone "\\r" line ending becomes "\\n", as Python's
-universal-newline text reading does; nothing else changes. The document's
-location is the Local location path. A failure to open or read the file,
-a directory included, is LocalFailed(path, the error text as Python's
-str() renders the OSError); bytes that are not UTF-8 are LocalFailed(path,
-a description of the decoding error)."""
+to the process working directory. The bytes are decoded as UTF-8, with
+each invalid sequence replaced by U+FFFD as the remote loader does, so a
+file that is not UTF-8 still loads; each "\\r\\n" or lone "\\r" line ending
+becomes "\\n", as Python's universal-newline text reading does; nothing
+else changes. The document's location is the Local location path. A
+failure to open or read the file, a directory included, is
+LocalFailed(path, the error text as Python's str() renders the OSError)."""
     path = _cott_validate_abi(path, str, path="$.path")
     if not (_cott_contract_condition(((len(path) > 0)), "frogmouth.document.load_local_document", "requires:1")):
-        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.load_local_document", clause="requires:1", phase="requires", span={"end_byte":2002,"end_column":26,"end_line":56,"start_byte":1981,"start_column":5,"start_line":56}, expected="true", actual="false")
+        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.load_local_document", clause="requires:1", phase="requires", span={"end_byte":2021,"end_column":26,"end_line":56,"start_byte":2000,"start_column":5,"start_line":56}, expected="true", actual="false")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/document/load_local_document.py", "15d2d550e2055637f32cf6d3a33cc5faa1c5a83e27c6043f21c0c2377ac042e4", "load_local_document", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.load_local_document")
+        _implementation = _cott_load("_cott_impl/frogmouth/document/load_local_document.py", "b22076d49fe1e7188b706e3904287dd4d4bd27759a2071d3e05b4cad6e983fe5", "load_local_document", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.load_local_document")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.load_local_document"
         if _error.span is None:
-            _error.span = {"end_byte":2330,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}
+            _error.span = {"end_byte":2349,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.load_local_document", phase="implementation-call", span={"end_byte":2330,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.load_local_document", phase="implementation-call", span={"end_byte":2349,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.load_local_document", phase="implementation-call", span={"end_byte":2330,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.load_local_document", phase="implementation-call", span={"end_byte":2349,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Document, LoadError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="frogmouth.document.load_local_document", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (LoadError_LocalFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="frogmouth.document.load_local_document", phase="error", span={"end_byte":2330,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="frogmouth.document.load_local_document", phase="error", span={"end_byte":2349,"end_column":1,"end_line":66,"start_byte":1165,"start_column":1,"start_line":42}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="frogmouth.document.load_local_document", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -65,7 +65,7 @@ a description of the decoding error)."""
         _cott_contract_condition((False), "frogmouth.document.load_local_document", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:2", phase="ensures", span={"end_byte":2122,"end_column":119,"end_line":58,"start_byte":2008,"start_column":5,"start_line":58}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:2", phase="ensures", span={"end_byte":2141,"end_column":119,"end_line":58,"start_byte":2027,"start_column":5,"start_line":58}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -74,7 +74,7 @@ a description of the decoding error)."""
         _cott_contract_condition((False), "frogmouth.document.load_local_document", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:3", phase="ensures", span={"end_byte":2195,"end_column":73,"end_line":59,"start_byte":2127,"start_column":5,"start_line":59}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:3", phase="ensures", span={"end_byte":2214,"end_column":73,"end_line":59,"start_byte":2146,"start_column":5,"start_line":59}, expected="true", actual="false")
     def _cott_match_ensures_4() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is LoadError_LocalFailed and True and True:
@@ -83,7 +83,7 @@ a description of the decoding error)."""
         _cott_contract_condition((False), "frogmouth.document.load_local_document", "ensures:4:applicable")
         return True
     if not (_cott_match_ensures_4()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:4", phase="ensures", span={"end_byte":2270,"end_column":75,"end_line":60,"start_byte":2200,"start_column":5,"start_line":60}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_local_document", clause="ensures:4", phase="ensures", span={"end_byte":2289,"end_column":75,"end_line":60,"start_byte":2219,"start_column":5,"start_line":60}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Document, LoadError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -108,7 +108,7 @@ known codec and UTF-8 otherwise, replacing undecodable bytes with U+FFFD.
 Any other value gives NotMarkdown of that value."""
     url = _cott_validate_abi(url, str, path="$.url")
     if not (_cott_contract_condition(((_cott_starts_with(url, "http://") or _cott_starts_with(url, "https://"))), "frogmouth.document.fetch_remote_document", "requires:1")):
-        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.fetch_remote_document", clause="requires:1", phase="requires", span={"end_byte":3689,"end_column":75,"end_line":88,"start_byte":3619,"start_column":5,"start_line":88}, expected="true", actual="false")
+        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.fetch_remote_document", clause="requires:1", phase="requires", span={"end_byte":3708,"end_column":75,"end_line":88,"start_byte":3638,"start_column":5,"start_line":88}, expected="true", actual="false")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
@@ -119,19 +119,19 @@ Any other value gives NotMarkdown of that value."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.fetch_remote_document"
         if _error.span is None:
-            _error.span = {"end_byte":4175,"end_column":1,"end_line":98,"start_byte":2330,"start_column":1,"start_line":66}
+            _error.span = {"end_byte":4194,"end_column":1,"end_line":98,"start_byte":2349,"start_column":1,"start_line":66}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.fetch_remote_document", phase="implementation-call", span={"end_byte":4175,"end_column":1,"end_line":98,"start_byte":2330,"start_column":1,"start_line":66}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.fetch_remote_document", phase="implementation-call", span={"end_byte":4194,"end_column":1,"end_line":98,"start_byte":2349,"start_column":1,"start_line":66}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.fetch_remote_document", phase="implementation-call", span={"end_byte":4175,"end_column":1,"end_line":98,"start_byte":2330,"start_column":1,"start_line":66}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.fetch_remote_document", phase="implementation-call", span={"end_byte":4194,"end_column":1,"end_line":98,"start_byte":2349,"start_column":1,"start_line":66}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[RemoteDocument, LoadError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="frogmouth.document.fetch_remote_document", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (LoadError_RemoteFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="frogmouth.document.fetch_remote_document", phase="error", span={"end_byte":4175,"end_column":1,"end_line":98,"start_byte":2330,"start_column":1,"start_line":66}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="frogmouth.document.fetch_remote_document", phase="error", span={"end_byte":4194,"end_column":1,"end_line":98,"start_byte":2349,"start_column":1,"start_line":66}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="frogmouth.document.fetch_remote_document", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -146,7 +146,7 @@ Any other value gives NotMarkdown of that value."""
         _cott_contract_condition((False), "frogmouth.document.fetch_remote_document", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:2", phase="ensures", span={"end_byte":3834,"end_column":144,"end_line":90,"start_byte":3695,"start_column":5,"start_line":90}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:2", phase="ensures", span={"end_byte":3853,"end_column":144,"end_line":90,"start_byte":3714,"start_column":5,"start_line":90}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and type(_cott_match_value.value) is RemoteDocument_NotMarkdown and True:
@@ -155,7 +155,7 @@ Any other value gives NotMarkdown of that value."""
         _cott_contract_condition((False), "frogmouth.document.fetch_remote_document", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:3", phase="ensures", span={"end_byte":4041,"end_column":207,"end_line":91,"start_byte":3839,"start_column":5,"start_line":91}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:3", phase="ensures", span={"end_byte":4060,"end_column":207,"end_line":91,"start_byte":3858,"start_column":5,"start_line":91}, expected="true", actual="false")
     def _cott_match_ensures_4() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is LoadError_RemoteFailed and True and True:
@@ -164,7 +164,7 @@ Any other value gives NotMarkdown of that value."""
         _cott_contract_condition((False), "frogmouth.document.fetch_remote_document", "ensures:4:applicable")
         return True
     if not (_cott_match_ensures_4()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:4", phase="ensures", span={"end_byte":4116,"end_column":75,"end_line":92,"start_byte":4046,"start_column":5,"start_line":92}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.fetch_remote_document", clause="ensures:4", phase="ensures", span={"end_byte":4135,"end_column":75,"end_line":92,"start_byte":4065,"start_column":5,"start_line":92}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[RemoteDocument, LoadError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -194,12 +194,12 @@ of "file://" followed by PATH."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.visit_location"
         if _error.span is None:
-            _error.span = {"end_byte":5757,"end_column":1,"end_line":126,"start_byte":4175,"start_column":1,"start_line":98}
+            _error.span = {"end_byte":5776,"end_column":1,"end_line":126,"start_byte":4194,"start_column":1,"start_line":98}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.visit_location", phase="implementation-call", span={"end_byte":5757,"end_column":1,"end_line":126,"start_byte":4175,"start_column":1,"start_line":98}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.visit_location", phase="implementation-call", span={"end_byte":5776,"end_column":1,"end_line":126,"start_byte":4194,"start_column":1,"start_line":98}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.visit_location", phase="implementation-call", span={"end_byte":5757,"end_column":1,"end_line":126,"start_byte":4175,"start_column":1,"start_line":98}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.visit_location", phase="implementation-call", span={"end_byte":5776,"end_column":1,"end_line":126,"start_byte":4194,"start_column":1,"start_line":98}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, VisitOutcome, path="$.return")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
@@ -209,7 +209,7 @@ of "file://" followed by PATH."""
         _cott_contract_condition((False), "frogmouth.document.visit_location", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:1", phase="ensures", span={"end_byte":5248,"end_column":85,"end_line":118,"start_byte":5168,"start_column":5,"start_line":118}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:1", phase="ensures", span={"end_byte":5267,"end_column":85,"end_line":118,"start_byte":5187,"start_column":5,"start_line":118}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is VisitOutcome_Loaded and True:
@@ -218,7 +218,7 @@ of "file://" followed by PATH."""
         _cott_contract_condition((False), "frogmouth.document.visit_location", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:2", phase="ensures", span={"end_byte":5381,"end_column":133,"end_line":119,"start_byte":5253,"start_column":5,"start_line":119}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:2", phase="ensures", span={"end_byte":5400,"end_column":133,"end_line":119,"start_byte":5272,"start_column":5,"start_line":119}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is VisitOutcome_OpenExternally and True:
@@ -227,7 +227,7 @@ of "file://" followed by PATH."""
         _cott_contract_condition((False), "frogmouth.document.visit_location", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:3", phase="ensures", span={"end_byte":5502,"end_column":121,"end_line":120,"start_byte":5386,"start_column":5,"start_line":120}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:3", phase="ensures", span={"end_byte":5521,"end_column":121,"end_line":120,"start_byte":5405,"start_column":5,"start_line":120}, expected="true", actual="false")
     def _cott_match_ensures_4() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is VisitOutcome_OpenExternally and True:
@@ -236,7 +236,7 @@ of "file://" followed by PATH."""
         _cott_contract_condition((False), "frogmouth.document.visit_location", "ensures:4:applicable")
         return True
     if not (_cott_match_ensures_4()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:4", phase="ensures", span={"end_byte":5627,"end_column":125,"end_line":121,"start_byte":5507,"start_column":5,"start_line":121}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:4", phase="ensures", span={"end_byte":5646,"end_column":125,"end_line":121,"start_byte":5526,"start_column":5,"start_line":121}, expected="true", actual="false")
     def _cott_match_ensures_5() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is VisitOutcome_Failed and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[0].name)) is BrowserFailure_DoesNotExist and True:
@@ -245,7 +245,7 @@ of "file://" followed by PATH."""
         _cott_contract_condition((False), "frogmouth.document.visit_location", "ensures:5:applicable")
         return True
     if not (_cott_match_ensures_5()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:5", phase="ensures", span={"end_byte":5721,"end_column":94,"end_line":122,"start_byte":5632,"start_column":5,"start_line":122}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.visit_location", clause="ensures:5", phase="ensures", span={"end_byte":5740,"end_column":94,"end_line":122,"start_byte":5651,"start_column":5,"start_line":122}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, VisitOutcome, path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -283,12 +283,12 @@ percent-decoded; current is the location being viewed, if any.
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.resolve_link"
         if _error.span is None:
-            _error.span = {"end_byte":7500,"end_column":1,"end_line":159,"start_byte":5757,"start_column":1,"start_line":126}
+            _error.span = {"end_byte":7519,"end_column":1,"end_line":159,"start_byte":5776,"start_column":1,"start_line":126}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.resolve_link", phase="implementation-call", span={"end_byte":7500,"end_column":1,"end_line":159,"start_byte":5757,"start_column":1,"start_line":126}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.resolve_link", phase="implementation-call", span={"end_byte":7519,"end_column":1,"end_line":159,"start_byte":5776,"start_column":1,"start_line":126}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.resolve_link", phase="implementation-call", span={"end_byte":7500,"end_column":1,"end_line":159,"start_byte":5757,"start_column":1,"start_line":126}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.resolve_link", phase="implementation-call", span={"end_byte":7519,"end_column":1,"end_line":159,"start_byte":5776,"start_column":1,"start_line":126}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, LinkAction, path="$.return")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
@@ -298,7 +298,7 @@ percent-decoded; current is the location being viewed, if any.
         _cott_contract_condition((False), "frogmouth.document.resolve_link", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:1", phase="ensures", span={"end_byte":7311,"end_column":65,"end_line":153,"start_byte":7251,"start_column":5,"start_line":153}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:1", phase="ensures", span={"end_byte":7330,"end_column":65,"end_line":153,"start_byte":7270,"start_column":5,"start_line":153}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is LinkAction_Visit and True and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[1].name)) is Some and True:
@@ -307,7 +307,7 @@ percent-decoded; current is the location being viewed, if any.
         _cott_contract_condition((False), "frogmouth.document.resolve_link", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:2", phase="ensures", span={"end_byte":7391,"end_column":80,"end_line":154,"start_byte":7316,"start_column":5,"start_line":154}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:2", phase="ensures", span={"end_byte":7410,"end_column":80,"end_line":154,"start_byte":7335,"start_column":5,"start_line":154}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is LinkAction_Failed and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[0].name)) is BrowserFailure_UnhandledLink and True:
@@ -316,7 +316,7 @@ percent-decoded; current is the location being viewed, if any.
         _cott_contract_condition((False), "frogmouth.document.resolve_link", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:3", phase="ensures", span={"end_byte":7473,"end_column":82,"end_line":155,"start_byte":7396,"start_column":5,"start_line":155}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.resolve_link", clause="ensures:3", phase="ensures", span={"end_byte":7492,"end_column":82,"end_line":155,"start_byte":7415,"start_column":5,"start_line":155}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, LinkAction, path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -337,15 +337,15 @@ kept even when hidden."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.select_browsable_entries"
         if _error.span is None:
-            _error.span = {"end_byte":8110,"end_column":1,"end_line":174,"start_byte":7500,"start_column":1,"start_line":159}
+            _error.span = {"end_byte":8129,"end_column":1,"end_line":174,"start_byte":7519,"start_column":1,"start_line":159}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.select_browsable_entries", phase="implementation-call", span={"end_byte":8110,"end_column":1,"end_line":174,"start_byte":7500,"start_column":1,"start_line":159}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.select_browsable_entries", phase="implementation-call", span={"end_byte":8129,"end_column":1,"end_line":174,"start_byte":7519,"start_column":1,"start_line":159}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.select_browsable_entries", phase="implementation-call", span={"end_byte":8110,"end_column":1,"end_line":174,"start_byte":7500,"start_column":1,"start_line":159}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.select_browsable_entries", phase="implementation-call", span={"end_byte":8129,"end_column":1,"end_line":174,"start_byte":7519,"start_column":1,"start_line":159}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[str], path="$.return")
     if not (_cott_contract_condition(((len(_result) <= len(paths))), "frogmouth.document.select_browsable_entries", "ensures:1")):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.select_browsable_entries", clause="ensures:1", phase="ensures", span={"end_byte":8083,"end_column":36,"end_line":170,"start_byte":8052,"start_column":5,"start_line":170}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.select_browsable_entries", clause="ensures:1", phase="ensures", span={"end_byte":8102,"end_column":36,"end_line":170,"start_byte":8071,"start_column":5,"start_line":170}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[str], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -358,7 +358,7 @@ result is true when the opener process started and false when it could
 not be started (for example because the program is not installed)."""
     target = _cott_validate_abi(target, str, path="$.target")
     if not (_cott_contract_condition(((len(target) > 0)), "frogmouth.document.open_external", "requires:1")):
-        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.open_external", clause="requires:1", phase="requires", span={"end_byte":8644,"end_column":28,"end_line":184,"start_byte":8621,"start_column":5,"start_line":184}, expected="true", actual="false")
+        raise CottContractViolation("requires clause failed", symbol="frogmouth.document.open_external", clause="requires:1", phase="requires", span={"end_byte":8663,"end_column":28,"end_line":184,"start_byte":8640,"start_column":5,"start_line":184}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/frogmouth/document/open_external.py", "b64b1337bab49281007a6cf7f18323c378052182fa33ed1449039fa8a9ac5d1c", "open_external", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.open_external")
         _result = _implementation(target)
@@ -366,12 +366,12 @@ not be started (for example because the program is not installed)."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.open_external"
         if _error.span is None:
-            _error.span = {"end_byte":8674,"end_column":1,"end_line":188,"start_byte":8110,"start_column":1,"start_line":174}
+            _error.span = {"end_byte":8693,"end_column":1,"end_line":188,"start_byte":8129,"start_column":1,"start_line":174}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.open_external", phase="implementation-call", span={"end_byte":8674,"end_column":1,"end_line":188,"start_byte":8110,"start_column":1,"start_line":174}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.open_external", phase="implementation-call", span={"end_byte":8693,"end_column":1,"end_line":188,"start_byte":8129,"start_column":1,"start_line":174}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.open_external", phase="implementation-call", span={"end_byte":8674,"end_column":1,"end_line":188,"start_byte":8110,"start_column":1,"start_line":174}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.open_external", phase="implementation-call", span={"end_byte":8693,"end_column":1,"end_line":188,"start_byte":8129,"start_column":1,"start_line":174}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, bool, path="$.return")
     _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -405,12 +405,12 @@ Titles and messages contain nothing else."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "frogmouth.document.failure_dialog"
         if _error.span is None:
-            _error.span = {"end_byte":11708,"end_column":1,"end_line":228,"start_byte":8674,"start_column":1,"start_line":188}
+            _error.span = {"end_byte":11727,"end_column":1,"end_line":228,"start_byte":8693,"start_column":1,"start_line":188}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.failure_dialog", phase="implementation-call", span={"end_byte":11708,"end_column":1,"end_line":228,"start_byte":8674,"start_column":1,"start_line":188}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="frogmouth.document.failure_dialog", phase="implementation-call", span={"end_byte":11727,"end_column":1,"end_line":228,"start_byte":8693,"start_column":1,"start_line":188}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.failure_dialog", phase="implementation-call", span={"end_byte":11708,"end_column":1,"end_line":228,"start_byte":8674,"start_column":1,"start_line":188}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.document.failure_dialog", phase="implementation-call", span={"end_byte":11727,"end_column":1,"end_line":228,"start_byte":8693,"start_column":1,"start_line":188}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Dialog, path="$.return")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = failure
@@ -419,7 +419,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:1", phase="ensures", span={"end_byte":10023,"end_column":95,"end_line":212,"start_byte":9933,"start_column":5,"start_line":212}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:1", phase="ensures", span={"end_byte":10042,"end_column":95,"end_line":212,"start_byte":9952,"start_column":5,"start_line":212}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_NoSuchDirectory and True:
@@ -427,7 +427,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:2", phase="ensures", span={"end_byte":10124,"end_column":101,"end_line":213,"start_byte":10028,"start_column":5,"start_line":213}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:2", phase="ensures", span={"end_byte":10143,"end_column":101,"end_line":213,"start_byte":10047,"start_column":5,"start_line":213}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_NotADirectory and True:
@@ -435,7 +435,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:3", phase="ensures", span={"end_byte":10221,"end_column":97,"end_line":214,"start_byte":10129,"start_column":5,"start_line":214}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:3", phase="ensures", span={"end_byte":10240,"end_column":97,"end_line":214,"start_byte":10148,"start_column":5,"start_line":214}, expected="true", actual="false")
     def _cott_match_ensures_4() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_ForgeUnresolved and True:
@@ -444,7 +444,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:4:applicable")
         return True
     if not (_cott_match_ensures_4()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:4", phase="ensures", span={"end_byte":10369,"end_column":148,"end_line":215,"start_byte":10226,"start_column":5,"start_line":215}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:4", phase="ensures", span={"end_byte":10388,"end_column":148,"end_line":215,"start_byte":10245,"start_column":5,"start_line":215}, expected="true", actual="false")
     def _cott_match_ensures_5() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_ForgeUnresolved and True:
@@ -453,7 +453,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:5:applicable")
         return True
     if not (_cott_match_ensures_5()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:5", phase="ensures", span={"end_byte":10517,"end_column":148,"end_line":216,"start_byte":10374,"start_column":5,"start_line":216}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:5", phase="ensures", span={"end_byte":10536,"end_column":148,"end_line":216,"start_byte":10393,"start_column":5,"start_line":216}, expected="true", actual="false")
     def _cott_match_ensures_6() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_ForgeUnresolved and True:
@@ -462,7 +462,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:6:applicable")
         return True
     if not (_cott_match_ensures_6()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:6", phase="ensures", span={"end_byte":10671,"end_column":154,"end_line":217,"start_byte":10522,"start_column":5,"start_line":217}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:6", phase="ensures", span={"end_byte":10690,"end_column":154,"end_line":217,"start_byte":10541,"start_column":5,"start_line":217}, expected="true", actual="false")
     def _cott_match_ensures_7() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_ForgeUnresolved and True:
@@ -471,7 +471,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:7:applicable")
         return True
     if not (_cott_match_ensures_7()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:7", phase="ensures", span={"end_byte":10823,"end_column":152,"end_line":218,"start_byte":10676,"start_column":5,"start_line":218}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:7", phase="ensures", span={"end_byte":10842,"end_column":152,"end_line":218,"start_byte":10695,"start_column":5,"start_line":218}, expected="true", actual="false")
     def _cott_match_ensures_8() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_UnhandledLink and True:
@@ -479,7 +479,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:8:applicable")
         return True
     if not (_cott_match_ensures_8()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:8", phase="ensures", span={"end_byte":10928,"end_column":105,"end_line":219,"start_byte":10828,"start_column":5,"start_line":219}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:8", phase="ensures", span={"end_byte":10947,"end_column":105,"end_line":219,"start_byte":10847,"start_column":5,"start_line":219}, expected="true", actual="false")
     def _cott_match_ensures_9() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_NotBookmarkable:
@@ -487,7 +487,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:9:applicable")
         return True
     if not (_cott_match_ensures_9()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:9", phase="ensures", span={"end_byte":11100,"end_column":172,"end_line":220,"start_byte":10933,"start_column":5,"start_line":220}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:9", phase="ensures", span={"end_byte":11119,"end_column":172,"end_line":220,"start_byte":10952,"start_column":5,"start_line":220}, expected="true", actual="false")
     def _cott_match_ensures_10() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_Load and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[0].name)) is LoadError_LocalFailed and True and True:
@@ -495,7 +495,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:10:applicable")
         return True
     if not (_cott_match_ensures_10()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:10", phase="ensures", span={"end_byte":11229,"end_column":129,"end_line":221,"start_byte":11105,"start_column":5,"start_line":221}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:10", phase="ensures", span={"end_byte":11248,"end_column":129,"end_line":221,"start_byte":11124,"start_column":5,"start_line":221}, expected="true", actual="false")
     def _cott_match_ensures_11() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_Load and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[0].name)) is LoadError_RemoteFailed and True and True:
@@ -503,7 +503,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:11:applicable")
         return True
     if not (_cott_match_ensures_11()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:11", phase="ensures", span={"end_byte":11353,"end_column":124,"end_line":222,"start_byte":11234,"start_column":5,"start_line":222}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:11", phase="ensures", span={"end_byte":11372,"end_column":124,"end_line":222,"start_byte":11253,"start_column":5,"start_line":222}, expected="true", actual="false")
     def _cott_match_ensures_12() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_UnhandledLink and True:
@@ -512,7 +512,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:12:applicable")
         return True
     if not (_cott_match_ensures_12()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:12", phase="ensures", span={"end_byte":11511,"end_column":158,"end_line":223,"start_byte":11358,"start_column":5,"start_line":223}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:12", phase="ensures", span={"end_byte":11530,"end_column":158,"end_line":223,"start_byte":11377,"start_column":5,"start_line":223}, expected="true", actual="false")
     def _cott_match_ensures_13() -> bool:
         _cott_match_value = failure
         if type(_cott_match_value) is BrowserFailure_Load and type(getattr(_cott_match_value, _dataclasses.fields(type(_cott_match_value))[0].name)) is LoadError_RemoteFailed and True and True:
@@ -521,7 +521,7 @@ Titles and messages contain nothing else."""
         _cott_contract_condition((False), "frogmouth.document.failure_dialog", "ensures:13:applicable")
         return True
     if not (_cott_match_ensures_13()):
-        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:13", phase="ensures", span={"end_byte":11690,"end_column":179,"end_line":224,"start_byte":11516,"start_column":5,"start_line":224}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.failure_dialog", clause="ensures:13", phase="ensures", span={"end_byte":11709,"end_column":179,"end_line":224,"start_byte":11535,"start_column":5,"start_line":224}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Dialog, path="$.return", validator=_cott_validate_abi)
     return _result
 

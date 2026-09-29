@@ -21,9 +21,6 @@ def load_local_document(path: str) -> Result[Document, LoadError]:
         data = _read_bytes(path)
     except OSError as error:
         return Err(error=LoadError_LocalFailed(path=path, message=str(error)))
-    try:
-        text = data.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        return Err(error=LoadError_LocalFailed(path=path, message=str(error)))
+    text = data.decode("utf-8", errors="replace")
     markdown = text.replace("\r\n", "\n").replace("\r", "\n")
     return Ok(value=Document(location=Location(kind=LocationKind_Local(), target=path), markdown=markdown))

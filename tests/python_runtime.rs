@@ -260,7 +260,7 @@ fn rust_generation_with_float_tool_metadata_loads_in_python() {
             "concrete": null, "method": null, "selection": null, "owner": "manifest",
             "python_symbol": "_cott_impl.demo.run:run",
             "source_origin": "python/cott_bindings/demo/run.py",
-            "runtime_origin": "_cott_impl/demo/run.py", "content_hash": format!("sha256:{digest}"),
+            "runtime_origin": "python/_cott_impl/demo/run.py", "content_hash": format!("sha256:{digest}"),
         }]),
         dependencies: serde_json::json!([]),
         managed_files: Default::default(),
@@ -415,13 +415,23 @@ except CottContractViolation as error:
     assert "depth 64" in error.message
 else:
     raise AssertionError("deep recursive value was accepted")
-_many = CottList(values=range(1025))
+_many = CottList(values=range(100_000))
+assert list(_cott_validate_abi(_many, CottList[I32])) == list(range(100_000))
+for _text in ("ok", "", "\U0001F600"):
+    assert _cott_validate_abi(_text, str) == _text
+for _bad_text, _bad_annotation, _needle in (("\ud800", str, "surrogate"), ("a\udfffb", str, "surrogate"), ("\ud83d\ude00", str, "surrogate"), ("\ud800", Annotated[str, "carrier"], "surrogate"), ("\ud800", Union[int, str], "union")):
+    try:
+        _cott_validate_abi(_bad_text, _bad_annotation)
+    except CottContractViolation as error:
+        assert error.phase == "validation" and _needle in error.message, vars(error)
+    else:
+        raise AssertionError("surrogate str was accepted")
 try:
-    _cott_validate_abi(_many, CottList[I32])
+    _cott_validate_abi(CottList(values=["ok", "\udc00"]), CottList[str])
 except CottContractViolation as error:
-    assert "node limit 1024" in error.message
+    assert error.message.startswith("$[1] "), error.message
 else:
-    raise AssertionError("wide ABI value was accepted")
+    raise AssertionError("surrogate list element was accepted")
 for _key in ("active value cycle", "exceeds ABI traversal"):
     _map = FrozenMap(values={{_key: "ok"}})
     assert _cott_validate_abi(_map, FrozenMap[str, Union[bytes, str]]) == _map
@@ -434,11 +444,11 @@ except CottContractViolation as error:
 else:
     raise AssertionError("cyclic JsonValue was accepted")
 
-_good = dict(cott_symbol="demo.run", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
-_bad = dict(cott_symbol="demo.bad", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
-_external = dict(cott_symbol="demo.external", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
-_method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", callable_kind="sync", concrete="CounterState", method="advance", selection=dict(kind="explicit", trait_method="demo.Counter.advance"), owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
-_async = dict(cott_symbol="demo.async_run", kind="async_function", callable_kind="async", concrete=None, method=None, selection=None, owner="agent", python_symbol="_cott_impl.demo.async_run:async_run", source_origin="python/cott_bindings/demo/async_run.py", runtime_origin="_cott_impl/demo/async_run.py", content_hash="sha256:{good_hash}")
+_good = dict(cott_symbol="demo.run", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="python/_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
+_bad = dict(cott_symbol="demo.bad", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="python/_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_external = dict(cott_symbol="demo.external", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="python/_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
+_method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", callable_kind="sync", concrete="CounterState", method="advance", selection=dict(kind="explicit", trait_method="demo.Counter.advance"), owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="python/_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
+_async = dict(cott_symbol="demo.async_run", kind="async_function", callable_kind="async", concrete=None, method=None, selection=None, owner="agent", python_symbol="_cott_impl.demo.async_run:async_run", source_origin="python/cott_bindings/demo/async_run.py", runtime_origin="python/_cott_impl/demo/async_run.py", content_hash="sha256:{good_hash}")
 _unresolved = dict(cott_symbol="demo.missing", kind="async_function", callable_kind="async", span=dict(start_byte=1, end_byte=2, start_line=1, start_column=1, end_line=1, end_column=2))
 def _generation_id(current: dict) -> str:
     identity = dict(current)
@@ -903,12 +913,18 @@ else:
     raise AssertionError("managed hardlink was accepted")
 _run_path = Path("_cott_impl/demo/run.py")
 _run_path.write_bytes(_run_path.read_bytes() + b'\x23 changed\n')
+# A loaded implementation is cached per argument tuple: no re-authentication happens in-process,
+# so post-load tampering is caught by the next process's first load.
+assert _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo") is run
+_cache_size = len(_runtime._COTT_LOAD_CACHE)
 try:
-    _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
+    _cott_load("_cott_impl/demo/run.py", "sha256:{good_hash}", "run", "demo")
 except CottContractViolation as error:
     assert error.phase == "provenance"
 else:
-    raise AssertionError("modified cached implementation was accepted")
+    raise AssertionError("modified implementation was accepted by a first load")
+assert len(_runtime._COTT_LOAD_CACHE) == _cache_size
+_run_path.write_bytes(_run_path.read_bytes().removesuffix(b'\x23 changed\n'))
 try:
     _cott_load("_cott_impl/demo/external.py", "{external_hash}", "external", "demo")
 except CottContractViolation as error:
@@ -921,7 +937,8 @@ except CottContractViolation as error:
     assert error.phase == "facade-import"
 else:
     raise AssertionError("project mismatch was accepted")
-# A byte-identical record cannot certify a changed interpreter identity on a new load.
+# Interpreter machine identity is not authenticated at load: a relocated interpreter with
+# different bytes loads the same record.
 _original_executable = _runtime._sys.executable
 _replacement_executable = Path("different-interpreter").resolve()
 _replacement_executable.write_bytes(b"not the configured interpreter")
@@ -929,9 +946,9 @@ _runtime._sys.executable = str(_replacement_executable)
 try:
     _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
 except CottContractViolation as error:
-    assert error.phase == "provenance" and "Python executable path mismatch" in str(error), error
+    assert error.phase == "implementation-load", error
 else:
-    raise AssertionError("cached record skipped live interpreter authentication")
+    raise AssertionError("bad implementation loaded")
 finally:
     _runtime._sys.executable = _original_executable
 def _reject_wire_text(text: str, label: str, expected: str | None = None) -> None:
@@ -1008,18 +1025,45 @@ _version_mismatch["current"]["project_version"] = "0.3.1"
 _version_mismatch["current"]["generation_id"] = _generation_id(_version_mismatch["current"])
 _reject_generation(_pack_record(_version_mismatch), "project version", "project version mismatch")
 _original_generation = Path("generation.json").read_text()
-_mutated = _read_record(_original_generation)
-_mutated["current"]["tools"]["python"]["version"] = "0.0.0"
-_mutated["current"]["generation_id"] = _generation_id(_mutated["current"])
-Path("generation.json").write_text(json.dumps(_pack_record(_mutated), sort_keys=True, separators=(",", ":")) + "\n")
-try:
-    _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
-except CottContractViolation as error:
-    assert error.phase == "provenance"
-else:
-    raise AssertionError("runtime identity mismatch was accepted")
-finally:
-    Path("generation.json").write_text(_original_generation)
+_REMOVE = object()
+def _python_tools_phase(**changes: object) -> str:
+    """Load bad.py under a record with altered Python tools; implementation-load means authentication passed."""
+    mutated = _read_record(_original_generation)
+    tools = mutated["current"]["tools"]["python"]
+    for key, value in changes.items():
+        if value is _REMOVE:
+            del tools[key]
+        else:
+            tools[key] = value
+    mutated["current"]["generation_id"] = _generation_id(mutated["current"])
+    Path("generation.json").write_text(json.dumps(_pack_record(mutated), sort_keys=True, separators=(",", ":")) + "\n")
+    try:
+        _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
+    except CottContractViolation as error:
+        return error.phase
+    finally:
+        Path("generation.json").write_text(_original_generation)
+    raise AssertionError("bad implementation loaded")
+_running_major, _running_minor = platform.python_version().split(".")[:2]
+assert _python_tools_phase(version="0.0.0") == "provenance"
+assert _python_tools_phase(version=None) == "provenance"
+assert _python_tools_phase(version="%s.%d.0" % (_running_major, int(_running_minor) + 1)) == "provenance"
+assert _python_tools_phase(version="%s.%d.0" % (_running_major, int(_running_minor) - 1)) == "provenance"
+assert _python_tools_phase(cache_tag="cpython-000") == "provenance"
+assert _python_tools_phase(implementation="other") == "provenance"
+assert _python_tools_phase(machine="other") == "provenance"
+assert _python_tools_phase(platform="other") == "provenance"
+assert _python_tools_phase(os="other") == "provenance"
+# A different patch release of the same minor is compatible.
+assert _python_tools_phase(version="%s.%s.999" % (_running_major, _running_minor)) == "implementation-load"
+# Machine identity is not compared: a relocated or rebuilt interpreter with the same runtime identity loads.
+assert _python_tools_phase(executable="/nonexistent/relocated/python", content_hash="sha256:" + "0" * 64) == "implementation-load"
+# Recorded interpreter fields must still be well formed.
+assert _python_tools_phase(executable=_REMOVE) == "provenance"
+assert _python_tools_phase(content_hash=_REMOVE) == "provenance"
+assert _python_tools_phase(content_hash="sha256:not-a-digest") == "provenance"
+assert _python_tools_phase(executable=7) == "provenance"
+assert _python_tools_phase(executable=_REMOVE, content_hash=_REMOVE) == "implementation-load"
 try:
     _cott_load("_cott_impl/demo/run.py", "{{:064x}}", "run", "demo")
 except CottContractViolation as error:
@@ -1808,62 +1852,57 @@ assert not (root / "not-opened").exists()
     );
 }
 
-#[cfg(target_os = "linux")]
+/// Without a traversal node limit, rejected union probes must be memoized or nested unions
+/// re-probe the same failing value exponentially.
 #[test]
-fn runtime_executable_hashing_is_bounded_and_rechecks_bytes() {
+fn nested_union_probing_of_a_failing_value_stays_fast_and_wide_values_pass() {
     if Command::new("python3").arg("--version").output().is_err() {
         return;
     }
     let temp = TempDir::new();
     write_runtime(&temp.path);
     let script = r#"
-import hashlib, os, pathlib, resource
-import cott_runtime as runtime
+import cott_runtime
+from typing import Annotated, Union
+from cott_runtime import CottContractViolation, CottList, I32, Some, _cott_validate_abi
 
-path = pathlib.Path("executable").absolute()
-block = b"\0" * (1024 * 1024)
-expected = hashlib.sha256()
-with path.open("wb") as output:
-    for _ in range(64):
-        output.write(block)
-        expected.update(block)
-with open("/proc/self/statm", encoding="ascii") as status:
-    current = int(status.read().split()[0]) * os.sysconf("SC_PAGE_SIZE")
-soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-limit = current + 16 * 1024 * 1024
-if soft != resource.RLIM_INFINITY:
-    limit = min(limit, soft)
-resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
-digest = runtime._cott_regular_file_hash(path, "test executable")
-assert digest == "sha256:" + expected.hexdigest()
-with path.open("r+b") as output:
-    output.write(b"x")
-assert runtime._cott_regular_file_hash(path, "test executable") != digest
-link = path.with_name("symlink")
-link.symlink_to(path)
+# Every level offers two distinct branches over the previous level, so an unmemoized failing
+# probe traverses 2**depth nodes. Count traversals instead of timing them: typing's structural
+# annotation hashing is itself exponential for this artificial annotation.
+annotation = I32
+value = "not an integer"
+for level in range(12):
+    annotation = Union[Some[annotation], Some[Annotated[annotation, level]]]
+    value = Some(value=value)
+traversals = 0
+traverse = cott_runtime._cott_validate_abi_value
+def counted(*args, **kwargs):
+    global traversals
+    traversals += 1
+    return traverse(*args, **kwargs)
+cott_runtime._cott_validate_abi_value = counted
 try:
-    runtime._cott_regular_file_hash(link, "test executable")
-except runtime.CottContractViolation:
-    pass
+    _cott_validate_abi(value, annotation)
+except CottContractViolation as error:
+    assert error.phase == "validation", vars(error)
 else:
-    raise AssertionError("executable symlink was accepted")
-hardlink = path.with_name("hardlink")
-os.link(path, hardlink)
-try:
-    runtime._cott_regular_file_hash(path, "test executable")
-except runtime.CottContractViolation:
-    pass
-else:
-    raise AssertionError("shared executable inode was accepted")
+    raise AssertionError("failing leaf was accepted")
+assert traversals < 200, traversals
+cott_runtime._cott_validate_abi_value = traverse
+
+wide = CottList(values=range(100_000))
+assert list(_cott_validate_abi(wide, CottList[I32])) == list(range(100_000))
 "#;
-    let result = Command::new("python3")
-        .args(["-c", script])
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
         .current_dir(&temp.path)
         .output()
-        .expect("execute bounded hashing smoke");
+        .expect("python3 should execute generated runtime");
     assert!(
-        result.status.success(),
-        "runtime executable hashing failed:\n{}",
-        String::from_utf8_lossy(&result.stderr)
+        output.status.success(),
+        "union probing failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }

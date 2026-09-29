@@ -138,13 +138,13 @@ LinkAction: TypeAlias = Union[LinkAction_Visit, LinkAction_Anchor, LinkAction_Op
 """Read the Markdown file at path from the file system the program runs
 against: the fs fixture root while a Cott scenario with an fs fixture is
 active, otherwise the host file system, where a relative path is relative
-to the process working directory. The bytes are decoded as strict UTF-8
-and each "\\r\\n" or lone "\\r" line ending becomes "\\n", as Python's
-universal-newline text reading does; nothing else changes. The document's
-location is the Local location path. A failure to open or read the file,
-a directory included, is LocalFailed(path, the error text as Python's
-str() renders the OSError); bytes that are not UTF-8 are LocalFailed(path,
-a description of the decoding error)."""
+to the process working directory. The bytes are decoded as UTF-8, with
+each invalid sequence replaced by U+FFFD as the remote loader does, so a
+file that is not UTF-8 still loads; each "\\r\\n" or lone "\\r" line ending
+becomes "\\n", as Python's universal-newline text reading does; nothing
+else changes. The document's location is the Local location path. A
+failure to open or read the file, a directory included, is
+LocalFailed(path, the error text as Python's str() renders the OSError)."""
 """GET url with the header "User-Agent: frogmouth v0.9.1", following
 redirects, with a 5 second timeout for connecting and for each read. A
 transport failure (name resolution, connection, timeout, redirect loop or

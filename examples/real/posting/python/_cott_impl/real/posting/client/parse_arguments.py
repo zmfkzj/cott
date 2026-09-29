@@ -11,4 +11,12 @@ def parse_arguments(arguments: CottList[str]) -> Result[Request, PostingError]:
     if isinstance(method, Err):
         return Err(error=method.error)
     body = values[2] if len(values) == 3 else ""
-    return Ok(value=Request(method=method.value, url=values[1], headers=CottList(values=[]), body=body, timeout_ms=30000))
+    return Ok(
+        value=Request(
+            method=method.value,
+            url=values[1],
+            headers=CottList(values=[]),
+            body=body,
+            timeout_ms=30000,
+        )
+    )

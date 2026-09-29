@@ -900,3 +900,390 @@ fn deploy_replace_rejects_a_forged_journal_nominating_the_authoring_project() {
     assert_eq!(file_snapshot(&output), deployed_before);
     assert_eq!(fs::read(&journal_path).unwrap(), bytes);
 }
+
+const WHEEL_FILE: &str = "demo-0.1.0-py3-none-any.whl";
+const WHEEL_DIST_INFO: &str = "demo-0.1.0.dist-info";
+
+/// Reads a wheel with Python's own zip, CSV and `importlib.metadata` readers, which stand in
+/// for pip as independent consumers of the archive, and prints one JSON report.
+const WHEEL_INSPECTOR: &str = r#"import base64,csv,hashlib,importlib.metadata as metadata,io,json,pathlib,sys,tempfile,zipfile
+def digest(data):
+    return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    infos = wheel.infolist()
+    members = {info.filename: wheel.read(info) for info in infos}
+    bad_member = wheel.testzip()
+    info_dirs = sorted({name.split("/")[0] for name in members if name.split("/")[0].endswith(".dist-info")})
+    info = info_dirs[0]
+    record = info + "/RECORD"
+    problems = []
+    listed = {}
+    for row in csv.reader(io.StringIO(members[record].decode("utf-8"), newline="")):
+        if len(row) != 3 or row[0] in listed:
+            problems.append("malformed or duplicate RECORD row %r" % (row,))
+            continue
+        listed[row[0]] = (row[1], row[2])
+    for name, data in members.items():
+        expected = ("", "") if name == record else (digest(data), str(len(data)))
+        if listed.get(name) != expected:
+            problems.append("RECORD disagrees for %s: %r" % (name, listed.get(name)))
+    problems += ["RECORD lists a missing member: %s" % name for name in listed if name not in members]
+    with tempfile.TemporaryDirectory() as scratch:
+        for name in members:
+            if name.startswith(info + "/"):
+                wheel.extract(name, scratch)
+        dist = metadata.PathDistribution(pathlib.Path(scratch, info))
+        consumer = {
+            "name": dist.metadata["Name"],
+            "version": dist.version,
+            "requires_python": dist.metadata["Requires-Python"],
+            "entry_points": [[point.group, point.name, point.value] for point in dist.entry_points],
+        }
+    print(json.dumps({
+        "bad_member": bad_member,
+        "info_dirs": info_dirs,
+        "problems": problems,
+        "consumer": consumer,
+        "text": {name: data.decode("utf-8") for name, data in members.items() if name.startswith(info + "/")},
+        "members": [
+            {
+                "name": entry.filename,
+                "date_time": list(entry.date_time),
+                "mode": entry.external_attr >> 16,
+                "compress_type": entry.compress_type,
+                "flag_bits": entry.flag_bits,
+                "sha256": hashlib.sha256(members[entry.filename]).hexdigest(),
+            }
+            for entry in infos
+        ],
+    }))
+"#;
+
+fn inspect_wheel(wheel: &Path) -> serde_json::Value {
+    let output = Command::new("python3")
+        .args(["-I", "-c", WHEEL_INSPECTOR])
+        .arg(wheel)
+        .output()
+        .expect("inspect the wheel with Python's zip reader");
+    assert!(
+        output.status.success(),
+        "wheel inspection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("wheel inspection should print JSON")
+}
+
+fn project_with_scripts(scripts: &str) -> TempDir {
+    let project = project(true);
+    write_file(
+        &project.path,
+        "python/pyproject.toml",
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"{VERSION}\"\nrequires-python = \">=3.14.6,<3.15\"\ndependencies = []\n\n[project.scripts]\n{scripts}"
+        ),
+    );
+    project
+}
+
+fn stderr_text(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn deploy_packages_the_deployed_python_tree_as_a_reproducible_wheel() {
+    let project = project(true);
+    // A name that RECORD must quote and ZIP must flag as UTF-8.
+    write_file(&project.path, "python/odd/na,me \"é\".py", b"VALUE = 1\n");
+    let generation = emit_and_certify(&project.path);
+    add_excluded_authored_files(&project.path);
+    let invocation = TempDir::new();
+
+    let output = deploy(
+        &project.path,
+        Some(Path::new("release")),
+        &invocation.path,
+        true,
+    );
+    assert_success_json(&output);
+
+    let bundle = invocation.path.join("release");
+    let mut roots = fs::read_dir(&bundle)
+        .expect("deployment root")
+        .map(|entry| entry.expect("deployment entry").file_name())
+        .collect::<Vec<_>>();
+    roots.sort();
+    assert_eq!(
+        roots,
+        [
+            ".python-version",
+            WHEEL_FILE,
+            "generation.json",
+            "python",
+            "requirements.txt"
+        ]
+    );
+
+    let report = inspect_wheel(&bundle.join(WHEEL_FILE));
+    assert_eq!(report["bad_member"], serde_json::Value::Null);
+    assert_eq!(report["problems"], serde_json::json!([]));
+    assert_eq!(report["info_dirs"], serde_json::json!([WHEEL_DIST_INFO]));
+
+    let members = report["members"].as_array().expect("wheel members");
+    let names = members
+        .iter()
+        .map(|member| member["name"].as_str().expect("member name"))
+        .collect::<Vec<_>>();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(names, sorted, "members must be unique and in name order");
+    for member in members {
+        let name = member["name"].as_str().expect("member name");
+        assert!(!name.ends_with('/'), "wheels carry no directory members");
+        assert_eq!(
+            member["date_time"],
+            serde_json::json!([1980, 1, 1, 0, 0, 0])
+        );
+        assert_eq!(member["mode"], 0o100_644);
+        assert!(matches!(member["compress_type"].as_u64(), Some(0 | 8)));
+        assert_eq!(
+            member["flag_bits"].as_u64().expect("flag bits") & 0x800 != 0,
+            !name.is_ascii(),
+            "UTF-8 name flag of {name}"
+        );
+    }
+
+    // Exactly the deployed python/ tree, minus its source-root marker, plus the record.
+    let mut expected = BTreeMap::new();
+    for (path, bytes) in file_snapshot(&bundle) {
+        if let Ok(relative) = path.strip_prefix("python")
+            && relative != Path::new("__init__.py")
+        {
+            expected.insert(
+                relative.to_str().expect("UTF-8 fixture path").to_owned(),
+                cott::hash::sha256_hex(&bytes),
+            );
+        }
+    }
+    expected.insert(
+        "generation.json".to_owned(),
+        cott::hash::sha256_hex(&generation),
+    );
+    let payload = members
+        .iter()
+        .filter(|member| {
+            !member["name"]
+                .as_str()
+                .expect("member name")
+                .starts_with(WHEEL_DIST_INFO)
+        })
+        .map(|member| {
+            (
+                member["name"].as_str().expect("member name").to_owned(),
+                member["sha256"].as_str().expect("member digest").to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(payload, expected);
+    for member in [
+        "cott_runtime/__init__.py",
+        "api/service.py",
+        "_cott_impl/api/service/run.py",
+        "demo_cli/__init__.py",
+        "demo_cli/__main__.py",
+        "odd/na,me \"é\".py",
+    ] {
+        assert!(payload.contains_key(member), "wheel is missing {member}");
+    }
+    assert!(bundle.join("python/__init__.py").is_file());
+    assert!(!payload.contains_key("__init__.py"));
+
+    let mut metadata_members = names
+        .iter()
+        .filter(|name| name.starts_with(WHEEL_DIST_INFO))
+        .copied()
+        .collect::<Vec<_>>();
+    metadata_members.sort_unstable();
+    assert_eq!(
+        metadata_members,
+        [
+            "demo-0.1.0.dist-info/METADATA",
+            "demo-0.1.0.dist-info/RECORD",
+            "demo-0.1.0.dist-info/WHEEL"
+        ]
+    );
+    assert_eq!(
+        report["text"]["demo-0.1.0.dist-info/METADATA"],
+        "Metadata-Version: 2.1\nName: demo\nVersion: 0.1.0\nRequires-Python: >=3.14.6,<3.15\n"
+    );
+    assert_eq!(
+        report["text"]["demo-0.1.0.dist-info/WHEEL"],
+        format!(
+            "Wheel-Version: 1.0\nGenerator: cott {}\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    assert_eq!(
+        report["consumer"],
+        serde_json::json!({
+            "name": "demo",
+            "version": "0.1.0",
+            "requires_python": ">=3.14.6,<3.15",
+            "entry_points": [],
+        })
+    );
+}
+
+#[test]
+fn deploy_names_the_wheel_with_the_underscored_project_name() {
+    let project = named_project("demo-app", true);
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    assert_success_json(&deploy(
+        &project.path,
+        Some(Path::new("release")),
+        &invocation.path,
+        true,
+    ));
+
+    let report = inspect_wheel(
+        &invocation
+            .path
+            .join("release/demo_app-0.1.0-py3-none-any.whl"),
+    );
+    assert_eq!(report["problems"], serde_json::json!([]));
+    assert_eq!(
+        report["info_dirs"],
+        serde_json::json!(["demo_app-0.1.0.dist-info"])
+    );
+    assert_eq!(report["consumer"]["name"], "demo-app");
+    assert_eq!(report["consumer"]["version"], "0.1.0");
+}
+
+#[test]
+fn deploy_rejects_an_adapter_that_would_shadow_wheel_metadata() {
+    let project = project(true);
+    write_file(
+        &project.path,
+        "python/shadow.dist-info/tool.py",
+        b"VALUE = 1\n",
+    );
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    let output_path = invocation.path.join("rejected");
+
+    let rejected = deploy(&project.path, Some(&output_path), &invocation.path, false);
+
+    assert_eq!(rejected.status.code(), Some(4));
+    assert!(
+        stderr_text(&rejected).contains("reserved wheel metadata directory"),
+        "{}",
+        stderr_text(&rejected)
+    );
+    assert!(
+        !output_path.exists(),
+        "rejected deployment must publish nothing"
+    );
+}
+
+#[test]
+fn deploy_wheel_entry_points_follow_project_scripts() {
+    let project =
+        project_with_scripts("demo = \"demo_cli:main\"\ndemo-tool = \"demo_cli.__main__:main\"\n");
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    assert_success_json(&deploy(
+        &project.path,
+        Some(Path::new("release")),
+        &invocation.path,
+        true,
+    ));
+
+    let report = inspect_wheel(&invocation.path.join("release").join(WHEEL_FILE));
+    assert_eq!(report["problems"], serde_json::json!([]));
+    assert_eq!(
+        report["text"]["demo-0.1.0.dist-info/entry_points.txt"],
+        "[console_scripts]\ndemo = demo_cli:main\ndemo-tool = demo_cli.__main__:main\n"
+    );
+    assert_eq!(
+        report["consumer"]["entry_points"],
+        serde_json::json!([
+            ["console_scripts", "demo", "demo_cli:main"],
+            ["console_scripts", "demo-tool", "demo_cli.__main__:main"],
+        ])
+    );
+}
+
+#[test]
+fn deploy_rejects_console_scripts_that_do_not_target_an_authored_adapter() {
+    let invocation = TempDir::new();
+    for (scripts, reason) in [
+        (
+            "demo = \"cott_runtime:main\"\n",
+            "names Cott-generated code",
+        ),
+        (
+            "demo = \"_cott_impl.api.service.run:run\"\n",
+            "names Cott-generated code",
+        ),
+        ("demo = \"api.service:run\"\n", "names Cott-generated code"),
+        (
+            "demo = \"missing_tool:main\"\n",
+            "not an authored adapter module",
+        ),
+        (
+            "demo = \"demo_cli.missing:main\"\n",
+            "not an authored adapter module",
+        ),
+        ("demo = \"demo_cli\"\n", "must be `module:function`"),
+        ("\"bad name\" = \"demo_cli:main\"\n", "console script name"),
+        ("demo = 3\n", "must be a string"),
+    ] {
+        let project = project_with_scripts(scripts);
+        emit_and_certify(&project.path);
+        let output_path = invocation.path.join("rejected");
+
+        let rejected = deploy(&project.path, Some(&output_path), &invocation.path, false);
+
+        assert_eq!(rejected.status.code(), Some(4), "{scripts}");
+        assert!(
+            stderr_text(&rejected).contains(reason),
+            "{scripts}: {}",
+            stderr_text(&rejected)
+        );
+        assert!(
+            !output_path.exists(),
+            "rejected deployment must publish nothing"
+        );
+    }
+}
+
+#[test]
+fn deploy_wheel_bytes_are_identical_across_deployments_and_replacement() {
+    let project = project_with_scripts("demo = \"demo_cli:main\"\n");
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    for output in ["first", "second"] {
+        assert_success_json(&deploy(
+            &project.path,
+            Some(Path::new(output)),
+            &invocation.path,
+            true,
+        ));
+    }
+    let wheel = |output: &str| {
+        fs::read(invocation.path.join(output).join(WHEEL_FILE)).expect("deployed wheel")
+    };
+    let first = wheel("first");
+    assert!(!first.is_empty());
+    assert_eq!(wheel("second"), first);
+
+    assert_success_json(&deploy_with(
+        &project.path,
+        Some(Path::new("first")),
+        &invocation.path,
+        true,
+        true,
+    ));
+    assert_eq!(wheel("first"), first);
+}

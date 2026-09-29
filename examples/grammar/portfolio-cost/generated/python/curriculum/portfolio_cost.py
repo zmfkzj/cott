@@ -68,7 +68,7 @@ holdings are examined."""
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             total = _cott_match_value.value
-            return (_cott_contract_condition(((0 <= total <= MAX_F64)), "curriculum.portfolio_cost.calculate_portfolio_cost", "ensures:1"))
+            return (_cott_contract_condition(((0.0 <= total <= MAX_F64)), "curriculum.portfolio_cost.calculate_portfolio_cost", "ensures:1"))
         _cott_contract_condition((False), "curriculum.portfolio_cost.calculate_portfolio_cost", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):

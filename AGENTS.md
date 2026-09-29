@@ -81,7 +81,7 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 | `examples/modular/order-management/` | Python multi-module facade composition |
 | `examples/integrations/fastapi-hello/` | Python FastAPI external-type projection |
 | `examples/integrations/android-counter/` | Kotlin/JVM Cott module plus standard Gradle-owned Android consumer |
-| `examples/kotlin/` | Nineteen Kotlin grammar, composition, feature and modular lessons/fixtures |
+| `examples/kotlin/` | Nineteen Kotlin grammar, composition, feature and modular lessons/fixtures plus the `real/posting` Kotlin port |
 | `examples/integrations/flutter-counter/` | Dart Cott package plus standard Flutter Android/web consumer |
 | `examples/real/` | Six independent Python real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
@@ -91,10 +91,11 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 | `examples/**/dart/cott_impl/**/*.dart` | Durable accepted Dart agent implementation sources |
 | `architecture.md` | Normative implemented v1.0 contract |
 
-The authored inventory contains 26 Python projects, 20 Kotlin projects and one Dart/Flutter project. The Python set is
+The authored inventory contains 26 Python projects, 21 Kotlin projects and one Dart/Flutter project. The Python set is
 grammar 6, simple 3, complex curriculum 1, `process-bar` fixture 1, features 7, modular 1, FastAPI
 integration 1, and real-world 6 (`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`,
-`frogmouth`). `examples/kotlin/` contains 19 Kotlin lessons/fixtures; `integrations/android-counter`
+`frogmouth`). `examples/kotlin/` contains 19 Kotlin lessons/fixtures plus `real/posting`, the Kotlin
+generation of the same `real/posting` contract; `integrations/android-counter`
 adds the Kotlin/JVM module and Android consumer. `integrations/flutter-counter` is the Dart module
 and standard Flutter consumer. Every project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
 target and generation record. Committed `generated/` and agent-owned implementation content are
@@ -140,7 +141,10 @@ state. Unsupported filesystem capabilities fail closed, without an unsafe fallba
 pathname visibility is not a multi-open reader snapshot guarantee.
 Python deployment preserves runtime code
 under `python/`, authored adapters, unchanged `generation.json`, exact `.python-version`, and
-hash-pinned production `requirements.txt`. Kotlin deployment preserves `cott-module.jar`, unchanged
+hash-pinned production `requirements.txt`, plus a deterministic `py3-none-any` wheel whose
+console scripts come from `python/pyproject.toml` `[project.scripts]` (adapter targets only). The
+installed Python runtime requires only a compatible CPython (implementation, minor, cache tag,
+platform), not the verifying machine's interpreter path or hash. Kotlin deployment preserves `cott-module.jar`, unchanged
 `generation.json`, `dependencies.json`, compiler-bundled coroutine `1.8.0`, and verified runtime
 `classpath` JARs under `runtime-libs/`; Kotlin stdlib is recorded as required and provided by
 Kotlin/Gradle, while `compile_only` JARs are excluded. Dart deployment preserves portable `lib/`,

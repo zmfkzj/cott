@@ -17,7 +17,7 @@ class Probability:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, F32, path="$.value"))
-        if not (_cott_contract_condition(((0 <= self.value <= 1)), "foo.bar.Probability", "refinement")):
+        if not (_cott_contract_condition(((0.0 <= self.value <= 1.0)), "foo.bar.Probability", "refinement")):
             raise CottContractViolation("Probability refinement failed", symbol="foo.bar.Probability", phase="refinement", span={"end_byte":105,"end_column":29,"end_line":6,"start_byte":87,"start_column":11,"start_line":6}, expected="true", actual="false")
 
     __hash__ = None

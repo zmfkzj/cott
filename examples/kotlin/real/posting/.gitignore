@@ -1,0 +1,4 @@
+.cott/
+.gradle/
+.kotlin/
+build/

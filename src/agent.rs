@@ -1997,7 +1997,9 @@ fn run_process(
                         let isolated = scratch.join("omp-agent");
                         fs::create_dir_all(&isolated)
                             .map_err(|error| format!("create isolated OMP state: {error}"))?;
-                        for name in ["config.yml", "agent.db"] {
+                        // `models.db` is the provider model catalog; without it OMP silently
+                        // resolves an explicit `--model` against its stale built-in list.
+                        for name in ["config.yml", "agent.db", "models.db"] {
                             let source = root.join(name);
                             if source.is_file() {
                                 fs::copy(&source, isolated.join(name)).map_err(|error| {

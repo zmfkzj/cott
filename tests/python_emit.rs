@@ -244,7 +244,7 @@ fn imports_cross_module_parameter_and_struct_field_types() {
 }
 
 #[test]
-fn wide_enum_lists_count_only_accepted_union_branches() {
+fn wide_enum_lists_validate_without_a_traversal_node_limit() {
     let variants = (0..63)
         .map(|index| format!("    V{index}(value: I32)\n"))
         .collect::<String>();
@@ -268,14 +268,14 @@ def reject(values):
         return error
     raise AssertionError("an invalid action list was accepted")
 
-# Forty last-variant values fit the traversal node limit only while rejected union probes are free.
+# Rejected union probes are memoized, so wide lists of last-variant values validate.
 late = [Action_V62(value=index) for index in range(40)]
 bindings = Bindings(actions=CottList(values=late))
 assert type(bindings.actions) is CottList and list(bindings.actions) == late, bindings
 wrong = reject(late[:39] + [39])
 assert wrong.message.startswith("$.actions[39] "), vars(wrong)
-# Each accepted element costs at least one node, so more elements than the 1024-node limit never fit.
-reject([Action_V62(value=index) for index in range(1025)])
+wide = [Action_V62(value=index) for index in range(5000)]
+assert list(Bindings(actions=CottList(values=wide)).actions) == wide
 "#,
     );
 }
@@ -2495,5 +2495,93 @@ assert refinement == [("model.Positive", "refinement", True)], refinement
         "guarded evidence regression:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn boundary_validation_rejects_str_surrogates_everywhere_a_str_crosses() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+struct Note:
+    text: Str
+    tags: List[Str]
+
+fn echo(text: Str) -> Str
+
+fn make(text: Str) -> Str
+
+fn tags(note: Note) -> List[Str]
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let binding = |function: &str, parameter: &str, body: &str| {
+        let source = format!("def {function}({parameter}: object) -> object:\n{body}").into_bytes();
+        ResolvedBinding {
+            module: "app".to_owned(),
+            function: function.to_owned(),
+            cott_symbol: format!("app.{function}"),
+            kind: PythonCallableKind::Function,
+            implementation_module: format!("_cott_impl.app.{function}"),
+            implementation_function: function.to_owned(),
+            owner: BindingOwner::Agent,
+            source: temp
+                .path
+                .join(format!("python/_cott_impl/app/{function}.py")),
+            generated_relative: PathBuf::from(format!("_cott_impl/app/{function}.py")),
+            sha256: sha256_hex(&source),
+            bytes: source,
+        }
+    };
+    let files = emit(
+        &config,
+        &plan,
+        &ir,
+        &[
+            binding("echo", "text", "    return text\n"),
+            // Returns a surrogate-carrying string regardless of the (valid) input.
+            binding("make", "text", "    return text + '\\ud800'\n"),
+            binding("tags", "note", "    return note.tags\n"),
+        ],
+    )
+    .expect("bound contracts should emit")
+    .files;
+    execute_emitted_python(
+        &files,
+        &[],
+        r#"from app import Note, echo, make, tags
+from cott_runtime import CottContractViolation, CottList
+
+def reject(operation, label):
+    try:
+        operation()
+    except CottContractViolation as error:
+        assert error.phase == "validation", (label, vars(error))
+        assert "surrogate" in error.message, (label, error.message)
+        return
+    raise AssertionError(label + " accepted a surrogate")
+
+for good in ("plain", "", "caf\u00e9", "\U0001F600", "a\U0001F600b"):
+    assert echo(good) == good
+    assert Note(text=good, tags=CottList(values=[good])).text == good
+assert tags(Note(text="t", tags=CottList(values=["\U0001F600", "x"]))) == CottList(values=["\U0001F600", "x"])
+
+reject(lambda: echo("\ud800"), "parameter (lone high)")
+reject(lambda: echo("x\udfffy"), "parameter (lone low)")
+reject(lambda: echo("\ud83d\ude00"), "parameter (UTF-16 pair spelled as code points)")
+reject(lambda: Note(text="\ud800", tags=CottList(values=[])), "struct field")
+reject(lambda: Note(text="ok", tags=CottList(values=["ok", "\udc00"])), "list element")
+reject(lambda: make("fine"), "return value")
+"#,
     );
 }
