@@ -2,7 +2,7 @@
 
 `cott` is a language-like compiler for typed intent and prompt authoring. A bodyless `.cott`
 module declares public types, functions, contracts, effects, scenarios, and errors. Those
-declarations are the authored intent; Python, Kotlin/JVM, and Dart are verified projections, not second
+declarations are the authored intent; Python, Kotlin/JVM, Dart, and Rust are verified projections, not second
 contract sources. Runtime code uses generated public facades and does not read authored `.cott`
 live.
 
@@ -12,10 +12,11 @@ completely formalize intent, and a passing check is not a general proof that an 
 is correct. The product is typed authoring and evidence, not a speed claim.
 
 `architecture.md` is the normative implemented v1.0 language contract. The package remains `1.0.0`,
-Canonical IR schema `8`, contract-test strategy schema `5`, and diagnostics schema `1`.
+Canonical IR schema `9`, contract-test strategy schema `6`, and diagnostics schema `1`.
 Python uses generation schema `8`, domain `cott.generation.v8`, and runtime ABI `7`.
 Kotlin uses generation schema `2`, domain `cott.kotlin.generation.v2`, and runtime ABI `1`.
 Dart uses generation schema `2`, domain `cott.dart.generation.v2`, and runtime ABI `2`.
+Rust uses generation schema `1`, domain `cott.rust.generation.v1`, and runtime ABI `1`.
 These are separate closed target identities: readers and runtimes reject other backends and old
 records. Dart packages are directly consumable by Flutter; no Kotlin bridge is required.
 
@@ -80,7 +81,7 @@ JSON mode carries the same information as diagnostic notes without changing the 
 
 ### Review requirements, not just passing clauses
 
-Use the same review for Python, Kotlin, and Dart. Cott checks the declared contract;
+Use the same review for Python, Kotlin, Dart, and Rust. Cott checks the declared contract;
 it does not decide whether prose describes every required behavior.
 
 | Requirement to review | What to put in the contract or acceptance checks |
@@ -368,6 +369,55 @@ Flutter `3.47.4` with bundled Dart `3.13.3` was exercised: analyzer, release web
 Android APK build passed. Browser interaction confirmed `0 → 1 → 0` and both bounds `0..100`;
 the Cott module recorded all six clauses as observed. APK build is not device execution evidence.
 
+### Rust library and Cargo consumer workflow
+
+Rust uses same-release cargo/rustc `>=1.85.0,<2.0.0`, edition 2024, and a non-keyword lowercase
+snake_case crate name. `[target.rust]` selects `source = "rust"`, `generated = "generated/rust"`,
+default `cargo = "cargo"`/`rustc = "rustc"`, and `runtime_validation = "boundary"`.
+Optional `cargo_manifest` and `lockfile` must be paired; third-party crates are frozen crates.io or
+project-local path sources, never a git/patch override or an online verification fallback.
+
+Rust prompt/generation requests `implementation.rs`: exactly the rendered canonical `pub(crate) fn`
+or `pub(crate) async fn` plus private helpers. Manifest bindings select `source-relative.rs:function`;
+accepted agents live in `rust/cott_impl/<module>/<owner-if-method>/<function>.rs`. Tree-sitter permits
+audited std/core/alloc, frozen production crates and scoped public facade/runtime references only.
+It rejects unsafe/extern, module/compiler controls and compilation attributes; only doc attributes
+and audited `vec!`/`format!`/`matches!` macros are allowed, without imported aliases, nesting or
+qualified token-tree paths. Observe fields with read-only `get_<field>()`; receiver `set_`/`update_`
+writes follow declared modifies/transitions. The three adapters, generation waves and frozen
+initial prompt hashes keep the common contract.
+
+The integration example is `examples/integrations/rust-counter`. Its authored contract is the same
+increment/decrement `0..100` contract as the Flutter example. Generate accepted implementations
+through Cott before setup; do not hand-write `rust/cott_impl` or edit generated output:
+
+```bash
+project=examples/integrations/rust-counter
+COTT_BIN="$PWD/target/debug/cott"
+"$COTT_BIN" generate --agent omp --target rust --project "$project"
+COTT_BIN="$COTT_BIN" "$project/tool/setup.sh"
+cargo run --manifest-path "$project/app/Cargo.toml"
+```
+
+Setup requires an absolute in-tree `COTT_BIN`, refuses an existing `dist/rust_counter-0.1.0`, and runs
+real `emit rust`, `verify`, then `deploy`. The standard binary imports only
+`rust_counter::modules::example::counter::{increment, decrement}` as callable facades. It is written to demonstrate
+`0 -> 1 -> 0`, the valid upper endpoint, and typed `ContractViolation` panics at `increment(100)` and
+`decrement(0)`. The app explicitly retains `panic="unwind"`; Rust's default panic hook can still log
+an expected panic before `catch_unwind` catches it. Declared Cott errors remain `Result`, not panics.
+
+Compiler-owned Cargo metadata pins tokio `=1.53.1` (`rt,rt-multi-thread,sync,time`, no default features)
+and pin-project-lite `0.2.17`. Original locked `.crate` archives must exist in
+`$CARGO_HOME/registry/cache/index.crates.io-*/`; compressed SHA-256, bounded extraction and frozen
+file checksums authenticate the closure. Verify uses offline locked Cargo in the existing sandbox
+and applies Landlock before runtime threads. See architecture §16C for the normative boundary.
+
+Deployment contains portable `src/`, Cargo.toml/Cargo.lock, unchanged generation/dependency records,
+and project-local `deps/` (including solver-only path declarations). Registry vendor/source-replacement
+config, compiled verification rlib, runner, contracts, Cott tests and caches are excluded. The Cargo
+consumer shares registry tokio rather than linking a second vendored path copy. Application build,
+linking, dependency resolution, profiles and execution belong to Cargo, not module certification.
+
 ### Prompt inspection and snapshot lifecycle
 
 Inspect a callable using its own project and fully qualified name, for example:
@@ -383,7 +433,7 @@ or recover journals. Human mode writes the prompt bytes; JSON is
 `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. `prompt` matches those
 initial bytes, `prompt_hash` hashes only that initial prompt, and retries later append actual
 validation feedback. The requested write path is `implementation.py` for Python,
-`implementation.kt` for Kotlin, or `implementation.dart` for Dart. Inspection may take the project lock and write lock metadata; a
+`implementation.kt` for Kotlin, `implementation.dart` for Dart, or `implementation.rs` for Rust. Inspection may take the project lock and write lock metadata; a
 pending journal is refused without recovery. `context` is the scoped transitive declaration set:
 explicit identifier references, `constant_ref` uses, `cott.applied_rule` links and their bases,
 relevant incoming scenarios, and global rule prose plus `cott-domain` lines for selected callables.
@@ -518,13 +568,14 @@ app and does not run Python on-device.
 
 ## Reduced example index
 
-The authored inventory contains 26 Python projects, 21 Kotlin projects and one Dart/Flutter project.
+The authored inventory contains 26 Python projects, 21 Kotlin projects, one Dart/Flutter project, and one Rust/Cargo project.
 The Python set has six grammar lessons, three simple lessons, one complex curriculum project, the
 separate `process-bar` fixture, seven features, one modular project, one FastAPI integration and six
 real-world projects. `examples/kotlin/` contains 19 corresponding Kotlin lessons/fixtures plus
 `kotlin/real/posting`, a Kotlin generation of the `real/posting` contract with a Python-vs-Kotlin
 differential harness; `integrations/android-counter` is the twenty-first Kotlin project.
 `integrations/flutter-counter` is the Dart module and standard Flutter consumer.
+`integrations/rust-counter` is the Rust library and standard Cargo binary consumer; accepted source and managed output are produced by real Cott generation/verification.
 
 ### Grammar — 6
 

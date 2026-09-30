@@ -1,0 +1,9 @@
+[project]
+name = "rust_counter"
+version = "0.1.0"
+source = "src"
+
+[target.rust]
+source = "rust"
+generated = "generated/rust"
+runtime_validation = "boundary"

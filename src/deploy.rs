@@ -10,10 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::binding::{PythonFileRole, audit_facade_file};
 use crate::dart::provenance::DartGenerationRecord;
+
 use crate::kotlin::provenance::KotlinGenerationRecord;
 use crate::manifest::{TargetLanguage, normalized_relative_path};
 use crate::project::{ProjectPaths, discover_python_sources};
 use crate::provenance::GenerationRecord;
+use crate::rust::provenance::RustGenerationRecord;
 
 pub(crate) fn adapter_files(
     paths: &ProjectPaths,
@@ -378,7 +380,91 @@ fn generation_project_name(
         }
         TargetLanguage::Kotlin => Ok(KotlinGenerationRecord::parse(bytes)?.current.project_name),
         TargetLanguage::Dart => Ok(DartGenerationRecord::parse(bytes)?.current.project_name),
+
+        TargetLanguage::Rust => rust_deployment_project_name(bytes, tree),
     }
+}
+
+fn rust_deployment_project_name(bytes: &[u8], tree: &File) -> Result<String, String> {
+    let record = RustGenerationRecord::parse(bytes)?;
+    if !record.current.verified
+        || record.last_verified.as_ref() != Some(&record.current)
+        || !record.current.semantic_coverage.policy.passed
+    {
+        return Err(
+            "Rust deployment requires a verified current snapshot with passing coverage".to_owned(),
+        );
+    }
+    let mut manifests = record
+        .current
+        .managed_files
+        .keys()
+        .filter(|path| Path::new(path).ends_with("rust/Cargo.toml"));
+    let manifest = manifests
+        .clone()
+        .min_by_key(|path| Path::new(path).components().count())
+        .ok_or("Rust deployment has no recorded Cargo.toml")?;
+    let package_root = Path::new(manifest)
+        .parent()
+        .ok_or("Rust deployment has no recorded package root")?;
+    if manifests.any(|candidate| !Path::new(candidate).starts_with(package_root)) {
+        return Err("Rust deployment has ambiguous Cargo package roots".to_owned());
+    }
+    let mut members = BTreeMap::new();
+    for (path, expected) in &record.current.managed_files {
+        let path = normalized_relative_path(path)?;
+        let Ok(member) = path.strip_prefix(package_root) else {
+            continue;
+        };
+        if member.starts_with("src")
+            || matches!(
+                member.to_str(),
+                Some("Cargo.toml" | "Cargo.lock" | "dependencies.json")
+            )
+        {
+            if members.insert(member.to_path_buf(), expected).is_some() {
+                return Err("Rust deployment has ambiguous recorded package members".to_owned());
+            }
+        }
+    }
+    for required in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "dependencies.json",
+        "src/lib.rs",
+        "src/cott_runtime.rs",
+    ] {
+        if !members.contains_key(Path::new(required)) {
+            return Err(format!("Rust deployment has no recorded {required}"));
+        }
+    }
+    for (member, expected) in &members {
+        let bytes = read_required(tree, member)?;
+        if **expected != format!("sha256:{}", crate::hash::sha256_hex(&bytes)) {
+            return Err(format!(
+                "Rust deployment member differs from its generation record: {}",
+                member.display()
+            ));
+        }
+    }
+    let manifest = read_required(tree, Path::new("Cargo.toml"))?;
+    let manifest: toml::Value =
+        toml::from_str(std::str::from_utf8(&manifest).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let package = manifest
+        .get("package")
+        .ok_or("Rust deployment has no Cargo package identity")?;
+    if package.get("name").and_then(toml::Value::as_str) != Some(&record.current.project_name)
+        || package.get("version").and_then(toml::Value::as_str)
+            != Some(&record.current.project_version)
+        || package.get("edition").and_then(toml::Value::as_str) != Some("2024")
+        || package.get("publish").and_then(toml::Value::as_bool) != Some(false)
+    {
+        return Err(
+            "Rust deployment Cargo package identity differs from its generation record".to_owned(),
+        );
+    }
+    Ok(record.current.project_name)
 }
 
 fn deployment_identity(bytes: &[u8], tree: &File) -> Result<(TargetLanguage, String), String> {
@@ -386,6 +472,7 @@ fn deployment_identity(bytes: &[u8], tree: &File) -> Result<(TargetLanguage, Str
         TargetLanguage::Python,
         TargetLanguage::Kotlin,
         TargetLanguage::Dart,
+        TargetLanguage::Rust,
     ] {
         if let Ok(name) = generation_project_name(language, bytes, tree) {
             return Ok((language, name));
@@ -1546,5 +1633,131 @@ mod tests {
             b"new"
         );
         fixture.assert_complete(b"old");
+    }
+
+    fn rust_context(fixture: &crate::rust::pipeline::tests::RustFixture) -> ReplaceContext {
+        ReplaceContext {
+            root: fixture.root.join("authoring"),
+            source_dir: fixture.root.join("authoring/src"),
+            language_source_dir: fixture.root.join("authoring/rust"),
+            artifact_root: fixture.root.join("authoring/generated"),
+            extra_protected: vec![fixture.root.join("authoring/.cott")],
+            project_name: "sample_app".to_owned(),
+            language: TargetLanguage::Rust,
+        }
+    }
+
+    #[test]
+    fn rust_replacement_requires_authenticated_portable_members_not_only_a_record() {
+        let fixture = crate::rust::pipeline::tests::RustFixture::new();
+        let target = fixture.root.join("release");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("generation.json"), &fixture.generation).unwrap();
+        let context = rust_context(&fixture);
+        assert!(require_replaceable(&context, &target).is_err());
+        fixture.deploy_to(&target);
+        require_replaceable(&context, &target).unwrap();
+        fs::write(target.join("src/lib.rs"), b"pub fn forged() {}").unwrap();
+        assert!(require_replaceable(&context, &target).is_err());
+    }
+
+    #[test]
+    fn rust_replacement_rejects_foreign_targets_projects_and_symlinked_members() {
+        let fixture = crate::rust::pipeline::tests::RustFixture::new();
+        let target = fixture.root.join("release");
+        fixture.deploy_to(&target);
+        let mut context = rust_context(&fixture);
+        context.language = TargetLanguage::Dart;
+        assert!(require_replaceable(&context, &target).is_err());
+        context.language = TargetLanguage::Rust;
+        context.project_name = "another_project".to_owned();
+        assert!(require_replaceable(&context, &target).is_err());
+        context.project_name = "sample_app".to_owned();
+        let runtime = target.join("src/cott_runtime.rs");
+        fs::remove_file(&runtime).unwrap();
+        std::os::unix::fs::symlink(
+            fixture.paths.generated_dir.join("src/cott_runtime.rs"),
+            &runtime,
+        )
+        .unwrap();
+        assert!(require_replaceable(&context, &target).is_err());
+    }
+
+    #[test]
+    fn rust_deployment_exchange_publishes_complete_new_source_and_unchanged_record() {
+        let old = crate::rust::pipeline::tests::RustFixture::new();
+        let target = old.root.join("release");
+        let staged = old.root.join("staged");
+        old.deploy_to(&target);
+        let mut new = crate::rust::pipeline::tests::RustFixture::new();
+        let updated = b"pub mod cott_runtime;\npub fn run() -> u32 { 8 }\n";
+        fs::write(new.paths.generated_dir.join("src/lib.rs"), updated).unwrap();
+        new.record.current.managed_files.insert(
+            "generated/rust/src/lib.rs".to_owned(),
+            format!("sha256:{}", crate::hash::sha256_hex(updated)),
+        );
+        new.record.current.compute_generation_id().unwrap();
+        new.record.last_verified = Some(new.record.current.clone());
+        new.generation = new.record.canonical_bytes().unwrap();
+        new.deploy_to(&staged);
+        require_replaceable(&rust_context(&old), &target).unwrap();
+        publish_replace(&staged, &target).unwrap();
+        assert_eq!(fs::read(target.join("src/lib.rs")).unwrap(), updated);
+        assert_eq!(
+            fs::read(target.join("generation.json")).unwrap(),
+            new.generation
+        );
+        assert!(!staged.exists());
+        require_replaceable(&rust_context(&old), &target).unwrap();
+    }
+
+    #[test]
+    fn rust_replacement_does_not_confuse_a_path_dependency_named_rust_with_the_root_package() {
+        let mut fixture = crate::rust::pipeline::tests::RustFixture::new();
+        fixture.record.current.dependencies = serde_json::json!({
+            "schema_version": 1,
+            "cargo_manifest_hash": format!("sha256:{}", crate::hash::sha256_hex(b"manifest")),
+            "lockfile_hash": format!("sha256:{}", crate::hash::sha256_hex(b"lock")),
+            "packages": [{"name": "rust", "version": "1.0.0", "source": "path",
+                "source_identity": "rust_deps/rust",
+                "content_hash": format!("sha256:{}", crate::hash::sha256_hex(b"path crate")),
+                "dependencies": [], "runtime": true}]
+        });
+        let dependencies = serde_json::to_vec(&fixture.record.current.dependencies).unwrap();
+        for (member, bytes) in [
+            ("rust/dependencies.json", dependencies.as_slice()),
+            (
+                "rust/deps/rust/Cargo.toml",
+                b"[package]\nname = \"rust\"\nversion = \"1.0.0\"\nedition = \"2024\"\n",
+            ),
+            ("rust/deps/rust/src/lib.rs", b"pub fn nested_crate() {}\n"),
+        ] {
+            let path = fixture.paths.artifact_root.join(member);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+            fixture.record.current.managed_files.insert(
+                format!("generated/{member}"),
+                format!("sha256:{}", crate::hash::sha256_hex(bytes)),
+            );
+        }
+        fixture.record.current.compute_generation_id().unwrap();
+        fixture.record.last_verified = Some(fixture.record.current.clone());
+        fixture.generation = fixture.record.canonical_bytes().unwrap();
+        let target = fixture.root.join("release");
+        fixture.deploy_to(&target);
+        require_replaceable(&rust_context(&fixture), &target).unwrap();
+        assert_eq!(
+            fs::read(target.join("deps/rust/src/lib.rs")).unwrap(),
+            b"pub fn nested_crate() {}\n"
+        );
+        assert_eq!(
+            generation_project_name(
+                TargetLanguage::Rust,
+                &fixture.generation,
+                &File::open(&target).unwrap()
+            )
+            .unwrap(),
+            "sample_app"
+        );
     }
 }

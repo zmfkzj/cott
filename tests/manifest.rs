@@ -672,3 +672,204 @@ fn parses_process_bar_normative_manifest_without_legacy_entry() {
         );
     }
 }
+
+const VALID_RUST: &str = r#"
+[project]
+name = "rust_counter"
+version = "0.1.0"
+source = "src"
+[target.rust]
+source = "rust"
+generated = "generated/rust"
+runtime_validation = "boundary"
+[target.rust.implementations]
+"example.counter.increment" = "cott_bindings/counter.rs:increment"
+[target.rust.external_types]
+"example.counter.Moment" = "std::time::SystemTime"
+"example.counter.Bytes" = "bytes::Bytes"
+"example.counter.Duration" = "core::time::Duration"
+"example.counter.Text" = "alloc::string::String"
+"#;
+
+#[test]
+fn rust_manifest_selects_one_closed_target_and_defaults_tools() {
+    let path = Path::new("cott.toml");
+    let config = cott::manifest::RustProjectConfig::parse(path, VALID_RUST).unwrap();
+    assert_eq!(config.rust.cargo, "cargo");
+    assert_eq!(config.rust.rustc, "rustc");
+    assert_eq!(
+        cott::manifest::target_language(path, VALID_RUST).unwrap(),
+        TargetLanguage::Rust
+    );
+    for foreign in ["python", "kotlin", "dart"] {
+        let both = format!(
+            "{VALID_RUST}\n[target.{foreign}]\nsource = \"other\"\ngenerated = \"generated/{foreign}\"\nruntime_validation = \"boundary\"\n"
+        );
+        assert!(cott::manifest::target_language(path, &both).is_err());
+    }
+    assert!(cott::manifest::DartProjectConfig::parse(path, VALID_RUST).is_err());
+}
+
+#[test]
+fn rust_manifest_rejects_invalid_names_selectors_paths_and_open_fields() {
+    let path = Path::new("cott.toml");
+    for name in [
+        "async",
+        "crate",
+        "gen",
+        "try",
+        "Upper",
+        "has-dash",
+        "two__words",
+        "9start",
+        "_",
+    ] {
+        assert!(
+            cott::manifest::RustProjectConfig::parse(
+                path,
+                &VALID_RUST.replace("rust_counter", name)
+            )
+            .is_err(),
+            "{name}"
+        );
+    }
+    for selector in [
+        "../escape.rs:increment",
+        "/absolute.rs:increment",
+        "file.py:increment",
+        "file.rs:fn",
+        "file.rs:increment:extra",
+        "target/file.rs:increment",
+        ".cargo/file.rs:increment",
+        "file.rs:cott_private",
+        "file.rs:__cott_private",
+    ] {
+        assert!(
+            cott::manifest::RustProjectConfig::parse(
+                path,
+                &VALID_RUST.replace("cott_bindings/counter.rs:increment", selector)
+            )
+            .is_err(),
+            "{selector}"
+        );
+    }
+    for projection in [
+        "crate::Hidden",
+        "self::Hidden",
+        "super::Hidden",
+        "::std::time::SystemTime",
+        "std::",
+        "std.time.SystemTime",
+        "std::type",
+        "std::time::SystemTime<T>",
+    ] {
+        assert!(
+            cott::manifest::RustProjectConfig::parse(
+                path,
+                &VALID_RUST.replace("std::time::SystemTime", projection)
+            )
+            .is_err(),
+            "{projection}"
+        );
+    }
+    for field in [
+        "source = \"../rust\"",
+        "generated = \"src/rust\"",
+        "generated = \"generated/other\"",
+        "cargo = \"./cargo\"",
+        "rustc = \"../rustc\"",
+        "sdk = \"rustc\"",
+    ] {
+        let input = if field.starts_with("source =") {
+            VALID_RUST.replace("source = \"rust\"", field)
+        } else if field.starts_with("generated =") {
+            VALID_RUST.replace("generated = \"generated/rust\"", field)
+        } else {
+            VALID_RUST.replace(
+                "runtime_validation = \"boundary\"",
+                &format!("runtime_validation = \"boundary\"\n{field}"),
+            )
+        };
+        assert!(
+            cott::manifest::RustProjectConfig::parse(path, &input).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn rust_dependency_metadata_requires_paired_disjoint_normalized_paths() {
+    let path = Path::new("cott.toml");
+    let insert = |fields: &str| {
+        VALID_RUST.replace(
+            "runtime_validation = \"boundary\"",
+            &format!("runtime_validation = \"boundary\"\n{fields}"),
+        )
+    };
+    let paired =
+        insert("cargo_manifest = \"rust_deps/Cargo.toml\"\nlockfile = \"rust_deps/Cargo.lock\"");
+    assert!(cott::manifest::RustProjectConfig::parse(path, &paired).is_ok());
+    for fields in [
+        "cargo_manifest = \"rust_deps/Cargo.toml\"",
+        "lockfile = \"rust_deps/Cargo.lock\"",
+        "cargo_manifest = \"src/Cargo.toml\"\nlockfile = \"rust_deps/Cargo.lock\"",
+        "cargo_manifest = \"rust_deps//Cargo.toml\"\nlockfile = \"rust_deps/Cargo.lock\"",
+        "cargo_manifest = \"rust_deps/Cargo.toml\"\nlockfile = \"rust_deps/Cargo.toml\"",
+    ] {
+        assert!(
+            cott::manifest::RustProjectConfig::parse(path, &insert(fields)).is_err(),
+            "{fields}"
+        );
+    }
+}
+
+#[test]
+fn rust_implementation_selectors_accept_only_canonical_raw_keyword_identifiers() {
+    let path = Path::new("cott.toml");
+    for function in [
+        "r#gen", "r#loop", "r#box", "r#type", "r#async", "r#fn", "self_", "Self_", "super_",
+        "crate_", "self__", "Self__", "super__", "crate__",
+    ] {
+        let manifest = VALID_RUST.replace(
+            "cott_bindings/counter.rs:increment",
+            &format!("cott_bindings/counter.rs:{function}"),
+        );
+        assert!(
+            cott::manifest::RustProjectConfig::parse(path, &manifest).is_ok(),
+            "{function}"
+        );
+    }
+    for function in [
+        "r#self",
+        "r#Self",
+        "r#super",
+        "r#crate",
+        "r#_",
+        "r#increment",
+        "r#Loop",
+        "r#",
+        "r#r#loop",
+        "loop",
+        "gen",
+        "self",
+        "Self",
+        "super",
+        "crate",
+    ] {
+        let manifest = VALID_RUST.replace(
+            "cott_bindings/counter.rs:increment",
+            &format!("cott_bindings/counter.rs:{function}"),
+        );
+        assert!(
+            cott::manifest::RustProjectConfig::parse(path, &manifest).is_err(),
+            "{function}"
+        );
+    }
+    assert!(
+        cott::manifest::RustProjectConfig::parse(
+            path,
+            &VALID_RUST.replace("rust_counter", "r#loop")
+        )
+        .is_err()
+    );
+}

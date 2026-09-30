@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub const EXEC_MODE: &str = "__cott_landlock_exec";
+/// Rust runners do not need any procfs read exception.
+pub const RUST_EXEC_MODE: &str = "__cott_rust_landlock_exec";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -23,9 +25,12 @@ pub struct ConfinedExec {
 /// Recognizes only the compiler's internal launch protocol. It never consumes
 /// stdin: the child VM must receive the original one-way evidence-key pipe.
 pub fn dispatch(arguments: &[OsString]) -> Option<i32> {
+    let rust = arguments
+        .get(1)
+        .is_some_and(|argument| argument == RUST_EXEC_MODE);
     if arguments
         .get(1)
-        .is_none_or(|argument| argument != EXEC_MODE)
+        .is_none_or(|argument| argument != EXEC_MODE && !rust)
     {
         return None;
     }
@@ -38,24 +43,27 @@ pub fn dispatch(arguments: &[OsString]) -> Option<i32> {
             .ok_or("confined target launch specification is not UTF-8")?;
         let spec: ConfinedExec = serde_json::from_str(json)
             .map_err(|error| format!("invalid confined target specification: {error}"))?;
-        execute(&spec)
+        execute(&spec, !rust)
     })();
     match result {
         Ok(never) => match never {},
         Err(error) => {
-            eprintln!("error: Dart filesystem confinement: {error}");
+            eprintln!(
+                "error: {} filesystem confinement: {error}",
+                if rust { "Rust" } else { "Dart" }
+            );
             Some(126)
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn execute(_: &ConfinedExec) -> Result<std::convert::Infallible, String> {
+fn execute(_: &ConfinedExec, _: bool) -> Result<std::convert::Infallible, String> {
     Err("Linux Landlock ABI >=3 is required".to_owned())
 }
 
 #[cfg(target_os = "linux")]
-fn execute(spec: &ConfinedExec) -> Result<std::convert::Infallible, String> {
+fn execute(spec: &ConfinedExec, allow_proc_maps: bool) -> Result<std::convert::Infallible, String> {
     use std::collections::BTreeMap;
     use std::fs::{self, OpenOptions};
     use std::io;
@@ -73,6 +81,18 @@ fn execute(spec: &ConfinedExec) -> Result<std::convert::Infallible, String> {
     const ALL_FILESYSTEM: u64 = (1 << 15) - 1;
     const READ_ONLY: u64 = EXECUTE | READ_FILE | READ_DIR;
     const REGULAR_FILE: u64 = EXECUTE | WRITE_FILE | READ_FILE | TRUNCATE;
+    // Native Rust runners need no child executable. Keep the initial exec's file
+    // rule, but deny executable access to system, package and writable trees.
+    let read_access = if allow_proc_maps {
+        READ_ONLY
+    } else {
+        READ_FILE | READ_DIR
+    };
+    let write_access = if allow_proc_maps {
+        ALL_FILESYSTEM
+    } else {
+        ALL_FILESYSTEM & !EXECUTE
+    };
 
     #[repr(C)]
     struct RulesetAttr {
@@ -142,15 +162,30 @@ fn execute(spec: &ConfinedExec) -> Result<std::convert::Infallible, String> {
     };
     for path in ["/usr", "/lib", "/lib64", "/etc"] {
         if Path::new(path).exists() {
-            add_path(Path::new(path), READ_ONLY)?;
+            add_path(Path::new(path), read_access)?;
         }
     }
     add_path(&spec.executable, READ_ONLY)?;
+    if !allow_proc_maps {
+        // ELF startup needs the interpreter inode executable as well. The native
+        // runner installs a TSYNC seccomp policy before secret input to deny all
+        // subsequent exec/fork, including direct interpreter invocation.
+        for loader in [
+            "/lib64/ld-linux-x86-64.so.2",
+            "/lib/ld-linux-aarch64.so.1",
+            "/lib/ld-musl-x86_64.so.1",
+            "/lib/ld-musl-aarch64.so.1",
+        ] {
+            if Path::new(loader).exists() {
+                add_path(Path::new(loader), READ_ONLY)?;
+            }
+        }
+    }
     for path in &spec.read_only {
-        add_path(path, READ_ONLY)?;
+        add_path(path, read_access)?;
     }
     for path in &spec.writable {
-        add_path(path, ALL_FILESYSTEM)?;
+        add_path(path, write_access)?;
     }
     for path in ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"] {
         if Path::new(path).exists() {
@@ -159,7 +194,9 @@ fn execute(spec: &ConfinedExec) -> Result<std::convert::Infallible, String> {
     }
     // This inode remains attached to the same process across exec. No ancestor
     // procfs directory or task/fd/mem file receives an allow rule.
-    rules.insert(PathBuf::from("/proc/self/maps"), READ_FILE);
+    if allow_proc_maps {
+        rules.insert(PathBuf::from("/proc/self/maps"), READ_FILE);
+    }
     for (path, requested) in rules {
         let file = OpenOptions::new()
             .read(true)

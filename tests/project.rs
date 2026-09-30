@@ -770,3 +770,90 @@ fn rejects_unsafe_dart_and_contract_source_entries() {
         assert!(discover_dart_contract_sources(&paths).is_err());
     }
 }
+
+fn rust_project() -> TempDir {
+    let temp = TempDir::new();
+    fs::create_dir_all(temp.path.join("src/nested")).unwrap();
+    fs::create_dir_all(temp.path.join("rust/cott_impl")).unwrap();
+    manifest(
+        &temp.path,
+        "[project]\nname = \"rust_counter\"\nversion = \"0.1.0\"\nsource = \"src\"\n[target.rust]\nsource = \"rust\"\ngenerated = \"generated/rust\"\nruntime_validation = \"boundary\"\n",
+    );
+    fs::write(temp.path.join("src/nested/api.cott"), "module nested.api\n").unwrap();
+    fs::write(
+        temp.path.join("rust/cott_impl/api.rs"),
+        "pub(crate) fn run() {}\n",
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn rust_paths_and_discovery_are_target_isolated_and_ignore_caches() {
+    let temp = rust_project();
+    for cache in [
+        "target",
+        ".cargo",
+        ".cott",
+        ".cache",
+        "build",
+        ".git",
+        "__pycache__",
+    ] {
+        for source_root in ["src", "rust"] {
+            let directory = temp.path.join(source_root).join(cache);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("excluded.cott"), "invalid").unwrap();
+            fs::write(directory.join("excluded.rs"), "invalid").unwrap();
+        }
+    }
+    let (_, paths, bytes) = cott::project::load_rust_config_with_paths(&temp.path).unwrap();
+    assert_eq!(
+        bytes,
+        fs::read_to_string(temp.path.join("cott.toml")).unwrap()
+    );
+    assert_eq!(paths.generated_dir, temp.path.join("generated/rust"));
+    assert_eq!(paths.artifact_root, temp.path.join("generated"));
+    assert_eq!(paths.rust_source_dir, temp.path.join("rust"));
+    assert_eq!(paths.cargo_manifest, None);
+    let contracts = cott::project::discover_rust_contract_sources(&paths).unwrap();
+    assert_eq!(
+        contracts
+            .iter()
+            .map(|source| source.path.clone())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("nested/api.cott")]
+    );
+    let implementations = cott::project::discover_rust_sources(&paths.rust_source_dir).unwrap();
+    assert_eq!(
+        implementations
+            .iter()
+            .map(|source| source.disk_path.clone())
+            .collect::<Vec<_>>(),
+        vec![temp.path.join("rust/cott_impl/api.rs")]
+    );
+    assert_eq!(implementations[0].source, "pub(crate) fn run() {}\n");
+    assert!(cott::project::load_dart_config_with_paths(&temp.path).is_err());
+    assert!(cott::project::load_config_with_paths(&temp.path).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_discovery_rejects_symlink_and_hardlink_inputs_but_skips_cache_links() {
+    let temp = rust_project();
+    let (_, paths, _) = cott::project::load_rust_config_with_paths(&temp.path).unwrap();
+    std::os::unix::fs::symlink("/missing", paths.rust_source_dir.join("target")).unwrap();
+    assert!(cott::project::discover_rust_sources(&paths.rust_source_dir).is_ok());
+    std::os::unix::fs::symlink("cott_impl/api.rs", paths.rust_source_dir.join("linked.rs"))
+        .unwrap();
+    assert!(cott::project::discover_rust_sources(&paths.rust_source_dir).is_err());
+    fs::remove_file(paths.rust_source_dir.join("linked.rs")).unwrap();
+    fs::hard_link(
+        paths.rust_source_dir.join("cott_impl/api.rs"),
+        paths.rust_source_dir.join("hard.rs"),
+    )
+    .unwrap();
+    assert!(cott::project::discover_rust_sources(&paths.rust_source_dir).is_err());
+    std::os::unix::fs::symlink("nested/api.cott", paths.source_dir.join("linked.cott")).unwrap();
+    assert!(cott::project::discover_rust_contract_sources(&paths).is_err());
+}

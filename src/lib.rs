@@ -16,6 +16,7 @@ pub mod kotlin;
 pub mod lexer;
 pub mod lsp;
 pub mod manifest;
+pub mod rust;
 pub mod syntax;
 
 pub mod parser;

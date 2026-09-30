@@ -1,0 +1,25 @@
+module example.counter
+
+fn increment(current: I32) -> I32:
+    doc """
+    Increase a counter value by one within the inclusive range from 0 through 100.
+    """
+
+    requires current >= 0
+    requires current < 100
+
+    ensures result == current + 1
+
+    effects []
+
+fn decrement(current: I32) -> I32:
+    doc """
+    Decrease a counter value by one within the inclusive range from 0 through 100.
+    """
+
+    requires current > 0
+    requires current <= 100
+
+    ensures result == current - 1
+
+    effects []

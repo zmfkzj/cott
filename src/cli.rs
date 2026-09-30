@@ -50,7 +50,7 @@ use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott requirements [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, Dart, and Rust.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart|rust] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart|rust [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott requirements [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  requirements         Report requirement evidence from the fresh verified snapshot only.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nAn observed requirement only means its checked_by scenarios ran and held.\nUse --version and --help from the same compiler executable used for the project.\n";
 
@@ -198,6 +198,10 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             TargetLanguage::Dart => {
                 finish_dart_init(crate::dart::pipeline::init(path, name, no_sync, format))
             }
+
+            TargetLanguage::Rust => {
+                finish_rust_init(crate::rust::pipeline::init(path, name, no_sync, format))
+            }
         },
         Ok(Command::Check {
             source, project, ..
@@ -298,6 +302,8 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
         3 => code::SYNTAX,
         4 if diagnostic_target == TargetLanguage::Kotlin => code::KOTLIN,
         4 if diagnostic_target == TargetLanguage::Dart => code::DART,
+
+        4 if diagnostic_target == TargetLanguage::Rust => code::RUST,
         4 => code::PYTHON,
         5 => code::AGENT,
         6 => code::FILESYSTEM,
@@ -321,6 +327,8 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
                 TargetLanguage::Python => code::SHADOW_SPECIFICATION,
                 TargetLanguage::Kotlin => code::KOTLIN,
                 TargetLanguage::Dart => code::DART,
+
+                TargetLanguage::Rust => code::RUST,
             };
             Diagnostic::warning(warning_code, body, Span::new(0, 0))
         } else {
@@ -422,6 +430,11 @@ fn command_diagnostic_target(command: &Command) -> TargetLanguage {
             target: EmitTarget::Dart,
             ..
         } => TargetLanguage::Dart,
+
+        Command::Emit {
+            target: EmitTarget::Rust,
+            ..
+        } => TargetLanguage::Rust,
         _ => command_project_argument(command)
             .and_then(|project| {
                 project
@@ -459,6 +472,14 @@ fn json_project_paths(command: &Command) -> Option<JsonProjectPaths> {
                 source_dir: paths.source_dir,
             })
         }
+
+        TargetLanguage::Rust => {
+            let (_, paths, _) = crate::project::load_rust_config_with_paths(&root).ok()?;
+            Some(JsonProjectPaths {
+                root: paths.root,
+                source_dir: paths.source_dir,
+            })
+        }
     }
 }
 
@@ -474,6 +495,7 @@ pub enum EmitTarget {
     Python,
     Kotlin,
     Dart,
+    Rust,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -597,7 +619,9 @@ fn parse_target_language(value: Option<&str>) -> Result<TargetLanguage, &'static
         Some("python") => Ok(TargetLanguage::Python),
         Some("kotlin") => Ok(TargetLanguage::Kotlin),
         Some("dart") => Ok(TargetLanguage::Dart),
-        _ => Err("`--target` requires `python`, `kotlin`, or `dart`"),
+
+        Some("rust") => Ok(TargetLanguage::Rust),
+        _ => Err("`--target` requires `python`, `kotlin`, `dart`, or `rust`"),
     }
 }
 
@@ -745,7 +769,13 @@ fn parse_emit(values: &[OsString]) -> Result<Command, &'static str> {
         Some("python") => EmitTarget::Python,
         Some("kotlin") => EmitTarget::Kotlin,
         Some("dart") => EmitTarget::Dart,
-        _ => return Err("expected `emit ir`, `emit python`, `emit kotlin`, or `emit dart`"),
+
+        Some("rust") => EmitTarget::Rust,
+        _ => {
+            return Err(
+                "expected `emit ir`, `emit python`, `emit kotlin`, `emit dart`, or `emit rust`",
+            );
+        }
     };
     let options = ExistingOptions::parse(&values[1..])?;
     Ok(Command::Emit {
@@ -826,7 +856,7 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
         index += 1;
     }
     let Some(target) = target else {
-        return Err("`generate` requires `--target python|kotlin|dart`");
+        return Err("`generate` requires `--target python|kotlin|dart|rust`");
     };
     if model.is_some() && agent.is_none() {
         return Err("`--model` requires `--agent`");
@@ -4649,6 +4679,8 @@ fn target_name(target: TargetLanguage) -> &'static str {
         TargetLanguage::Python => "python",
         TargetLanguage::Kotlin => "kotlin",
         TargetLanguage::Dart => "dart",
+
+        TargetLanguage::Rust => "rust",
     }
 }
 
@@ -4769,6 +4801,54 @@ fn finish_dart_verification(
     code
 }
 
+fn finish_rust_unit(result: Result<(), crate::rust::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_rust_init(result: Result<PathBuf, crate::rust::pipeline::Failure>) -> i32 {
+    finish_rust_unit(result.map(|_| ()))
+}
+
+fn finish_rust_path(result: Result<PathBuf, crate::rust::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(path) => {
+            println!("{}", path.display());
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_rust_verification(
+    (result, requirements): (
+        Result<(PathBuf, SemanticCoverage), crate::rust::pipeline::Failure>,
+        Option<RequirementReport>,
+    ),
+) -> i32 {
+    let code = match result {
+        Ok((path, coverage)) => {
+            println!("verified {}", path.display());
+            println!("{}", display_semantic_coverage(&coverage));
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    };
+    print_requirement_report(requirements.as_ref());
+    code
+}
+
 fn check_for_target(project: Option<PathBuf>, source: Option<PathBuf>) -> i32 {
     match selected_project_target(&project) {
         Ok(TargetLanguage::Python) => check_project(project, source),
@@ -4776,6 +4856,8 @@ fn check_for_target(project: Option<PathBuf>, source: Option<PathBuf>) -> i32 {
             finish_kotlin_unit(crate::kotlin::pipeline::check(project, source))
         }
         Ok(TargetLanguage::Dart) => finish_dart_unit(crate::dart::pipeline::check(project, source)),
+
+        Ok(TargetLanguage::Rust) => finish_rust_unit(crate::rust::pipeline::check(project, source)),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -4787,6 +4869,8 @@ fn format_for_target(project: Option<PathBuf>, check: bool) -> i32 {
             finish_kotlin_unit(crate::kotlin::pipeline::format(project, check))
         }
         Ok(TargetLanguage::Dart) => finish_dart_unit(crate::dart::pipeline::format(project, check)),
+
+        Ok(TargetLanguage::Rust) => finish_rust_unit(crate::rust::pipeline::format(project, check)),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -4820,6 +4904,10 @@ fn emit_for_target(project: Option<PathBuf>, requested: EmitTarget) -> i32 {
         (EmitTarget::Ir, TargetLanguage::Dart) => {
             finish_dart_path(crate::dart::pipeline::emit(project, true))
         }
+
+        (EmitTarget::Ir, TargetLanguage::Rust) => {
+            finish_rust_path(crate::rust::pipeline::emit(project, true))
+        }
         (EmitTarget::Python, TargetLanguage::Python) => emit_python_project(project),
         (EmitTarget::Kotlin, TargetLanguage::Kotlin) => {
             finish_kotlin_path(crate::kotlin::pipeline::emit(project, false))
@@ -4827,15 +4915,27 @@ fn emit_for_target(project: Option<PathBuf>, requested: EmitTarget) -> i32 {
         (EmitTarget::Dart, TargetLanguage::Dart) => {
             finish_dart_path(crate::dart::pipeline::emit(project, false))
         }
-        (EmitTarget::Python, actual @ (TargetLanguage::Kotlin | TargetLanguage::Dart)) => {
-            target_mismatch(TargetLanguage::Python, actual)
+
+        (EmitTarget::Rust, TargetLanguage::Rust) => {
+            finish_rust_path(crate::rust::pipeline::emit(project, false))
         }
-        (EmitTarget::Kotlin, actual @ (TargetLanguage::Python | TargetLanguage::Dart)) => {
-            target_mismatch(TargetLanguage::Kotlin, actual)
-        }
-        (EmitTarget::Dart, actual @ (TargetLanguage::Python | TargetLanguage::Kotlin)) => {
-            target_mismatch(TargetLanguage::Dart, actual)
-        }
+        (
+            EmitTarget::Python,
+            actual @ (TargetLanguage::Kotlin | TargetLanguage::Dart | TargetLanguage::Rust),
+        ) => target_mismatch(TargetLanguage::Python, actual),
+        (
+            EmitTarget::Kotlin,
+            actual @ (TargetLanguage::Python | TargetLanguage::Dart | TargetLanguage::Rust),
+        ) => target_mismatch(TargetLanguage::Kotlin, actual),
+        (
+            EmitTarget::Dart,
+            actual @ (TargetLanguage::Python | TargetLanguage::Kotlin | TargetLanguage::Rust),
+        ) => target_mismatch(TargetLanguage::Dart, actual),
+
+        (
+            EmitTarget::Rust,
+            actual @ (TargetLanguage::Python | TargetLanguage::Kotlin | TargetLanguage::Dart),
+        ) => target_mismatch(TargetLanguage::Rust, actual),
     }
 }
 
@@ -4862,6 +4962,10 @@ fn generate_for_target(
         TargetLanguage::Dart => {
             crate::dart::generation::generate(project, symbol, agent, model, jobs)
         }
+
+        TargetLanguage::Rust => {
+            crate::rust::generation::generate(project, symbol, agent, model, jobs)
+        }
     }
 }
 
@@ -4870,6 +4974,8 @@ fn prompt_for_target(project: Option<PathBuf>, symbol: String, format: OutputFor
         Ok(TargetLanguage::Python) => prompt_project(project, symbol, format),
         Ok(TargetLanguage::Kotlin) => crate::kotlin::prompt::prompt(project, symbol, format),
         Ok(TargetLanguage::Dart) => crate::dart::prompt::prompt(project, symbol, format),
+
+        Ok(TargetLanguage::Rust) => crate::rust::prompt::prompt(project, symbol, format),
         Err(message) => target_selection_failure(format, message),
     }
 }
@@ -5044,6 +5150,13 @@ fn requirements_for_target(project: Option<PathBuf>, format: OutputFormat) -> i3
                 failure.code
             })
         }
+
+        Ok(TargetLanguage::Rust) => {
+            crate::rust::pipeline::requirements(project).map_err(|failure| {
+                eprintln!("error: {}", failure.message);
+                failure.code
+            })
+        }
         // Failures keep stdout empty in both formats; stdout carries only the report document.
         Err(message) => return target_selection_failure(OutputFormat::Human, message),
     };
@@ -5081,6 +5194,10 @@ fn verify_for_target(project: Option<PathBuf>) -> i32 {
         Ok(TargetLanguage::Dart) => {
             finish_dart_verification(crate::dart::pipeline::verify(project))
         }
+
+        Ok(TargetLanguage::Rust) => {
+            finish_rust_verification(crate::rust::pipeline::verify(project))
+        }
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -5098,6 +5215,10 @@ fn diff_for_target(
         }
         Ok(TargetLanguage::Dart) => {
             crate::dart::pipeline::diff(project, baseline, exit_code, format)
+        }
+
+        Ok(TargetLanguage::Rust) => {
+            crate::rust::pipeline::diff(project, baseline, exit_code, format)
         }
         Err(message) => target_selection_failure(format, message),
     }
@@ -5121,6 +5242,15 @@ fn deploy_for_target(project: Option<PathBuf>, output: Option<PathBuf>, replace:
             TargetLanguage::Dart,
             crate::dart::pipeline::deploy,
             |code, message| crate::dart::pipeline::Failure::new(code, message),
+        )),
+
+        Ok(TargetLanguage::Rust) => finish_rust_path(deploy_language(
+            project,
+            output,
+            replace,
+            TargetLanguage::Rust,
+            crate::rust::pipeline::deploy,
+            |code, message| crate::rust::pipeline::Failure::new(code, message),
         )),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
@@ -5248,6 +5378,27 @@ fn language_replace_plan(
                 artifact_root: paths.artifact_root,
                 project_name: config.project.name,
                 language: TargetLanguage::Dart,
+            };
+            (context, target)
+        }
+
+        TargetLanguage::Rust => {
+            let (config, paths, _) = crate::project::load_rust_config_with_paths(&root)
+                .map_err(|error| error.to_string())?;
+            let target = resolve_deploy_output(
+                &paths.root,
+                &config.project.name,
+                &config.project.version,
+                output,
+            )?;
+            let context = crate::deploy::ReplaceContext {
+                extra_protected: vec![paths.root.join(".cott")],
+                root: paths.root,
+                source_dir: paths.source_dir,
+                language_source_dir: paths.rust_source_dir,
+                artifact_root: paths.artifact_root,
+                project_name: config.project.name,
+                language: TargetLanguage::Rust,
             };
             (context, target)
         }

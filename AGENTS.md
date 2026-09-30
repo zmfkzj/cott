@@ -3,7 +3,7 @@
 ## Project Overview
 
 `cott` is a Rust 2024 compiler for language-like typed intent and prompt authoring. A bodyless
-`.cott` module is the public contract source. Python, Kotlin, and Dart bindings or accepted agent
+`.cott` module is the public contract source. Python, Kotlin, Dart, and Rust bindings or accepted agent
 implementations are checked projections; generated target facades are the only public import path.
 Runtime code does not read authored `.cott` live.
 
@@ -12,6 +12,7 @@ Runtime code does not read authored `.cott` live.
 Python uses generation schema `8`, domain `cott.generation.v8`, and runtime ABI `7`.
 Kotlin uses generation schema `2`, domain `cott.kotlin.generation.v2`, and runtime ABI `1`.
 Dart uses generation schema `2`, domain `cott.dart.generation.v2`, and runtime ABI `2`.
+Rust uses generation schema `1`, domain `cott.rust.generation.v1`, and runtime ABI `1`; there is no Rust legacy conversion.
 Never put one backend's truth in another backend's fields or accept its record. Do not add legacy
 readers, partial profiles, unsandboxed fallbacks, or a second source of truth. When documentation and implementation
 source disagree, the source files and closed schema validators are authoritative; update the docs
@@ -36,7 +37,7 @@ across a schema/ABI cutover.
 
 ```text
 cott check / fmt / emit / generate / prompt / verify / diff / deploy
-  → exactly one closed Python, Kotlin, or Dart target + symlink-safe source discovery
+  → exactly one closed Python, Kotlin, Dart, or Rust target + symlink-safe source discovery
   → lossless CST → AST → complete HIR → Canonical IR
   → intent fingerprints + target binding or scoped agent implementation validation
   → deterministic target facade/runtime/provenance plan
@@ -58,6 +59,9 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 - `src/dart/{binding,emit,types,expressions,runtime,provenance,pipeline,dependencies,verify,runner,prompt,generation}.rs`
   own the independent Dart generation-2/runtime-2 package backend. `src/sandbox/landlock.rs` applies
   Dart runtime filesystem confinement before VM threads; do not move it into already-threaded Dart code.
+- `src/rust/{binding,emit,types,expressions,runtime,provenance,pipeline,dependencies,verify,runner,prompt,generation}.rs`
+  own the distinct Rust generation-1/runtime-1 Cargo library backend. Frozen dependency closure and
+  stdin-authenticated, pre-thread-confined verification are target-owned, never borrowed from Dart.
 - `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
   containment, crash-safe publication, inspection lock, target dispatch, command grammar, and exit
   codes.
@@ -83,24 +87,26 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 | `examples/integrations/android-counter/` | Kotlin/JVM Cott module plus standard Gradle-owned Android consumer |
 | `examples/kotlin/` | Nineteen Kotlin grammar, composition, feature and modular lessons/fixtures plus the `real/posting` Kotlin port |
 | `examples/integrations/flutter-counter/` | Dart Cott package plus standard Flutter Android/web consumer |
+| `examples/integrations/rust-counter/` | Rust Cott library plus standard Cargo binary consumer |
 | `examples/real/` | Six independent Python real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
 | `examples/grammar/checked-add/python/cott_bindings/**/*.py` | The sole selected Python binding source (binding-syntax lesson) |
 | `examples/**/python/_cott_impl/**/*.py` | Durable accepted Python agent implementation sources |
 | `examples/**/kotlin/cott_impl/**/*.kt` | Durable accepted Kotlin agent implementation sources |
 | `examples/**/dart/cott_impl/**/*.dart` | Durable accepted Dart agent implementation sources |
+| `examples/**/rust/cott_impl/**/*.rs` | Durable accepted Rust agent implementation sources |
 | `architecture.md` | Normative implemented v1.0 contract |
 
-The authored inventory contains 26 Python projects, 21 Kotlin projects and one Dart/Flutter project. The Python set is
+The authored inventory contains 26 Python projects, 21 Kotlin projects, one Dart/Flutter project, and one Rust/Cargo project. The Python set is
 grammar 6, simple 3, complex curriculum 1, `process-bar` fixture 1, features 7, modular 1, FastAPI
 integration 1, and real-world 6 (`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`,
 `frogmouth`). `examples/kotlin/` contains 19 Kotlin lessons/fixtures plus `real/posting`, the Kotlin
 generation of the same `real/posting` contract; `integrations/android-counter`
 adds the Kotlin/JVM module and Android consumer. `integrations/flutter-counter` is the Dart module
-and standard Flutter consumer. Every project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
+and standard Flutter consumer. `integrations/rust-counter` is the Rust module and standard Cargo binary consumer. Every project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
 target and generation record. Committed `generated/` and agent-owned implementation content are
 compiler results. Never treat `.venv/`, `.cott/`, `.gradle/`, `.dart_tool/`, `build/`, Flutter's
-`cott_module/` deployment, or `__pycache__/` as managed project content.
+`cott_module/` deployment, Rust `target/`/Cargo caches, or `__pycache__/` as managed project content.
 
 ## Development Commands
 
@@ -115,11 +121,11 @@ cargo run -- emit ir --project examples/grammar/checked-add
 The implemented command forms are:
 
 ```text
-cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]
+cott init <path> [--target python|kotlin|dart|rust] [--name <name>] [--no-sync] [--format json]
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
-cott emit ir|python|kotlin|dart [--project <dir>] [--format json]
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
+cott emit ir|python|kotlin|dart|rust [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott requirements [--project <dir>] [--format json]
@@ -132,7 +138,7 @@ cott lsp
 input/managed bytes into `<project>/dist/<name>-<version>/` or `--output` (relative to the calling
 working directory). Existing output is never overwritten unless `--replace` is given. Replacement
 requires a real no-follow prior Cott deployment with this target's closed record and the same
-project identity; Python additionally hash-verifies the deployed runtime identity. A parseable
+project identity; Python and Rust additionally hash-verifies the deployed runtime identity. A parseable
 `generation.json` alone is insufficient. Swap complete sibling trees with real `RENAME_EXCHANGE`,
 not two `RENAME_NOREPLACE` moves with an output-missing gap. Durable journal/marker ownership
 proof and no-follow locking govern recovery. Never roll back to a partially deleted old tree
@@ -152,6 +158,9 @@ compiler-owned pubspec, unchanged generation/dependency records and the authenti
 vendor closure, not native kernel or runner output. All targets exclude contracts, the original
 generated layout, tests, authoring implementation copies, and caches. Deploy never generates,
 re-verifies, runs an agent, or infers application resources.
+Rust deployment preserves `src/`, compiler-owned exact-pinned Cargo.toml/Cargo.lock, unchanged
+records and `deps/` path packages (including solver-only declarations). It excludes registry vendor
+and source-replacement config so consumers share registry tokio rather than duplicate path copies.
 
 `emit` and `generate` publish through the project transaction and always leave
 `.snapshots[.current].verified = false` in the record; only explicit `verify` certifies a snapshot. Target emit never invokes
@@ -160,14 +169,14 @@ scope and `generation.json`; non-IR managed hashes stay trusted recorded values 
 unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep
 their old bytes across repeated emit and checkpoint until regeneration. Manifest-owned bindings
 are excluded from intent regeneration. Missing intent metadata fallback applies only to valid
-current-schema Python records; Kotlin and Dart have separate generation schema 2 contracts. Missing manifest/rule evidence and source/path/hash
+current-schema Python records; Kotlin and Dart have separate generation schema 2 contracts; Rust uses generation schema 1. Missing manifest/rule evidence and source/path/hash
 drift invalidate conservatively. `generate` invokes the selected agent only for eligible unresolved
 callables and freezes all advertised initial prompts before accepting any wave candidate.
 
 `cott prompt` renders that same initial snapshot without a provider or target compiler/checker.
 JSON is `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`; `prompt_hash` covers
 only the initial bytes. The requested write path is `implementation.py` for Python,
-`implementation.kt` for Kotlin and `implementation.dart` for Dart. Context is the scoped transitive
+`implementation.kt` for Kotlin, `implementation.dart` for Dart and `implementation.rs` for Rust. Context is the scoped transitive
 declaration closure, including explicit references, `constant_ref`, applied rules/bases, relevant scenarios, and scoped
 `cott-domain` directives. Prompt sections stay separated: authority, current intent, formal
 declarations, project rules, references, target output rules, and feedback. Formal declarations
@@ -184,7 +193,10 @@ doc. The `context` and intent fingerprint contracts remain unchanged.
 work, and publishes certification only after real target verification. Kotlin verify uses
 kotlinc `>=2.2.10`, JDK `>=17`, JVM target 17, compiler-distribution stdlib and coroutine `1.8.0`,
 then compiles `library/cott-module.jar` and executes the bounded runner in the existing sandbox.
-For Kotlin and Dart, `.snapshots[.current].verified = true` requires `current == last_verified`. Emit, generate, and
+Rust verify uses same-release cargo/rustc `>=1.85.0,<2.0.0`, offline locked Cargo, the frozen vendor/path
+closure, and a sandboxed public-facade runner; `rust/verification/cott-module.rlib` is nonportable
+evidence and never deployed.
+For Kotlin, Dart, and Rust, `.snapshots[.current].verified = true` requires `current == last_verified`. Emit, generate, and
 actual format edits retain history but invalidate current certification. An already deployed
 snapshot keeps its old contract until a later deployment.
 
@@ -379,6 +391,45 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
   scaffold uses SDK 36, AGP 9.1.0, Kotlin 2.4.0 and Gradle 9.3.1 with a distribution SHA256 pin.
   Its `tool/setup.dart` refuses existing deployment output and invokes real emit/verify/deploy.
 
+### Rust Implementations and Cargo Consumer Boundary
+
+- `[target.rust]` owns source/generated/runtime_validation, default `cargo`/`rustc`, optional paired
+  `cargo_manifest`/`lockfile`, implementation selectors and external Rust paths. Project names are
+  non-keyword lowercase snake_case crate identifiers; exactly one target is selected.
+- A manifest selector is `relative/file.rs:ident`. Accepted agents write `rust/cott_impl/<module>/<function>.rs`
+  (concrete owner path for methods), exactly matching `cott prompt`'s `pub(crate) fn`/`async fn` signature.
+  Raw-capable keyword functions use `r#keyword`; raw self/Self/super/crate/_ and non-keywords are invalid.
+  Reserved self/Self/super/crate and their underscore-only suffix chains use the ABI's injective `_` escape;
+  canonical Cott symbols and source path segments are unchanged.
+  Tree-sitter audit rejects unsafe/extern, include/env macros, module/path/inner-attribute injection,
+  extra public items, private implementations and forbidden compiler-control/process/env/stdio access.
+  Only audited vec!/format!/matches! macros are allowed: no imported macro aliases, nested macros or
+  qualified token-tree paths; attributes are docs only. Observe fields through generated get_<field>();
+  receiver set_/update_ operations must match declared modifies/transitions. Keep the three direct
+  provider adapters, frozen initial prompt hashes and scoped generation waves unchanged.
+  Reject scoped/nested imports, authored type/impl/static items and namespace/type-generic shadowing.
+  TaskScope.spawn requires a proven typed/constructed lexical receiver; no shadowed locals/closures or
+  direct std/tokio executor APIs. Audit field identifiers too; clock needs clock effect, pure Duration does not.
+  Preserve receiver identity: reject *receiver/raw field assignments, mem replace/take/swap on
+  receivers/reborrows/field aliases, Option field take/replace, helper mutable escapes and mem
+  function-pointer aliases. Use guarded set_/update_; ABI identity checks remain defense in depth.
+- Public callers use `<crate>::modules::<module path>` and public `<crate>::cott_runtime` values only.
+  `cott_impl` remains private; authored source hashes differ from compiler-embedded managed hashes.
+- Contract violations are typed `cott_runtime::ContractViolation` panics; declared errors are native
+  `Result` values. Keep `panic="unwind"` for `catch_unwind`; do not treat an arbitrary panic as a declared error.
+- Frozen Cargo sources are crates.io registry archives or project-local paths. Locked `.crate` SHA-256,
+  bounded safe extraction and compiler-produced file checksums authenticate vendor material; verify
+  never downloads. Metadata keys are `schema_version,cargo_manifest_hash,lockfile_hash,packages`.
+- Managed `rust/` contains Cargo.toml/Cargo.lock/dependencies.json, `.cargo/config.toml`, `vendor/`,
+  `deps/` and generated `src/`. Only production package names authorize implementation imports;
+  build/dev solver metadata is not runtime authority. Build scripts/proc-macros run only in verification sandbox.
+- Deploy portable `src/`, Cargo metadata/records and path `deps/`, not registry vendor/.cargo, runner/rlib,
+  contracts, Cott tests or caches. `--replace` requires matching certified record/Cargo identity and bytes.
+  Cargo owns the application dependency graph, linking, profiles and execution, not Cott.
+- `examples/integrations/rust-counter/tool/setup.sh` requires absolute in-tree `COTT_BIN`, refuses
+  existing deployment output and invokes real emit/verify/deploy. Generate its implementations with
+  Cott's selected agent; neither authored agent bytes nor generated output are hand-written.
+
 ## Important Files
 
 - `Cargo.toml` — Rust package metadata; `src/main.rs` is the binary bridge.
@@ -389,6 +440,8 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - `src/python_emit.rs` / `src/python_runtime.rs` / `src/python_verify.rs` — unchanged Python ABI.
 - `src/kotlin/` — Kotlin ABI, binding, emission, provenance, prompt/generation, verification,
   runner, publication, diff, init, and deployment.
+- `src/dart/` and `src/rust/` — independent target ABI, frozen dependencies, binding, provenance,
+  orchestration, verification/runner and generation/prompt modules.
 - `src/agent.rs` / `src/sandbox.rs` — pinned provider adapters and containment.
 - `src/transaction.rs` — journaled mutation and inspection lock.
 
@@ -401,8 +454,13 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
   exact compiler-distribution `kotlinx-coroutines-core-jvm` `1.8.0`.
 - Dart native regressions use `COTT_DART` as an absolute SDK executable path. The portable generated
   Dart runtime is standard-library-only; pinned crypto sources are compiler-only runner support.
+- Rust target tools report the same release `>=1.85.0,<2.0.0`, edition 2024. Native regressions use
+  absolute `COTT_CARGO`; rustc is adjacent or selected with `COTT_RUSTC`. Runtime tokio is exact
+  `1.53.1` with `default-features=false`, features `rt,rt-multi-thread,sync,time`, plus pin-project-lite `0.2.17`.
+- On constrained machines export `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`.
+  Clean only your own worktree artifacts and your own temporary directories, never unowned caches.
 - Python generated runtime code is standard-library-only. Kotlin generated runtime code additionally
-  requires the recorded coroutine JAR. Project dependencies remain target-manifest inputs.
+  requires the recorded coroutine JAR. Project dependencies remain target-manifest inputs. Rust uses pinned tokio and the frozen Cargo closure.
 
 ## Testing & QA
 
@@ -415,6 +473,9 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Dart native tests are explicitly COTT_DART-gated; execute ignored runtime, native consumer,
   verifier, scenario and dependency tests with the real SDK. Flutter browser/APK verification is
   distinct from Cott module certification.
-- Do not copy or assert transient `.venv/`, `.cott/`, `.gradle/`, `.dart_tool/`, `build/`, or `__pycache__/`
+- Rust native tests are ignored/COTT_CARGO-gated. After integration, exercise them with the real
+  toolchain; separately generate, emit, verify, deploy and run `examples/integrations/rust-counter/app`.
+  Consumer execution is not a substitute for module verification; never hand-author accepted agent sources.
+- Do not copy or assert transient `.venv/`, `.cott/`, `.gradle/`, `.dart_tool/`, `build/`, Rust `target/`/Cargo caches, or `__pycache__/`
   content. Managed example output changes only when the requested work includes the compiler-owned
   result.

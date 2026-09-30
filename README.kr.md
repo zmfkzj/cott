@@ -2,7 +2,7 @@
 
 `cott`는 typed intent와 prompt를 작성하는 language-like 컴파일러다. 실행 본문이 없는 `.cott`
 module은 공개 type, function, contract, effect, scenario, error를 선언한다. 그 선언이 작성된
-intent이며, Python·Kotlin/JVM·Dart는 검증된 projection이지 두 번째 계약 원본이 아니다. runtime
+intent이며, Python·Kotlin/JVM·Dart·Rust는 검증된 projection이지 두 번째 계약 원본이 아니다. runtime
 code는 generated public facade를 사용하며 authored `.cott`를 live로 읽지 않는다.
 
 Cott는 그 선언을 고정하고, scoped generation prompt를 렌더하며, intent fingerprint를 기록하고,
@@ -10,11 +10,12 @@ Cott는 그 선언을 고정하고, scoped generation prompt를 렌더하며, in
 않으며, 통과한 검사는 구현 전반의 정확성 증명이 아니다. 제품은 typed authoring과 evidence이며
 속도 주장이 아니다.
 
-`architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. Package `1.0.0`, Canonical IR schema `8`,
-contract-test strategy schema `5`, diagnostics schema `1`은 유지한다.
+`architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. Package `1.0.0`, Canonical IR schema `9`,
+contract-test strategy schema `6`, diagnostics schema `1`은 유지한다.
 Python은 generation schema `8`, domain `cott.generation.v8`, runtime ABI `7`을 사용한다.
 Kotlin은 generation schema `2`, domain `cott.kotlin.generation.v2`, runtime ABI `1`을 사용한다.
 Dart는 generation schema `2`, domain `cott.dart.generation.v2`, runtime ABI `2`를 사용한다.
+Rust는 generation schema `1`, domain `cott.rust.generation.v1`, runtime ABI `1`을 사용한다.
 각 target의 닫힌 identity는 독립적이며 reader와 runtime은 다른 backend나 이전 record를 거부한다.
 생성된 Dart package를 Flutter가 직접 소비하며 Kotlin bridge는 필요 없다.
 
@@ -279,6 +280,56 @@ Flutter `3.47.4`와 bundled Dart `3.13.3`의 analyzer, release web build, debug 
 통과했다. Browser에서 `0 → 1 → 0` 및 `0..100` 양쪽 경계를 확인했고 Cott module의 여섯 clause
 모두 observed로 기록되었다. APK build 성공을 device 실행 증거로 간주하지 않는다.
 
+### Rust library와 Cargo consumer workflow
+
+Rust는 같은 release의 cargo/rustc `>=1.85.0,<2.0.0`, edition `2024`, non-keyword lowercase
+snake_case crate name을 사용한다. `[target.rust]`는 `source = "rust"`,
+`generated = "generated/rust"`, default `cargo = "cargo"`/`rustc = "rustc"`,
+`runtime_validation = "boundary"`를 선택한다. Optional `cargo_manifest`/`lockfile`은 함께 지정하며
+crates.io registry와 project-local path source만 freeze한다. Verify의 git/patch override나
+online fallback은 없다.
+
+Rust prompt/generation의 요청 file은 `implementation.rs`이며 rendered canonical `pub(crate) fn`
+또는 `pub(crate) async fn`과 private helper만 작성한다. Manifest selector는
+`source-relative.rs:function`, agent path는 `rust/cott_impl/<module>/<method-owner>/<function>.rs`다.
+Tree-sitter는 감사된 std/core/alloc, frozen production crate 및 scoped public facade/runtime만
+허용하고 unsafe/extern, module/compiler control과 compilation attribute를 거부한다. Attribute는
+doc만, macro는 감사된 `vec!`/`format!`/`matches!`만 허용하며 imported alias, nesting,
+qualified token-tree path는 없다. Read-only `get_<field>()`와 선언된 modifies/transition에 맞는
+receiver `set_`/`update_`를 사용한다. 세 adapter, generation wave와 frozen initial prompt hash는
+기존 공통 계약을 유지한다.
+
+`examples/integrations/rust-counter`는 Flutter counter와 같은 increment/decrement `0..100`
+계약이다. Setup 전에 Cott로 accepted implementation을 생성하고 `rust/cott_impl` 또는 generated
+output을 사람이 작성하지 않는다.
+
+```bash
+project=examples/integrations/rust-counter
+COTT_BIN="$PWD/target/debug/cott"
+"$COTT_BIN" generate --agent omp --target rust --project "$project"
+COTT_BIN="$COTT_BIN" "$project/tool/setup.sh"
+cargo run --manifest-path "$project/app/Cargo.toml"
+```
+
+Setup은 absolute in-tree `COTT_BIN`을 요구하고 기존 `dist/rust_counter-0.1.0`을 거부한 뒤
+real `emit rust` → `verify` → `deploy`를 실행한다. Standard binary는 callable facade로
+`rust_counter::modules::example::counter::{increment,decrement}`만 사용하며 `0 -> 1 -> 0`,
+valid upper endpoint 및 `increment(100)`/`decrement(0)`의 typed `ContractViolation` panic을
+관찰하도록 작성했다. App은 `panic="unwind"`를 유지한다. `catch_unwind`가 expected panic을 잡아도 Rust의
+기본 panic hook은 진단을 출력할 수 있다. Declared Cott error는 panic이 아니라 `Result`다.
+
+Compiler-owned Cargo metadata는 tokio `=1.53.1` (default feature 없이
+`rt,rt-multi-thread,sync,time`)와 pin-project-lite `0.2.17`을 고정한다. Locked original `.crate`
+archive는 `$CARGO_HOME/registry/cache/index.crates.io-*/`에 미리 준비한다. Compressed SHA-256,
+bounded safe extraction과 frozen file checksum을 검증하고 기존 sandbox의 offline locked Cargo를
+사용한다. Landlock은 runtime thread 전에 적용하며 세부 규범 경계는 architecture §16C다.
+
+배포는 portable `src/`, Cargo.toml/Cargo.lock, 원본 generation/dependency record와 project-local
+`deps/` (solver-only path declaration 포함)다. Registry vendor/source-replacement config, 검증용
+rlib/runner, 계약, Cott test와 cache는 제외한다. Consumer는 registry tokio를 공유하며 vendored
+path copy를 이중 연결하지 않는다. Application build/link, dependency resolution, profile와 실행은
+Cargo가 소유하고 module 인증과 혼동하지 않는다.
+
 ### Prompt 검사와 snapshot lifecycle
 
 프롬프트는 해당 함수의 프로젝트와 fully qualified name으로 확인한다. 예를 들면:
@@ -293,7 +344,7 @@ prompt를 검사한다. provider 또는 target compiler/checker를 호출하지 
 recover하지 않는다. human mode는 prompt bytes를 쓰고 JSON은
 `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`다. `prompt`는 그 초기
 bytes와 같고 `prompt_hash`는 초기 prompt만 hash한다. retry는 실제 validation feedback을 뒤에
-붙인다. 요청 write path는 Python의 `implementation.py`, Kotlin의 `implementation.kt`, Dart의 `implementation.dart`다.
+붙인다. 요청 write path는 Python의 `implementation.py`, Kotlin의 `implementation.kt`, Dart의 `implementation.dart`, Rust의 `implementation.rs`다.
 inspection은 project lock과 lock metadata를 허용하며 pending journal은 recovery 없이 거부한다.
 `context`는 scoped transitive declaration 집합이다. explicit identifier 참조, `constant_ref`,
 `cott.applied_rule`과 그 base, 관련 incoming scenario, 전역 rule prose와 선택 callable의
@@ -423,11 +474,12 @@ assembly, signing, installation과 device lifecycle을 소유한다. Cott는 And
 
 ## 축소된 예제 index
 
-작성된 inventory는 Python project 26개, Kotlin project 20개, Dart/Flutter project 1개다.
+작성된 inventory는 Python project 26개, Kotlin project 21개, Dart/Flutter project 1개, Rust/Cargo project 1개다.
 Python set은 grammar 6개, simple 3개, complex curriculum 1개, 별도 `process-bar` fixture,
 feature 7개, modular 1개, FastAPI integration 1개, real-world 6개다. `examples/kotlin/`의
-19개 Kotlin lesson/fixture와 `integrations/android-counter`가 Kotlin set을 구성하며,
+19개 Kotlin lesson/fixture, `kotlin/real/posting` port와 `integrations/android-counter`가 Kotlin set을 구성하며,
 `integrations/flutter-counter`가 Dart module과 standard Flutter consumer다.
+`integrations/rust-counter`는 Rust library와 standard Cargo binary consumer이며 accepted source와 managed output은 실제 Cott generation/verification으로 만든다.
 
 ### Grammar — 6
 

@@ -972,6 +972,298 @@ fn is_dart_cache_name(name: &OsStr) -> bool {
     )
 }
 
+/// Trusted filesystem paths for a Rust target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RustPaths {
+    pub root: PathBuf,
+    pub manifest: PathBuf,
+    pub source_dir: PathBuf,
+    pub rust_source_dir: PathBuf,
+    pub generated_dir: PathBuf,
+    pub artifact_root: PathBuf,
+    pub cargo_manifest: Option<PathBuf>,
+    pub lockfile: Option<PathBuf>,
+}
+
+/// A UTF-8 Rust source safely discovered beneath a project-owned tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RustSourceFile {
+    pub disk_path: PathBuf,
+    pub source: String,
+}
+
+/// Loads a Rust manifest, derives its trusted filesystem paths, and returns
+/// the exact UTF-8 manifest text consumed by the parser.
+pub fn load_rust_config_with_paths(
+    root: &Path,
+) -> Result<(crate::manifest::RustProjectConfig, RustPaths, String), ProjectError> {
+    let (root, manifest, bytes, config) = read_rust_config(root)?;
+    let paths = derive_rust_paths(&root, &manifest, &config)?;
+    Ok((config, paths, bytes))
+}
+
+fn read_rust_config(
+    root: &Path,
+) -> Result<(PathBuf, PathBuf, String, crate::manifest::RustProjectConfig), ProjectError> {
+    let (root, manifest, bytes) = read_manifest(root)?;
+    let config = crate::manifest::RustProjectConfig::parse(&manifest, &bytes).map_err(|error| {
+        ProjectError::InvalidManifest {
+            path: manifest.clone(),
+            message: error.message,
+        }
+    })?;
+    Ok((root, manifest, bytes, config))
+}
+
+fn derive_rust_paths(
+    root: &Path,
+    manifest: &Path,
+    config: &crate::manifest::RustProjectConfig,
+) -> Result<RustPaths, ProjectError> {
+    let source = configured_path("project.source", &config.project.source)?;
+    let rust_source = configured_path("target.rust.source", &config.rust.source)?;
+    let generated = configured_path("target.rust.generated", &config.rust.generated)?;
+    let artifact_root = generated
+        .parent()
+        .ok_or(ProjectError::InvalidProject {
+            message: "Rust generated path has no artifact root",
+        })?
+        .to_path_buf();
+    let cargo_manifest = config
+        .rust
+        .cargo_manifest
+        .as_deref()
+        .map(|value| {
+            configured_path("target.rust.cargo_manifest", value).map(|path| root.join(path))
+        })
+        .transpose()?;
+    let lockfile = config
+        .rust
+        .lockfile
+        .as_deref()
+        .map(|value| configured_path("target.rust.lockfile", value).map(|path| root.join(path)))
+        .transpose()?;
+
+    let source_dir = root.join(source);
+    let rust_source_dir = root.join(rust_source);
+    let generated_dir = root.join(generated);
+    let artifact_root = root.join(artifact_root);
+
+    ensure_required_directory(&source_dir, "source path is not a directory")?;
+    ensure_required_directory(&rust_source_dir, "Rust source path is not a directory")?;
+    ensure_directory_if_present(&artifact_root, "artifact root is not a directory")?;
+    ensure_directory_if_present(&generated_dir, "generated directory")?;
+    if let Some(path) = &cargo_manifest {
+        ensure_regular_input(
+            path,
+            "Rust cargo_manifest must be a regular single-link file",
+        )?;
+    }
+    if let Some(path) = &lockfile {
+        ensure_regular_input(path, "Rust lockfile must be a regular single-link file")?;
+    }
+    if let Some(rules) = &config.generator.rules {
+        ensure_regular_input(&root.join(rules), "generator rules")?;
+    }
+
+    Ok(RustPaths {
+        root: root.to_path_buf(),
+        manifest: manifest.to_path_buf(),
+        source_dir,
+        rust_source_dir,
+        generated_dir,
+        artifact_root,
+        cargo_manifest,
+        lockfile,
+    })
+}
+
+/// Reads all regular `.cott` files for a Rust target through the strict source
+/// trust boundary used by Rust generation.
+pub fn discover_rust_contract_sources(
+    paths: &RustPaths,
+) -> Result<Vec<crate::compiler::SourceFile>, ProjectError> {
+    if !paths.root.is_absolute() || !paths.source_dir.is_absolute() {
+        return Err(ProjectError::InvalidProject {
+            message: "project paths must be absolute",
+        });
+    }
+    ensure_no_symlinks(&paths.root)?;
+    ensure_no_symlinks(&paths.source_dir)?;
+    let metadata = fs::symlink_metadata(&paths.source_dir).map_err(|source| ProjectError::Io {
+        operation: "stat Rust contract source directory",
+        path: paths.source_dir.clone(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_rust_contract_source_paths(&paths.source_dir, &paths.source_dir, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.is_empty() {
+        return Err(ProjectError::NoSources {
+            path: paths.source_dir.clone(),
+        });
+    }
+    files
+        .into_iter()
+        .map(|(relative, disk_path)| {
+            let text = read_trusted_utf8(
+                &disk_path,
+                "open Rust contract source",
+                "Rust contract source files must be regular single-link files",
+                "Rust contract source is not UTF-8",
+                "Rust contract source changed while being read",
+            )?;
+            Ok(crate::compiler::SourceFile::new(relative, text))
+        })
+        .collect()
+}
+
+fn collect_rust_contract_source_paths(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Rust contract source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Rust contract source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if is_rust_cache_name(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Rust contract source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_rust_contract_source_paths(root, &path, files)?;
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("cott")) {
+            continue;
+        }
+        if !regular_single_link(&metadata) {
+            return Err(ProjectError::InvalidProject {
+                message: "Rust contract source files must be regular single-link files",
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ProjectError::InvalidProject {
+                message: "Rust contract source path is outside scanned tree",
+            })?
+            .to_path_buf();
+        files.push((relative, path));
+    }
+    Ok(())
+}
+
+/// Reads every Rust source in a project-owned tree after rejecting unsafe
+/// links and files. Tool and build caches are outside the authored tree.
+pub fn discover_rust_sources(root: &Path) -> Result<Vec<RustSourceFile>, ProjectError> {
+    ensure_no_symlinks(root)?;
+    let metadata = fs::symlink_metadata(root).map_err(|source| ProjectError::Io {
+        operation: "stat Rust source directory",
+        path: root.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "Rust source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_rust_sources(root, &mut files)?;
+    files.sort_by(|left, right| left.disk_path.cmp(&right.disk_path));
+    Ok(files)
+}
+
+fn collect_rust_sources(
+    directory: &Path,
+    files: &mut Vec<RustSourceFile>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Rust source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Rust source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if is_rust_cache_name(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Rust source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_rust_sources(&path, files)?;
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("rs")) {
+            continue;
+        }
+        if !regular_single_link(&metadata) {
+            return Err(ProjectError::InvalidProject {
+                message: "Rust source files must be regular single-link files",
+            });
+        }
+        let source = read_trusted_utf8(
+            &path,
+            "open Rust source",
+            "Rust source files must be regular single-link files",
+            "Rust source is not UTF-8",
+            "Rust source changed while being read",
+        )?;
+        files.push(RustSourceFile {
+            disk_path: path,
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn is_rust_cache_name(name: &OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some("target" | ".cargo" | ".cott" | "build" | ".git" | ".cache" | "__pycache__")
+    )
+}
 fn regular_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {

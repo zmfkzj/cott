@@ -40,6 +40,7 @@ pub enum TargetLanguage {
     Python,
     Kotlin,
     Dart,
+    Rust,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +61,14 @@ pub struct DartProjectConfig {
     pub verification: VerificationConfig,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RustProjectConfig {
+    pub project: ProjectMetadata,
+    pub rust: RustTarget,
+    pub effects: BTreeMap<String, bool>,
+    pub generator: GeneratorConfig,
+    pub verification: VerificationConfig,
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationConfig {
@@ -248,6 +257,8 @@ struct Target {
     kotlin: Option<KotlinTarget>,
     #[serde(default)]
     dart: Option<DartTarget>,
+    #[serde(default)]
+    rust: Option<RustTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -307,6 +318,32 @@ pub struct DartTarget {
     pub external_types: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RustTarget {
+    pub source: String,
+    pub generated: String,
+    #[serde(default = "default_cargo")]
+    pub cargo: String,
+    #[serde(default = "default_rustc")]
+    pub rustc: String,
+    pub runtime_validation: RuntimeValidation,
+    #[serde(default)]
+    pub cargo_manifest: Option<String>,
+    #[serde(default)]
+    pub lockfile: Option<String>,
+    #[serde(default)]
+    pub implementations: BTreeMap<String, String>,
+    #[serde(default)]
+    pub external_types: BTreeMap<String, String>,
+}
+
+fn default_cargo() -> String {
+    "cargo".to_owned()
+}
+fn default_rustc() -> String {
+    "rustc".to_owned()
+}
 fn default_dart_sdk() -> String {
     "dart".to_owned()
 }
@@ -361,13 +398,14 @@ fn parse_raw(path: &Path, bytes: &str) -> Result<RawManifest, ManifestError> {
 }
 
 fn selected_target(path: &Path, target: &Target) -> Result<TargetLanguage, ManifestError> {
-    match (&target.python, &target.kotlin, &target.dart) {
-        (Some(_), None, None) => Ok(TargetLanguage::Python),
-        (None, Some(_), None) => Ok(TargetLanguage::Kotlin),
-        (None, None, Some(_)) => Ok(TargetLanguage::Dart),
+    match (&target.python, &target.kotlin, &target.dart, &target.rust) {
+        (Some(_), None, None, None) => Ok(TargetLanguage::Python),
+        (None, Some(_), None, None) => Ok(TargetLanguage::Kotlin),
+        (None, None, Some(_), None) => Ok(TargetLanguage::Dart),
+        (None, None, None, Some(_)) => Ok(TargetLanguage::Rust),
         _ => Err(ManifestError::new(
             path,
-            "target must define exactly one of target.python, target.kotlin, or target.dart",
+            "target must define exactly one of target.python, target.kotlin, target.dart, or target.rust",
         )),
     }
 }
@@ -731,6 +769,131 @@ impl DartProjectConfig {
     }
 }
 
+impl RustProjectConfig {
+    pub fn parse(path: &Path, bytes: &str) -> Result<Self, ManifestError> {
+        let raw = parse_raw(path, bytes)?;
+        if selected_target(path, &raw.target)? != TargetLanguage::Rust {
+            return Err(ManifestError::new(
+                path,
+                "RustProjectConfig only supports target.rust manifests",
+            ));
+        }
+        let config = Self {
+            project: raw.project,
+            rust: raw
+                .target
+                .rust
+                .expect("selected Rust target must be present"),
+            effects: raw.effects,
+            generator: raw.generator,
+            verification: raw.verification,
+        };
+        validate_common(
+            path,
+            &config.project,
+            &config.effects,
+            &config.generator,
+            &config.verification,
+        )?;
+        config.validate_rust(path)?;
+        Ok(config)
+    }
+
+    fn validate_rust(&self, path: &Path) -> Result<(), ManifestError> {
+        if !valid_rust_project_name(&self.project.name) {
+            return Err(ManifestError::new(
+                path,
+                "project.name must be a lowercase snake_case Rust package identifier",
+            ));
+        }
+        for (field, value) in [
+            ("project.source", &self.project.source),
+            ("target.rust.source", &self.rust.source),
+            ("target.rust.generated", &self.rust.generated),
+        ] {
+            rust_normalized_relative_path(value)
+                .map_err(|message| ManifestError::new(path, format!("{field} {message}")))?;
+        }
+        if !valid_rust_tool_spec(&self.rust.cargo) || !valid_rust_tool_spec(&self.rust.rustc) {
+            return Err(ManifestError::new(
+                path,
+                "target.rust.cargo and target.rust.rustc must be a bare executable or normalized path",
+            ));
+        }
+        if self.rust.cargo_manifest.is_some() != self.rust.lockfile.is_some() {
+            return Err(ManifestError::new(
+                path,
+                "target.rust.cargo_manifest and target.rust.lockfile must be configured together",
+            ));
+        }
+
+        let generated = Path::new(&self.rust.generated);
+        let Some(artifact_root) = generated
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Err(ManifestError::new(
+                path,
+                "target.rust.generated must be `<artifact-root>/rust`",
+            ));
+        };
+        if generated.file_name().and_then(|name| name.to_str()) != Some("rust") {
+            return Err(ManifestError::new(
+                path,
+                "target.rust.generated must be `<artifact-root>/rust`",
+            ));
+        }
+
+        let mut protected_paths = vec![
+            PathBuf::from(&self.project.source),
+            PathBuf::from(&self.rust.source),
+            artifact_root.to_path_buf(),
+            PathBuf::from("tests/generated"),
+            PathBuf::from(".cott"),
+            PathBuf::from("target"),
+            PathBuf::from(".cargo"),
+            PathBuf::from("build"),
+        ];
+        if let Some(rules) = &self.generator.rules {
+            let rules_path = rust_normalized_relative_path(rules).map_err(|message| {
+                ManifestError::new(path, format!("generator.rules {message}"))
+            })?;
+            protected_paths.push(rules_path);
+        }
+        for (field, configured) in [
+            (
+                "target.rust.cargo_manifest",
+                self.rust.cargo_manifest.as_deref(),
+            ),
+            ("target.rust.lockfile", self.rust.lockfile.as_deref()),
+        ] {
+            if let Some(value) = configured {
+                let metadata_path = rust_normalized_relative_path(value)
+                    .map_err(|message| ManifestError::new(path, format!("{field} {message}")))?;
+                protected_paths.push(metadata_path);
+            }
+        }
+        validate_path_overlaps(path, &protected_paths)?;
+
+        for (symbol, target) in &self.rust.implementations {
+            if !valid_qname(symbol) || !valid_rust_implementation_target(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Rust implementation binding `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        for (symbol, target) in &self.rust.external_types {
+            if !valid_external_type_symbol(symbol) || !valid_rust_external_type_projection(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Rust external type projection `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 fn validate_common(
     path: &Path,
     project: &ProjectMetadata,
@@ -1191,6 +1354,124 @@ fn is_dart_keyword(value: &str) -> bool {
             | "with"
             | "yield"
     )
+}
+
+fn rust_normalized_relative_path(value: &str) -> Result<PathBuf, &'static str> {
+    if value
+        .split('/')
+        .any(|component| component.is_empty() || component == ".")
+    {
+        return Err("must be a normalized relative path");
+    }
+    normalized_relative_path(value)
+}
+
+fn valid_rust_tool_spec(value: &str) -> bool {
+    if !valid_tool_spec(value) {
+        return false;
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+    } else {
+        rust_normalized_relative_path(value).is_ok()
+    }
+}
+
+pub(crate) fn valid_rust_project_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes[0].is_ascii_lowercase()
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && !value.contains("__")
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+        && !is_rust_keyword(value)
+}
+
+pub(crate) fn valid_rust_identifier(value: &str) -> bool {
+    value != "_" && !is_rust_keyword(value) && valid_identifier(value)
+}
+
+pub(crate) fn valid_rust_function_identifier(value: &str) -> bool {
+    if let Some(keyword) = value.strip_prefix("r#") {
+        is_rust_keyword(keyword) && !matches!(keyword, "self" | "Self" | "super" | "crate")
+    } else {
+        valid_rust_identifier(value)
+    }
+}
+fn is_rust_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "gen"
+            | "macro"
+            | "override"
+            | "priv"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+            | "try"
+    )
+}
+fn is_rust_cache_name(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some("target" | ".cargo" | ".cott" | "build" | ".git" | ".cache" | "__pycache__")
+    )
+}
+fn valid_rust_implementation_target(value: &str) -> bool {
+    value.matches(':').count() == 1 && value.split_once(':').is_some_and(|(source, function)| {
+        rust_normalized_relative_path(source).is_ok_and(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("rs") && !path.components().any(|component| matches!(component, Component::Normal(name) if is_rust_cache_name(name)))
+        }) && valid_rust_function_identifier(function) && !function.starts_with("cott_") && !function.starts_with("__cott")
+    })
+}
+fn valid_rust_external_type_projection(value: &str) -> bool {
+    value.contains("::") && value.split("::").all(valid_rust_identifier)
 }
 
 pub(crate) fn valid_kotlin_fqn(value: &str) -> bool {

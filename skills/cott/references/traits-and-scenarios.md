@@ -200,7 +200,7 @@ Declare the corresponding function effects exactly as described in [contracts-an
 
 - Assert through public fields or small public observation facades.
 - Cover ordering, cancellation, state protection, and injected failure only when they are contractual behavior.
-- Do not inspect Python `_cott_impl`/`cott_bindings`, Kotlin `cott_impl`/`cott_bindings`, Dart private parts, or runtime-private fixture state.
+- Do not inspect Python `_cott_impl`/`cott_bindings`, Kotlin `cott_impl`/`cott_bindings`, Dart private parts, Rust crate-private `cott_impl`, or runtime-private fixture state.
 - Do not add a scenario that merely repeats an `ensures` clause without exercising a distinct case.
 - An unavailable isolated fixture remains `unobserved`; never weaken containment to force a pass.
 

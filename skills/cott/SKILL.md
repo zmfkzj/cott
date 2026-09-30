@@ -1,19 +1,19 @@
 ---
 name: cott
-description: Use the Cott 1.0 contract-first DSL compiler to initialize Python, Kotlin, or Dart projects; author .cott contracts; check and format sources; inspect prompts; emit deterministic IR and target facades; generate missing implementations with Codex, Claude, or OMP; verify and deploy releases; inspect semantic diffs; and run the editor language server. Use when creating, changing, generating, validating, deploying, or consuming a Cott project.
-compatibility: Requires cott 1.0.0. Python uses uv >=0.12.3, CPython >=3.14.6,<3.15, and BasedPyright >=1.39.9. Kotlin uses kotlinc >=2.2.10, JDK >=17, JVM 17, and coroutine 1.8.0. Dart uses SDK >=3.13.3,<4.0.0; runtime verification requires Linux bubblewrap and Landlock ABI >=3.
+description: Use the Cott 1.0 contract-first DSL compiler to initialize Python, Kotlin, Dart, or Rust projects; author .cott contracts; check and format sources; inspect prompts; emit deterministic IR and target facades; generate missing implementations with Codex, Claude, or OMP; verify and deploy releases; inspect semantic diffs; and run the editor language server. Use when creating, changing, generating, validating, deploying, or consuming a Cott project.
+compatibility: Requires cott 1.0.0. Python uses uv >=0.12.3, CPython >=3.14.6,<3.15, and BasedPyright >=1.39.9. Kotlin uses kotlinc >=2.2.10, JDK >=17, JVM 17, and coroutine 1.8.0. Dart uses SDK >=3.13.3,<4.0.0; runtime verification requires Linux bubblewrap and Landlock ABI >=3. Rust uses same-release cargo/rustc >=1.85.0,<2.0.0, edition 2024, and tokio 1.53.1.
 metadata:
   version: "1.0.0"
 ---
 
 # Cott
 
-Treat every bodyless `.cott` module as the only public contract source. Python, Kotlin, and Dart artifacts are checked projections, not additional contract sources. A manifest selects exactly one target.
+Treat every bodyless `.cott` module as the only public contract source. Python, Kotlin, Dart, and Rust artifacts are checked projections, not additional contract sources. A manifest selects exactly one target.
 
 ## Non-negotiable boundaries
 
 - Never hand-edit `generated/`. Change `.cott`, `cott.toml`, or the selected authored implementation source, then run the command that owns the output.
-- Public consumers import generated target facades only. Python `_cott_impl`/`cott_bindings`, Kotlin `cott_impl`/`cott_bindings`, and Dart private parts are never public import or re-export paths.
+- Public consumers import generated target facades only. Python `_cott_impl`/`cott_bindings`, Kotlin `cott_impl`/`cott_bindings`, Dart private parts, and Rust crate-private cott_impl are never public import or re-export paths.
 - Keep backend identities closed. Never accept or copy one target's generation record, runtime fields, bindings, or managed code as another target's truth.
 - Do not add legacy readers, compatibility shims, partial profiles, or unsandboxed fixture fallbacks. An unavailable isolated fixture is `unobserved`, never host filesystem or network execution.
 - `emit` and `generate` always leave the current snapshot unverified. Only explicit `cott verify` certifies it; `cott deploy` additionally requires a fully resolved, coverage-policy-passing, unchanged snapshot.
@@ -25,7 +25,8 @@ Treat every bodyless `.cott` module as the only public contract source. Python, 
   all-payloadless enums. Use exhaustive constant patterns, not the removed variant classes.
   Payload/generic enums, including `Option`/`Result`, keep ADT constructors. A member matching its
   enum type is escaped with `$` (`Kind.Kind$`), without changing its canonical identity or Cott syntax.
-- Cott builds and verifies a Kotlin/JVM module or portable Dart package. Gradle/Android and Flutter retain ownership of applications, UI, resources, platform builds, signing, installation, and devices.
+- Cott builds/verifies target modules (including a portable Rust library crate); Gradle/Android, Flutter, and Cargo retain ownership of applications, dependency resolution, resources, platform builds, linking, profiles, and execution.
+- Rust contract violations are typed `cott_runtime::ContractViolation` panics; declared errors are `Result` values. `catch_unwind` requires `panic="unwind"` and must not mistake arbitrary panics for contract errors.
 
 When working in the Cott compiler repository, `architecture.md` is the normative implemented v1.0 contract. If prose conflicts with source or a closed schema validator, follow the implementation and update the prose.
 
@@ -44,17 +45,19 @@ Initialize an absent path. Python is the default target:
 cott init path/to/python-project
 cott init path/to/kotlin-module --target kotlin
 cott init path/to/dart-package --target dart --name dart_package
+cott init path/to/rust-crate --target rust --name rust_crate
 ```
 
-Use `--name` when the path basename is not a valid project name. Python and Kotlin names are lowercase kebab-case; Dart names are non-keyword lowercase snake_case. `init` never overwrites an existing path.
+Use `--name` when the path basename is not a valid project name. Python and Kotlin names are lowercase kebab-case; Dart and Rust names are non-keyword lowercase snake_case. `init` never overwrites an existing path.
 
 Target initialization is deliberately narrow:
 
 - Python creates the Cott source, Python metadata, lockfile, and normally a synced root `.venv`.
 - Kotlin creates the Cott source and Kotlin implementation root, then probes installed Kotlin/JDK tooling. It does not create Gradle or Android files.
 - Dart creates the Cott source and Dart implementation root, then probes the installed SDK. It does not create pub metadata, Flutter, or platform files.
+- Rust creates the Cott source/implementation root, probes same-release cargo/rustc and emits a compiler-owned edition-2024 Cargo library in staging. It does not scaffold an application or invoke an agent.
 
-`--no-sync` is target-specific. Python still installs/probes managed Python and creates the lock, but skips environment sync and root-venv tool probes. Kotlin and Dart skip their installed toolchain probe.
+`--no-sync` is target-specific. Python still installs/probes managed Python and creates the lock, but skips environment sync and root-venv tool probes. Kotlin and Dart skip their installed toolchain probe. Rust skips both toolchain probing and staging emit; default Rust init probes and emits before atomic publication.
 
 For an existing project, locate `cott.toml`. Set the root explicitly unless the current directory is that root:
 
@@ -139,7 +142,7 @@ Render the same frozen initial prompt that generation would use, without invokin
 cott prompt store.order.calculate --project "$project" --format json
 ```
 
-The JSON payload is `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. The target write path in the prompt is `implementation.py`, `implementation.kt`, or `implementation.dart`. Formal declarations are authoritative; project rules and references add context but never override them.
+The JSON payload is `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. The target write path in the prompt is `implementation.py`, `implementation.kt`, `implementation.dart`, or `implementation.rs`. Formal declarations are authoritative; project rules and references add context but never override them.
 
 ### 3. Emit deterministic artifacts
 
@@ -152,7 +155,7 @@ cott emit ir --project "$project" --format json
 Emit the selected target projection without invoking an agent or target compiler:
 
 ```bash
-target=python # python, kotlin, or dart; must match cott.toml
+target=python # python, kotlin, dart, or rust; must match cott.toml
 cott emit "$target" --project "$project" --format json
 ```
 
@@ -185,6 +188,7 @@ cott verify --project "$project" --format json
 - Python: CPython and BasedPyright against the complete generated package.
 - Kotlin: kotlinc/JDK/JAR inputs plus the sandboxed public-facade runner.
 - Dart: offline pub resolution where configured, analyzer/kernel compilation, and the sandboxed public-facade runner after Landlock confinement.
+- Rust: frozen checksum-verified registry/path closure, `cargo build --offline --locked` under sandbox, and authenticated public-facade execution with Landlock before runtime threads.
 
 `verify` does not repair sources or managed files; run `emit` or `generate` first. Only report the project as releasable when full verification succeeds. Exit `8` means certification evidence was recorded but the selected semantic-coverage policy gate failed, so release and deployment still fail.
 

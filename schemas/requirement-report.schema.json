@@ -15,7 +15,7 @@
       "additionalProperties": false,
       "properties": {
         "state": {"enum": ["current", "failed", "stale", "absent"]},
-        "target": {"enum": ["python", "kotlin", "dart"]},
+        "target": {"enum": ["python", "kotlin", "dart", "rust"]},
         "snapshot": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "generation_id": {"type": ["string", "null"]},
         "reason": {"type": ["string", "null"]}

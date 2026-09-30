@@ -13,6 +13,7 @@ pub mod code {
     pub const PYTHON: &str = "COTT-P001";
     pub const KOTLIN: &str = "COTT-T201";
     pub const DART: &str = "COTT-D201";
+    pub const RUST: &str = "COTT-R201";
     pub const AGENT: &str = "COTT-A001";
     pub const FILESYSTEM: &str = "COTT-F001";
     pub const INTERNAL: &str = "COTT-I001";

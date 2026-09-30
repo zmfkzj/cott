@@ -14,6 +14,7 @@ Prefer an existing declaration shape over inventing a second style:
 | JSON and recursive payload enums | `examples/features/json-transform/src/curriculum/json_transform.cott`; `examples/kotlin/features/json-transform/src/curriculum/json_transform.cott` |
 | External, opaque, and iterator boundary types | `examples/features/boundary-protocols/src/curriculum/boundary_protocols.cott`; `examples/kotlin/features/boundary-protocols/src/curriculum/boundary_protocols.cott` |
 | Dart package and Flutter boundary | `examples/integrations/flutter-counter/src/example/counter.cott` |
+| Rust library and Cargo boundary | `examples/integrations/rust-counter/src/example/counter.cott` |
 
 Copy the smallest relevant Cott pattern, then rename it for the domain. For target configuration and consumer boundaries, read [targets and deployment](targets-and-deployment.md).
 
@@ -146,7 +147,7 @@ fn read_root(request: HttpRequest) -> HelloResponse:
     effects []
 ```
 
-The corresponding target mapping belongs in `cott.toml`; the `.cott` declaration remains the public semantic name. Python uses `module:Qualname`, Kotlin uses a Kotlin FQN, and Dart uses a library URI plus type name. See [targets and deployment](targets-and-deployment.md). Use `Opaque["identity"]` when callers may carry an identity but must not inspect its representation.
+The corresponding target mapping belongs in `cott.toml`; the `.cott` declaration remains the public semantic name. Python uses `module:Qualname`, Kotlin uses a Kotlin FQN, Dart uses a library URI plus type name, and Rust uses a path rooted at std/core/alloc or a frozen crate. See [targets and deployment](targets-and-deployment.md). Use `Opaque["identity"]` when callers may carry an identity but must not inspect its representation.
 
 ## Authoring sequence
 

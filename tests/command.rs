@@ -202,6 +202,43 @@ fn parses_closed_backend_targets() {
             format: OutputFormat::Human,
         }
     );
+    assert_eq!(
+        parse(&["init", "rust_demo", "--target", "rust", "--no-sync"]),
+        Command::Init {
+            path: PathBuf::from("rust_demo"),
+            target: TargetLanguage::Rust,
+            name: None,
+            no_sync: true,
+            format: OutputFormat::Human,
+        }
+    );
+    assert_eq!(
+        parse(&["emit", "rust", "--project", "rust_demo"]),
+        Command::Emit {
+            target: EmitTarget::Rust,
+            project: Some(PathBuf::from("rust_demo")),
+            format: OutputFormat::Human,
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "generate",
+            "foo.bar.run",
+            "--target",
+            "rust",
+            "--agent",
+            "omp"
+        ]),
+        Command::Generate {
+            symbol: Some("foo.bar.run".to_owned()),
+            target: TargetLanguage::Rust,
+            agent: Some(AgentKind::Omp),
+            model: None,
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        }
+    );
 }
 
 #[test]
@@ -355,11 +392,8 @@ fn rejects_duplicate_or_invalid_options() {
         parse_command(&["verify", "--project", "a", "--project", "b"].map(OsString::from)).is_err()
     );
     assert!(parse_command(&["init", "demo", "--project", "demo"].map(OsString::from)).is_err());
-    assert!(parse_command(&["generate", "--target", "rust"].map(OsString::from)).is_err());
-    assert_eq!(
-        parse_command(&["generate", "--agent", "omp"].map(OsString::from)),
-        Err("`generate` requires `--target python|kotlin|dart`")
-    );
+    assert!(parse_command(&["generate", "--target", "swift"].map(OsString::from)).is_err());
+    assert!(parse_command(&["generate", "--agent", "omp"].map(OsString::from)).is_err());
     for arguments in [
         &["init", "demo", "--target", "python", "--target", "kotlin"][..],
         &["generate", "--target", "python", "--target", "kotlin"][..],

@@ -269,11 +269,12 @@ impl RequirementModel {
                         });
                     }
                 }
-                TargetLanguage::Kotlin | TargetLanguage::Dart => {
-                    let label = if target == TargetLanguage::Kotlin {
-                        "Kotlin"
-                    } else {
-                        "Dart"
+                TargetLanguage::Kotlin | TargetLanguage::Dart | TargetLanguage::Rust => {
+                    let label = match target {
+                        TargetLanguage::Kotlin => "Kotlin",
+                        TargetLanguage::Dart => "Dart",
+                        TargetLanguage::Rust => "Rust",
+                        TargetLanguage::Python => unreachable!(),
                     };
                     if message.contains(&format!("{label} scenario `{scenario}` failed")) {
                         failures.push(ScenarioFailure {
@@ -377,6 +378,8 @@ impl RequirementModel {
             TargetLanguage::Python => crate::provenance::GENERATION_SCHEMA_VERSION,
             TargetLanguage::Kotlin => crate::kotlin::provenance::KOTLIN_GENERATION_SCHEMA_VERSION,
             TargetLanguage::Dart => crate::dart::provenance::DART_GENERATION_SCHEMA_VERSION,
+
+            TargetLanguage::Rust => crate::rust::provenance::RUST_GENERATION_SCHEMA_VERSION,
         };
         let (current, last_verified) = crate::snapshot_record::decode(record, schema)
             .map_err(|error| (None, format!("generation record is invalid: {error}")))?;
@@ -391,6 +394,8 @@ impl RequirementModel {
                 current.get("target").and_then(Value::as_str) == Some("kotlin")
             }
             TargetLanguage::Dart => current.get("target").and_then(Value::as_str) == Some("dart"),
+
+            TargetLanguage::Rust => current.get("target").and_then(Value::as_str) == Some("rust"),
         };
         if !target_matches {
             return Err(stale("current snapshot belongs to a different target"));
@@ -442,7 +447,7 @@ impl RequirementModel {
         }
         let unavailable = match target {
             TargetLanguage::Python => BTreeMap::new(),
-            TargetLanguage::Kotlin | TargetLanguage::Dart => tests
+            TargetLanguage::Kotlin | TargetLanguage::Dart | TargetLanguage::Rust => tests
                 .get("unavailable")
                 .and_then(Value::as_object)
                 .map(|entries| {
@@ -548,7 +553,9 @@ impl RequirementModel {
         };
         match bound.target {
             TargetLanguage::Python => python_check(report, entry, link, declared),
-            TargetLanguage::Kotlin | TargetLanguage::Dart => counted_check(report, entry, declared),
+            TargetLanguage::Kotlin | TargetLanguage::Dart | TargetLanguage::Rust => {
+                counted_check(report, entry, declared)
+            }
         }
     }
 }
@@ -750,6 +757,8 @@ fn target_name(target: TargetLanguage) -> &'static str {
         TargetLanguage::Python => "python",
         TargetLanguage::Kotlin => "kotlin",
         TargetLanguage::Dart => "dart",
+
+        TargetLanguage::Rust => "rust",
     }
 }
 

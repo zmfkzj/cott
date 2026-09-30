@@ -436,6 +436,20 @@ fn discover_project(path: &Path) -> Option<DiscoveredProject> {
                     sources,
                 })
             }
+
+            crate::manifest::TargetLanguage::Rust => {
+                let (config, paths, _) = crate::project::load_rust_config_with_paths(root).ok()?;
+                let sources = match crate::project::discover_rust_contract_sources(&paths) {
+                    Ok(sources) => sources,
+                    Err(crate::project::ProjectError::NoSources { .. }) => Vec::new(),
+                    Err(_) => return None,
+                };
+                Some(DiscoveredProject {
+                    source_dir: paths.source_dir,
+                    effects: config.effects.into_keys().collect(),
+                    sources,
+                })
+            }
         }
     })
 }
