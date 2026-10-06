@@ -1906,3 +1906,53 @@ assert list(_cott_validate_abi(wide, CottList[I32])) == list(range(100_000))
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn exact_integer_dispatch_keeps_traversal_and_rejection_semantics() {
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import cott_runtime as r
+calls = []
+original = r._get_origin
+def traced(annotation):
+    calls.append(annotation)
+    return original(annotation)
+r._get_origin = traced
+state = r._CottTraversal()
+assert r._cott_validate_abi(123, int, _state=state) == 123
+assert not calls, calls
+assert state.completed[(id(123), int)] == 123
+assert not state.active
+try:
+    r._cott_validate_abi(True, int)
+except r.CottContractViolation as error:
+    assert error.phase == 'validation' and error.clause is None
+else:
+    raise AssertionError('bool accepted as int')
+assert calls, 'non-exact values must use the rejecting path'
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(&temp.path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/python_abi_cases.py"))
+        .arg(&temp.path)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let observations: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(observations.as_object().unwrap().len() > 50);
+}

@@ -919,6 +919,7 @@ pub enum Intrinsic {
     CyclicBy,
     PermutationBy,
     DependencyOrderedBy,
+    ReadyOrderedBy,
 }
 
 impl Intrinsic {
@@ -935,7 +936,7 @@ impl Intrinsic {
             | Self::SelfDependencyBy
             | Self::CyclicBy
             | Self::PermutationBy => 3,
-            Self::DependencyOrderedBy => 4,
+            Self::DependencyOrderedBy | Self::ReadyOrderedBy => 4,
         }
     }
 }

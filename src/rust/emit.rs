@@ -920,7 +920,11 @@ pub(super) fn render_literal(
                 .collect::<Result<Vec<_>, _>>()?;
             match text(value, "kind")? {
                 "list" => format!("vec![{}]", values.join(", ")),
-                "set" => format!("crate::cott_runtime::Set::new(vec![{}])", values.join(", ")),
+                "set" => format!(
+                    "crate::cott_runtime::Set::{}(vec![{}])",
+                    super::types::collection_constructor(ty.and_then(|t| t.get("item"))),
+                    values.join(", ")
+                ),
                 "array" => format!(
                     "<{}>::new(vec![{}])",
                     render_type_scoped(
@@ -955,7 +959,8 @@ pub(super) fn render_literal(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             format!(
-                "crate::cott_runtime::Map::new(vec![{}])",
+                "crate::cott_runtime::Map::{}(vec![{}])",
+                super::types::collection_constructor(ty.and_then(|t| t.get("key"))),
                 entries.join(", ")
             )
         }

@@ -5316,6 +5316,7 @@ fn python_intrinsic_helper(name: &str) -> Option<&'static str> {
         "cyclic_by" => "_cott_cyclic_by",
         "permutation_by" => "_cott_permutation_by",
         "dependency_ordered_by" => "_cott_dependency_ordered_by",
+        "ready_ordered_by" => "_cott_ready_ordered_by",
         _ => return None,
     })
 }
@@ -5523,7 +5524,7 @@ fn render_contract_expression(expression: &Value) -> String {
                 (Some("permutation_by"), Some(helper)) => {
                     format!("{helper}({first}, {second}, {})", field("selector"))
                 }
-                (Some("dependency_ordered_by"), Some(helper)) => format!(
+                (Some("dependency_ordered_by" | "ready_ordered_by"), Some(helper)) => format!(
                     "{helper}({first}, {second}, {}, {})",
                     field("selector"),
                     field("dependencies")

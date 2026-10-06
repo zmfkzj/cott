@@ -74,6 +74,7 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
         ));
     }
     validate_json_values(&value)
+        .and_then(|_| validate_ready_selectors(&value))
         .map_err(|error| format!("canonical IR schema violation: {error}"))?;
     for declaration in value
         .get("declarations")
@@ -86,6 +87,42 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
             .map_err(|error| format!("canonical IR schema violation: {error}"))?;
     }
     Ok(())
+}
+
+fn validate_ready_selectors(value: &Value) -> Result<(), String> {
+    match value {
+        Value::Array(items) => items.iter().try_for_each(validate_ready_selectors),
+        Value::Object(object)
+            if object.get("kind").and_then(Value::as_str) == Some("json") && object.len() == 2 =>
+        {
+            Ok(())
+        }
+        Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("intrinsic")
+                && object.get("name").and_then(Value::as_str) == Some("ready_ordered_by")
+            {
+                let owner = value
+                    .pointer("/arguments/1/type/item/name")
+                    .and_then(Value::as_str)
+                    .ok_or("ready_ordered_by requires nominal list")?;
+                for name in ["selector", "dependencies"] {
+                    let selector = &value[name];
+                    if selector["owner"].as_str() != Some(owner)
+                        || !selector["field"].as_str().is_some_and(|field| {
+                            field.starts_with(&format!("{owner}."))
+                                && !field[owner.len() + 1..].contains('.')
+                        })
+                    {
+                        return Err(
+                            "ready_ordered_by selector owner must match exact list element".into(),
+                        );
+                    }
+                }
+            }
+            object.values().try_for_each(validate_ready_selectors)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Every canonical `json` value holds a §12.5 `JsonValue`: JSON numbers are
@@ -2422,6 +2459,7 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
                 crate::hir::HirIntrinsic::CyclicBy => "cyclic_by",
                 crate::hir::HirIntrinsic::PermutationBy => "permutation_by",
                 crate::hir::HirIntrinsic::DependencyOrderedBy => "dependency_ordered_by",
+                crate::hir::HirIntrinsic::ReadyOrderedBy => "ready_ordered_by",
             });
             json.comma();
             json.key("arguments");

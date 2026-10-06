@@ -38,6 +38,36 @@ pub fn fingerprints(surface: &Value, rules: &[u8]) -> Result<BTreeMap<String, St
     Ok(hashes)
 }
 
+/// Explain declaration deltas using the same scoped selection as fingerprints/prompts.
+/// Callers must establish that `rules` are the unchanged historical rules. Hash-only
+/// old rule evidence cannot be reconstructed here. This never decides eligibility.
+pub(crate) fn changed_context_declarations(
+    before: &Value,
+    after: &Value,
+    symbol: &str,
+    rules: &[u8],
+) -> Result<Vec<String>, String> {
+    fn declarations(ctx: &Value) -> BTreeMap<String, Value> {
+        ctx["declarations"]
+            .as_object()
+            .into_iter()
+            .flat_map(|modules| modules.values())
+            .flat_map(|module| module["declarations"].as_array().into_iter().flatten())
+            .filter_map(|decl| Some((decl["name"].as_str()?.to_owned(), decl.clone())))
+            .collect()
+    }
+    let old = declarations(&context(before, symbol, rules)?);
+    let new = declarations(&context(after, symbol, rules)?);
+    Ok(old
+        .keys()
+        .chain(new.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|name| old.get(name) != new.get(name))
+        .collect())
+}
+
 pub fn metadata(hashes: &BTreeMap<String, String>) -> Value {
     json!({
         "hashes": hashes,

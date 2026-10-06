@@ -1671,6 +1671,7 @@ fn safe_cott_runtime_member(member: &str, allows_process_exit: bool) -> bool {
             | "cyclicBy"
             | "permutationBy"
             | "dependencyOrderedBy"
+            | "readyOrderedBy"
             | "field"
             | "resultOk"
             | "resultErr"

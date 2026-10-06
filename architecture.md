@@ -988,7 +988,7 @@ fn topologically_order_steps(steps: List[BuildStep]) -> Result[List[Str], Artifa
 
 completeness는 runtime obligation이지 증명이 아니다. `Ok` 쪽 `ensures` evidence는 runner candidate나 scenario가 실제로 실행한 normal case(어떤 conditional도 참이 아닌 requires-valid input)에서만 나오며, bounded candidate가 normal case에 도달하지 못하면 그 clause는 `unobserved`로 남는다. completeness와 아래 predicate는 구현의 종료나 전체 correctness를 주장하지 않는다. 끝나지 않는 구현은 기존 runner timeout으로만 실패한다.
 
-graph·whitespace intrinsic의 selector는 모두 첫 list argument의 nominal element type `T` field다. key selector는 정확히 `Str` field, dependency selector는 `Set[Str]` 또는 `List[Str]` field, order argument는 `List[Str]`이다(alias는 풀지만 newtype carrier는 받지 않는다). 모두 total이며 중복·미지·self edge가 있는 invalid 입력에서도 결정적인 bool을 반환한다. invalid 입력 사이의 우선순위는 predicate가 아니라 `error` 절 source order가 정한다. 아래에서 `K`는 element key 집합이며 중복 key는 하나의 node로 합친다. edge `d → key(e)`는 `d ∈ deps(e)`이고 `d ∈ K`일 때만 생긴다.
+graph·whitespace intrinsic의 selector는 모두 선택되는 list `xs`의 nominal element type `T` field다(`order, xs` 형태에서는 두 번째 value argument). key selector는 정확히 `Str` field, dependency selector는 `Set[Str]` 또는 `List[Str]` field, order argument는 `List[Str]`이다(alias는 풀지만 newtype carrier는 받지 않는다). 모두 total이며 중복·미지·self edge가 있는 invalid 입력에서도 결정적인 bool을 반환한다. invalid 입력 사이의 우선순위는 predicate가 아니라 `error` 절 source order가 정한다. 기존 cycle/edge 검사에서 `K`는 element key 집합이며 중복 key는 하나의 node로 합친다. edge `d → key(e)`는 `d ∈ deps(e)`이고 `d ∈ K`일 때만 생긴다. `ready_ordered_by`의 엄격한 잘 형성된 전체 순서 조건은 아래에서 별도로 정의한다.
 
 * `any_blank_by(xs, T.key)`: 어떤 key가 빈 문자열이거나 모든 code point가 Unicode `White_Space`(U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000의 25개)이면 참. 모든 target이 이 고정 table만 쓰고 host `isspace`·`trim`·`isWhitespace`(예: U+001C–U+001F, U+FEFF, U+180E, U+200B 차이)는 쓰지 않는다. normalization·case folding은 없다.
 * `unknown_dependency_by(xs, T.key, T.deps)`: 어떤 `d ∈ deps(e)`가 `K`에 없으면 참.
@@ -997,7 +997,21 @@ graph·whitespace intrinsic의 selector는 모두 첫 list argument의 nominal e
 * `permutation_by(order, xs, T.key)`: `order`의 multiset이 element key multiset과 같으면(중복 횟수 포함) 참.
 * `dependency_ordered_by(order, xs, T.key, T.deps)`: 모든 element `e`와 `d ∈ deps(e)`에 대해 `order` 안 `d`의 모든 위치가 `key(e)`의 모든 위치보다 앞서면 참. `order`에 없는 key·dependency는 조건을 만들지 않으며 완전성은 `permutation_by`가 맡는다. target 구현은 index sentinel 없이 위치 map의 부재로 처리한다.
 
-이 predicate들은 dependency order만 규정하고 동률 tie-break(예: lexicographic ready order)가 정하는 유일한 출력은 규정하지 않는다. 그런 결정성은 `doc` 의도이며 formal oracle이 아니다.
+* `ready_ordered_by(order, xs, T.key, T.deps)`: unique key의 유한 graph에서 매 prefix마다 현재 준비된 node(모든 dependency가 이미 배치됨) 중 Unicode scalar 사전순 최소 key를 다음 원소로 선택한 **전체** 순서일 때 참. 빈 입력/빈 order는 참이고 단일 node도 검사한다. 중복 key, 미정의 dependency, self edge/cycle, 빠진/중복/외부 order key는 거짓이다. 중복 dependency edge는 한 edge로 취급한다. 정상 graph에서 permutation·dependency order와 tie-break를 함께 요구하지만 기존 두 predicate의 느슨한 invalid-input 의미는 바꾸지 않는다. 공백·빈 key 자체는 정렬 가능한 Str이며 이름 유효성 오류의 분류는 별도 `any_blank_by`/`error` 절이 맡는다.
+
+기존 permutation/dependency/cycle predicate만으로는 ready tie-break를 정하지 못한다. `ready_ordered_by`는 artifact-pipeline의 `READY_STEPS_IN_NAME_ORDER` 같은 의무를 형식 조건으로 추가할 때 사용한다. 전체 이름순 정렬이 아니다. 예를 들어 `b → a`와 독립 node `z`의 결과는 `b,a,z`이며, `a,b,z`나 `b,z,a`는 거짓이다. NFC normalization·case folding은 하지 않고 prefix가 먼저 온다. Python의 validated Str 순서와 Rust UTF-8 `str` 순서는 scalar 순서에 일치하며 Kotlin/Dart는 기존 canonical code-point comparator를 사용한다(UTF-16 기본 순서가 아님).
+
+모든 타깃 구현은 유한 Kahn-style indegree와 최소 ready 집합을 사용하고 graph 자체의 재귀 탐색·node 객체의 깊은 복사·매 단계 전체 sort를 하지 않는다. O(V+E) 추가 저장소, heap/tree 기반 O((V+E) log V) 작업이며 host hash collection은 충돌 시 host equality를 유지한다. 이것은 구현을 생성하는 알고리즘 언어가 아니라 반환값을 검사하는 Boolean predicate다. HIR은 기존 exact `Str`/`List[Str]`와 nominal field selector 규칙을 재사용한다. canonical IR은 기존 `intrinsic` 객체(`name`, value arguments 2개, selector, dependencies)를 유지하며 닫힌 name/shape/owner validation을 적용한다. 임의 함수 호출은 여전히 거부한다. 정적 bounded proof는 이 graph 계산을 증명하지 못하면 `unknown`이고, runner/facade가 실제 실행한 clause의 관찰만 남긴다.
+
+사용 예(기존 오류 분류를 유지하는 Result 함수):
+
+```cott
+fn order_steps(steps: List[BuildStep]) -> Result[List[Str], PipelineError]:
+    ensures Result.Ok(order) => ready_ordered_by(order, steps, BuildStep.name, BuildStep.needs)
+    error PipelineError.Invalid
+```
+
+23개 공유 case corpus(각각 List/Set dependency, 총 46 scenario), 비BMP U+10000/U+E000/emoji, invalid graph, wrong output과 실제 4개 타깃 facade 관찰 회귀는 `tests/fixtures/ready_ordered.json`, `tests/ready_ordered.rs`에 있다. 이는 독립 authored fixture이며 기존 generation-first artifact-pipeline 구현/생성물을 수동 변경하지 않는다. `requirement`의 자연어 전체를 증명했다는 뜻도 아니다.
 
 ### 10.5 부작용
 
@@ -1046,7 +1060,7 @@ manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. 
 
 IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 경우 `[]`). 각 node는 `clause_id`, `guard`, typed `expression`, `span`이며, intrinsic은 closed name·typed arguments·resolved `{owner, field}` selector를 canonical JSON에 저장하고, dependency selector를 받는 `unknown_dependency_by`·`self_dependency_by`·`cyclic_by`·`dependency_ordered_by`만 같은 shape의 `dependencies` key를 추가로 가진다. 다른 expression에는 이 key가 없으므로 기존 IR bytes는 변하지 않는다. AST/HIR/source spelling을 재해석하지 않고 이 IR만 emitter와 runner가 소비한다.
 
-생성된 frozen keyword-only dataclass가 유일한 canonical smart constructor다. Python argument/default factory 평가 뒤 `__post_init__`가 declaration order로 field ABI를 validate·normalize하고 `object.__setattr__`한 다음 invariant guard/condition을 clause order로 평가한다. 첫 false는 `CottContractViolation`에 `symbol`, `clause="invariant:N"`, `phase="invariant"`, canonical span과 expected/actual을 담아 실패한다. guard non-match는 satisfied다. direct construction도 이 순서를 우회하지 않는다. active facade ABI boundary는 exact nominal type·concrete generic substitution·depth 64/node 1024/cycle 검사를 공유 traversal state에서 끝낸 뒤 같은 constructor로 재구성하므로 `object.__new__`, deserialization, mutation으로 만든 invalid value도 거부한다. `off`가 facade traversal을 생략해도 constructor invariant는 끄지 않는다. default가 명백히 false면 compile error이고, 그 외에는 repair·sort·deduplicate 없이 construction failure다.
+생성된 frozen keyword-only dataclass가 유일한 canonical smart constructor다. Python argument/default factory 평가 뒤 `__post_init__`가 declaration order로 field ABI를 validate·normalize하고 `object.__setattr__`한 다음 invariant guard/condition을 clause order로 평가한다. 첫 false는 `CottContractViolation`에 `symbol`, `clause="invariant:N"`, `phase="invariant"`, canonical span과 expected/actual을 담아 실패한다. guard non-match는 satisfied다. direct construction도 이 순서를 우회하지 않는다. active facade ABI boundary는 exact nominal type·concrete generic substitution·depth 64/cycle 검사를 공유 traversal state에서 끝낸 뒤 같은 constructor로 재구성하므로 `object.__new__`, deserialization, mutation으로 만든 invalid value도 거부한다. Python ABI traversal에는 node 수 제한이 없으며 실패한 union probe도 순회 내에서 memoize한다. `off`가 optional validation을 꺼도 F32 정규화와 constructor invariant는 끄지 않는다. default가 명백히 false면 compile error이고, 그 외에는 repair·sort·deduplicate 없이 construction failure다.
 
 ### 10.7 Finite scenario, fixture와 workflow
 
@@ -2058,6 +2072,8 @@ cache miss의 loader preflight는 target 실행 전에 recorded direct external 
 
 Runtime import ownership is recomputed from current distribution inventories and live file existence for the requested modules and their parent initializers. It does not cache the final owner map: an existing `RECORD` edit or a previously missing recorded module appearing must trigger ambiguity checks even when `sys.path` and directory timestamps are unchanged. Unrelated distribution files need no module-origin stat, and legacy inventory resolution remains CPython-owned. Resolved nominal field annotations are cached only after successful resolution; each value still undergoes ABI checks. `ctypes` and `_ctypes` remain forbidden implementation introspection paths: arbitrary native pointers must not expose private contract evidence.
 
+Python ABI validator의 exact `int` 성공 분기는 반복 `typing.get_origin/get_args` 해석 전에 처리한다. 바깥 traversal의 depth/cycle/memo 처리와 `Annotated` fixed-width 범위 검사, nominal 재검사, F32 정규화, contract observation, provenance 로딩은 바뀌지 않는다. 값이 전에 통과했다는 이유로 전역 검사 생략 cache를 만들지 않는다. 이는 Python runtime ABI 7의 의미를 바꾸지 않는 dispatch 최적화이며 새 compiler 결과도 정상 emit 뒤 명시적 verify가 필요하다. 재현 가능한 측정의 경로·범위·한계는 `benchmarks/README.md`에 둔다.
+
 `runtime_validation`은 16.4 표의 optional free-function/method ABI와 contract checks만 제어하며 provenance loader, impl init/state snapshot/invariant/modifies checks를 끄거나 직접 implementation re-export로 바꾸지 않는다. 구현 위치와 mode가 달라도 facade callable의 signature와 module identity는 같다.
 
 `target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. `cott deploy`는 18.7.1의 installable wheel을 만들지만 independent installed-wheel whole-origin verification은 v1.0 범위에서 제외한다. v1.0에서는 embedded provenance check, 즉 exact metadata와 실제 imported regular-file origin·content hash의 preflight를 필수로 한다.
@@ -2658,6 +2674,12 @@ Canonical IR artifact는 module별 원본 canonical bytes와 정확히 일치한
 | Opaque | canonical tag를 brand로 가진 opaque handle; 다른 tag를 호환시키거나 nominal generic을 `Any`로 대체하지 않는다 |
 | External | 선언별 typed native host handle; host `PartialEq`가 있으면 그 값 equality를 사용하고, 비교 불가능한 opaque host는 identity를 사용한다 |
 | Factory | canonical concrete impl의 constructor argument tuple을 유지하는 typed factory; `ConstructionArguments`와 canonical constructor를 분리한다 |
+
+Rust `Set::new(Vec<T>)`/`Map::new(Vec<(K,V)>)`는 기존 `PartialEq` 제약을 유지하며 추가 `Eq`/`Hash`/`Clone`/`'static` bound를 요구하지 않는다. `iter`·`into_vec`는 Set의 첫 등장 순서, Map의 마지막 key/value 및 마지막 등장 위치 순서를 노출한다. equality는 저장 순서에 무관하다. `Debug` 표현도 이전 ordered Vec 표현을 유지한다.
+
+선택적 `Set::from_scalar`/`Map::from_scalar`는 sealed immutable scalar key(`String`, 고정폭 정수, bool)에서만 제공된다. 현재 문자열 입력 길이 64 이상, 정수 1024 이상만 **생성·중복 제거 중 임시** 보조 hash index를 만들며 bool은 항상 선형 경로다. 인덱스는 생성 완료 전에 버리고 저장 표현은 기존 Vec-only, lifetime 공변성·auto-trait·header size를 유지한다. `get`/`contains`·equality는 기존 선형/반복 선형 경로 그대로다. RandomState hash의 충돌 bucket은 반드시 전체 key equality로 재확인하며 hash iteration을 외부 순서로 노출하지 않는다. `Cott hash-stable` 판정이 Rust nominal type의 `Hash` 구현을 뜻하지 않으므로 newtype/enum/tuple/임의 PartialEq key에 새 bound를 추가하지 않는다. Compiler는 key의 구체적 primitive type을 아는 typed literal/default/scenario expression에서 `from_scalar`를 선택하며 native 소비자도 명시적으로 호출할 수 있다. 일반 `new`나 조회가 자동으로 빨라진다는 보장은 없다. 실측·임시 할당 trade-off 및 명령은 `benchmarks/RUST_COLLECTIONS.md`를 참고한다.
+
+호환성 판단: 위 변경은 Cott 값/호출 의미, Rust 저장 표현과 wire field shape를 유지하는 additive constructor/runtime helper다. Canonical IR 9, contract strategy 6, 기존 타깃 generation/runtime ABI 번호를 유지하며 alias/legacy reader/certification conversion은 추가하지 않는다. Rust wrapper는 `repr(C)`나 안정된 FFI layout 약속은 없으므로 기존 rlib와 새 runtime을 혼합하지 않는다. 새 산출물은 소유 compiler의 emit과 실제 verify로 다시 생성/검증하며 compiler·managed/runtime hash가 별도로 인증된다. 옛 배포/record는 그때의 bytes만 인증하고 새 predicate·생성 성능의 증거가 되지 않는다.
 
 Canonical HIR v9의 Factory instance는 type argument 없는 impl 선언이어야 한다. Generic/associated
 Factory instance는 frontend가 허용하지 않으므로 Rust만의 새 source feature나 erased argument
@@ -3423,6 +3445,8 @@ public declaration 제거·rename, sync/async kind, signature·generic·type sha
 
 baseline/current `[project].version`은 restricted `x.y.z` API version이며 current가 baseline보다 작으면 diff error다. breaking change는 baseline major가 `0`이면 최소 minor, 그 밖에는 최소 major bump를 요구한다. additive change는 최소 minor bump를 요구하고 implementation/documentation-only change는 bump를 요구하지 않는다. insufficient bump는 `VERSION INCOMPATIBLE` change로 report에 추가되고 `--exit-code`는 7을 반환한다. report는 declaration removal에 “Remove uses …”, addition에 “Adopt …” migration advice를 함께 제공한다.
 
+Python `diff`의 기존 `advice`에는 현재 implementation resolution이 unresolved로 선택한 callable의 재생성 설명도 포함된다. baseline/current intent fingerprint가 달라지고 manifest/rule bytes가 같음을 확인할 수 있으면 prompt/fingerprint와 같은 context 선택으로 변경된 declaration 이름을 연결한다. 이전 rule은 해시만 저장되므로 원문을 복원할 수 없으면 상세 edit을 추측하지 않고 한계를 표시한다. 이미 pending이거나 비교 증거가 없으면 현재 재사용 불가 상태만 설명한다. 다음 작업은 callable별 prompt 확인, 명시적 agent/model의 generate, 별도 verify다. 이 설명은 별도 eligibility engine이나 자연어 요구 충족 증거가 아니다. inspection lock 아래 계획만 읽으며 `current`/`last_verified`와 managed bytes를 publish하지 않는다. 기존 diff JSON key와 진단 schema는 그대로다.
+
 `cott diff`는 `generation_id` mismatch 자체를 change로 보지 않는다. 같은 target environment에서는
 해당 compiler/runtime/tool identity와 managed artifact hash를 비교한다. 다른 machine에서는
 machine-local identity를 제외하고 normalized contract/public target symbol, durable implementation
@@ -3837,6 +3861,8 @@ cott init <path> --format json
 ```
 
 byte offset은 0-based end-exclusive, line·Unicode-scalar column은 1-based end-exclusive인 15.4의 span 규칙을 따른다. `severity`는 `error`, `warning`, `note`의 closed enum이고 `related` 원소는 `{span, message}`다. source가 없는 manifest·tool·sandbox 오류는 `span: null`이다.
+
+CLI와 LSP의 human diagnostic 본문은 기존 `expected`, `actual`, `reason`, `help`, `related` 메시지를 공통 renderer로 전달한다. parser의 token expectation 실패는 요구 token과 실제 token을 기록한다. JSON mode는 해당 continuation을 schema 1의 기존 필드에 보존한다. LSP는 관련 source가 실제로 해석되는 경우에만 표준 `relatedInformation`의 URI/UTF-16 range를 제공하고, 위치가 없는 관련 설명은 본문에만 남긴다. 없는 원인·위치·검증 결과는 추론해 붙이지 않는다. LSP의 parser/HIR 오류는 runtime 계약 위반, provenance 오류나 검증된 scenario 관찰로 바꾸어 표시하지 않는다.
 
 ### 20.1 그림자 명세 경고
 

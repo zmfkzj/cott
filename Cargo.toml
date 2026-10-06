@@ -30,3 +30,7 @@ tree-sitter-rust = "0.24"
 
 [build-dependencies]
 cc = "1"
+
+[[example]]
+name = "benchmark-runtime"
+path = "benchmarks/export_runtime.rs"

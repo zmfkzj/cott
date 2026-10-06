@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "label": "current",
+  "scope": "verified-facade-requested",
+  "identity": {
+    "head": "921158c838150c880c5b2792b02969d922626602",
+    "python": {
+      "path": "/usr/bin/python3.14",
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+      "bytes": 7477160,
+      "version": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43"
+    },
+    "target_python_compatible": false,
+    "target_requirements": "CPython >=3.14.6,<3.15; BasedPyright >=1.39.9 for real verify",
+    "cpu_count": 12,
+    "scripts": {
+      "python_boundary.py": {
+        "path": "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+        "sha256": "3b4d262dbbc628559b1b58b035c4b9f743fb231145a2937db3ddd25362c22ff3",
+        "bytes": 19114
+      }
+    },
+    "workspace_sources_at_measurement": {
+      "python_runtime.rs": {
+        "path": "/home/arthur/Code/cott/src/python_runtime.rs",
+        "sha256": "4243c83d3aae1c47fc4ea629d3080361603f3d783ac017b06cba3d0bc0425067",
+        "bytes": 105131
+      },
+      "python_emit.rs": {
+        "path": "/home/arthur/Code/cott/src/python_emit.rs",
+        "sha256": "fab30bfab7f72cb0a8c0939dd2f662b0b9e0a6f33f758c5a70d9fbbedc96ff97",
+        "bytes": 271021
+      }
+    },
+    "source_identity_note": "Measured runtime bytes/compiler-export are recorded per row; workspace sources may differ from an older compiled baseline.",
+    "settings": {
+      "cott": "/home/arthur/Code/cott/target/debug/cott",
+      "type_checker": "basedpyright",
+      "component_runtime": null,
+      "label": "current",
+      "sizes": [
+        4,
+        128
+      ],
+      "depths": [
+        1,
+        3
+      ],
+      "modes": [
+        "boundary",
+        "test-only",
+        "off"
+      ],
+      "repeat": 1,
+      "loops": 1,
+      "profile": false
+    },
+    "model": null,
+    "generation": "not run: authored fixed-algorithm binding, no model required",
+    "compiler": {
+      "path": "/home/arthur/Code/cott/target/debug/cott",
+      "sha256": "b82413ad8fa03d204f1b9e456ff6e85bdc8f4f86f0d709622c6baad81a4a7b11",
+      "bytes": 96845224
+    },
+    "compiler_version": {
+      "argv": [
+        "/home/arthur/Code/cott/target/debug/cott",
+        "--version"
+      ],
+      "returncode": 0,
+      "seconds": 0.004077858,
+      "stdout": "cott 1.0.0\n",
+      "stderr": ""
+    },
+    "type_checker_version": {
+      "argv": [
+        "basedpyright",
+        "--version"
+      ],
+      "returncode": null,
+      "seconds": 0.000473988,
+      "error": "[Errno 2] No such file or directory: 'basedpyright'"
+    }
+  },
+  "limits": [
+    "Synthetic identity algorithm, not application throughput or developer productivity.",
+    "Direct-checked reuses Cott value validators and identical predicates; no provenance guarantee.",
+    "Cold process includes startup/import/input construction; first-call is reported separately.",
+    "Warm excludes correctness/profile/tracemalloc; fixed hash seed 0, sequential processes.",
+    "tracemalloc peak/retained is one untimed call; excludes native allocations/RSS and total allocation count.",
+    "test-only context toggle is for measurement only, never runner observation/certification evidence."
+  ],
+  "tool_costs": [
+    {
+      "mode": "boundary",
+      "depth": 1,
+      "sources": {
+        "src/bench.cott": "8a9d18510475442a965d0dca93231ccbd150aa75e83baa3e073664fefdbb9bac",
+        "python/cott_bindings/algorithm.py": "3d5554a0ea2fe2252b2b73dc04c8ae3ae36fdbdd8ff35ba016dddb3c7a7ea9f1",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "2f0e8840f6a074609da7a00b708157d4c0ace0754de80336cd652af568bfcfcb"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/boundary-1"
+        ],
+        "returncode": 0,
+        "seconds": 0.256064108,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/boundary-1"
+        ],
+        "returncode": 4,
+        "seconds": 2.793751245,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/boundary-1/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    },
+    {
+      "mode": "test-only",
+      "depth": 1,
+      "sources": {
+        "src/bench.cott": "8a9d18510475442a965d0dca93231ccbd150aa75e83baa3e073664fefdbb9bac",
+        "python/cott_bindings/algorithm.py": "3d5554a0ea2fe2252b2b73dc04c8ae3ae36fdbdd8ff35ba016dddb3c7a7ea9f1",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "057a599a8cb316efe581e876b829a22cc440f64c39c0f8aa7e27b54e364d674a"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/test-only-1"
+        ],
+        "returncode": 0,
+        "seconds": 0.312825669,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/test-only-1"
+        ],
+        "returncode": 4,
+        "seconds": 2.620978592,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/test-only-1/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    },
+    {
+      "mode": "off",
+      "depth": 1,
+      "sources": {
+        "src/bench.cott": "8a9d18510475442a965d0dca93231ccbd150aa75e83baa3e073664fefdbb9bac",
+        "python/cott_bindings/algorithm.py": "3d5554a0ea2fe2252b2b73dc04c8ae3ae36fdbdd8ff35ba016dddb3c7a7ea9f1",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "b779dcf498f2cac784cfec4a02442f93f1ad560293233cad8e1ed091c60f9541"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/off-1"
+        ],
+        "returncode": 0,
+        "seconds": 0.262657278,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/off-1"
+        ],
+        "returncode": 4,
+        "seconds": 2.308491476,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/off-1/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    },
+    {
+      "mode": "boundary",
+      "depth": 3,
+      "sources": {
+        "src/bench.cott": "045d5f6d95e010ce715f57a096846fc4f9a717f60f73800a25e3babe8e7b1e28",
+        "python/cott_bindings/algorithm.py": "bacff24af6fd98058f8cd3a476cfe150b7a7b6ece6d17a0480098b33cc49725c",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "2f0e8840f6a074609da7a00b708157d4c0ace0754de80336cd652af568bfcfcb"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/boundary-3"
+        ],
+        "returncode": 0,
+        "seconds": 0.258982345,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/boundary-3"
+        ],
+        "returncode": 4,
+        "seconds": 2.304143162,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/boundary-3/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    },
+    {
+      "mode": "test-only",
+      "depth": 3,
+      "sources": {
+        "src/bench.cott": "045d5f6d95e010ce715f57a096846fc4f9a717f60f73800a25e3babe8e7b1e28",
+        "python/cott_bindings/algorithm.py": "bacff24af6fd98058f8cd3a476cfe150b7a7b6ece6d17a0480098b33cc49725c",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "057a599a8cb316efe581e876b829a22cc440f64c39c0f8aa7e27b54e364d674a"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/test-only-3"
+        ],
+        "returncode": 0,
+        "seconds": 0.258483219,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/test-only-3"
+        ],
+        "returncode": 4,
+        "seconds": 2.318597235,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/test-only-3/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    },
+    {
+      "mode": "off",
+      "depth": 3,
+      "sources": {
+        "src/bench.cott": "045d5f6d95e010ce715f57a096846fc4f9a717f60f73800a25e3babe8e7b1e28",
+        "python/cott_bindings/algorithm.py": "bacff24af6fd98058f8cd3a476cfe150b7a7b6ece6d17a0480098b33cc49725c",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "b779dcf498f2cac784cfec4a02442f93f1ad560293233cad8e1ed091c60f9541"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/off-3"
+        ],
+        "returncode": 0,
+        "seconds": 0.258803309,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-ky5a6rih/off-3"
+        ],
+        "returncode": 4,
+        "seconds": 2.304145035,
+        "stdout": "",
+        "stderr": "error: resolve BasedPyright /tmp/cott-boundary-benchmark-ky5a6rih/off-3/.tools/basedpyright: No such file or directory (os error 2)\n"
+      }
+    }
+  ],
+  "rows": [],
+  "blockers": [
+    {
+      "stage": "verify",
+      "mode": "boundary",
+      "depth": 1
+    },
+    {
+      "stage": "verify",
+      "mode": "test-only",
+      "depth": 1
+    },
+    {
+      "stage": "verify",
+      "mode": "off",
+      "depth": 1
+    },
+    {
+      "stage": "verify",
+      "mode": "boundary",
+      "depth": 3
+    },
+    {
+      "stage": "verify",
+      "mode": "test-only",
+      "depth": 3
+    },
+    {
+      "stage": "verify",
+      "mode": "off",
+      "depth": 3
+    }
+  ],
+  "status": "blocked"
+}

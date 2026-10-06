@@ -1,0 +1,2333 @@
+{
+  "schema_version": 1,
+  "label": "supported-facade-reverse-control-before",
+  "scope": "verified-facade-requested",
+  "identity": {
+    "head": "921158c838150c880c5b2792b02969d922626602",
+    "python": {
+      "path": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+      "sha256": "2f7fff382c9d335d6d63f134b55cb8ced9d0b2e1d47e6f210ad3f059adfa71c1",
+      "bytes": 32076528,
+      "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43"
+    },
+    "target_python_compatible": true,
+    "target_requirements": "CPython >=3.14.6,<3.15; BasedPyright >=1.39.9 for real verify",
+    "cpu_count": 12,
+    "scripts": {
+      "python_boundary.py": {
+        "path": "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+        "sha256": "3b4d262dbbc628559b1b58b035c4b9f743fb231145a2937db3ddd25362c22ff3",
+        "bytes": 19114
+      }
+    },
+    "workspace_sources_at_measurement": {
+      "python_runtime.rs": {
+        "path": "/home/arthur/Code/cott/src/python_runtime.rs",
+        "sha256": "4243c83d3aae1c47fc4ea629d3080361603f3d783ac017b06cba3d0bc0425067",
+        "bytes": 105131
+      },
+      "python_emit.rs": {
+        "path": "/home/arthur/Code/cott/src/python_emit.rs",
+        "sha256": "fab30bfab7f72cb0a8c0939dd2f662b0b9e0a6f33f758c5a70d9fbbedc96ff97",
+        "bytes": 271021
+      }
+    },
+    "source_identity_note": "Measured runtime bytes/compiler-export are recorded per row; workspace sources may differ from an older compiled baseline.",
+    "settings": {
+      "cott": "/home/arthur/Code/cott/target/boundary-baseline/cott",
+      "type_checker": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+      "component_runtime": null,
+      "label": "supported-facade-reverse-control-before",
+      "sizes": [
+        4
+      ],
+      "depths": [
+        1
+      ],
+      "modes": [
+        "test-only"
+      ],
+      "repeat": 9,
+      "loops": 200,
+      "profile": false
+    },
+    "model": null,
+    "generation": "not run: authored fixed-algorithm binding, no model required",
+    "compiler": {
+      "path": "/home/arthur/Code/cott/target/boundary-baseline/cott",
+      "sha256": "3399886dd72649d473315311f9001868357755cc41f36b86d5a7aa6cc5ad6127",
+      "bytes": 96844968
+    },
+    "compiler_version": {
+      "argv": [
+        "/home/arthur/Code/cott/target/boundary-baseline/cott",
+        "--version"
+      ],
+      "returncode": 0,
+      "seconds": 0.003116991,
+      "stdout": "cott 1.0.0\n",
+      "stderr": ""
+    },
+    "type_checker_version": {
+      "argv": [
+        "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+        "--version"
+      ],
+      "returncode": 0,
+      "seconds": 0.29921759,
+      "stdout": "basedpyright 1.39.9\nbased on pyright 1.1.411\n",
+      "stderr": ""
+    }
+  },
+  "limits": [
+    "Synthetic identity algorithm, not application throughput or developer productivity.",
+    "Direct-checked reuses Cott value validators and identical predicates; no provenance guarantee.",
+    "Cold process includes startup/import/input construction; first-call is reported separately.",
+    "Warm excludes correctness/profile/tracemalloc; fixed hash seed 0, sequential processes.",
+    "tracemalloc peak/retained is one untimed call; excludes native allocations/RSS and total allocation count.",
+    "test-only context toggle is for measurement only, never runner observation/certification evidence."
+  ],
+  "tool_costs": [
+    {
+      "mode": "test-only",
+      "depth": 1,
+      "sources": {
+        "src/bench.cott": "8a9d18510475442a965d0dca93231ccbd150aa75e83baa3e073664fefdbb9bac",
+        "python/cott_bindings/algorithm.py": "3d5554a0ea2fe2252b2b73dc04c8ae3ae36fdbdd8ff35ba016dddb3c7a7ea9f1",
+        "python/pyproject.toml": "c71852f14a37ce9e59c5043d92df1da14bd583313222bb0b7635bc5b1887bb18",
+        "cott.toml": "057a599a8cb316efe581e876b829a22cc440f64c39c0f8aa7e27b54e364d674a"
+      },
+      "generate": {
+        "status": "not-run",
+        "model": null
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/boundary-baseline/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1"
+        ],
+        "returncode": 0,
+        "seconds": 0.235380898,
+        "stdout": "generated/python\n",
+        "stderr": ""
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/boundary-baseline/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1"
+        ],
+        "returncode": 0,
+        "seconds": 8.150973929,
+        "stdout": "verified generated/python\nsemantic coverage: observed=2 trust_declaration=0 unknown=0 unobserved=0\nsemantic coverage policy: selected=0 passed=true; passing policy permits the recorded evidence and is not proof of correctness\nsemantic coverage selection: none; no clause is policy-gated; recorded observations remain independent of selection\nbehavioral evidence: observed counts clause observations, not test cases or exhaustive correctness; trust_declaration, unknown and unobserved are not successful observations\nrelease readiness: not established by verification alone; deployment additionally checks current inputs, artifacts, resolution and project policy\n",
+        "stderr": ""
+      },
+      "snapshot": {
+        "current": "sha256:2df15012d9eb415257684940f8c0832bdced67951121bfe34e0d5c5dfe013589",
+        "last_verified": "sha256:2df15012d9eb415257684940f8c0832bdced67951121bfe34e0d5c5dfe013589",
+        "tools": {
+          "basedpyright": {
+            "content_hash": "sha256:ddee9f0df83d56c558487573c4fa6adc7c41b429442de3a387850266f42b2d13",
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "version": "1.39.9"
+          },
+          "compiler": {
+            "content_hash": "sha256:3399886dd72649d473315311f9001868357755cc41f36b86d5a7aa6cc5ad6127",
+            "executable": "/home/arthur/Code/cott/target/boundary-baseline/cott",
+            "version": "1.0.0"
+          },
+          "cott_intent": {
+            "hashes": {
+              "bench.echo": "sha256:a6c666bb964f0b3ad60929a198a4bbe7042e34b2720233a5d540bd1142803079"
+            },
+            "version": 1
+          },
+          "python": {
+            "cache_tag": "cpython-314",
+            "content_hash": "sha256:2f7fff382c9d335d6d63f134b55cb8ced9d0b2e1d47e6f210ad3f059adfa71c1",
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "implementation": "cpython",
+            "machine": "x86_64",
+            "os": "linux",
+            "platform": "linux-x86_64",
+            "version": "3.14.6"
+          },
+          "runtime": {
+            "abi": "7",
+            "version": "1.0.0"
+          }
+        },
+        "generation_id": "sha256:bc8f3f674e150cba60479d4d7e59b65e3cac763da64bf86a07011a2e943151fe"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "direct-unchecked",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "none",
+      "raw": [
+        {
+          "setup_ns": 191280416,
+          "first_call_ns": 241,
+          "warm_ns_per_call": 18.385,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415634963,
+          "cold": {
+            "setup_ns": 191242525,
+            "first_call_ns": 270,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 189791616,
+          "first_call_ns": 221,
+          "warm_ns_per_call": 22.89,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41195092,
+          "cold": {
+            "setup_ns": 191017102,
+            "first_call_ns": 261,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191169157,
+          "first_call_ns": 250,
+          "warm_ns_per_call": 17.635,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.416349602,
+          "cold": {
+            "setup_ns": 190974342,
+            "first_call_ns": 281,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191408285,
+          "first_call_ns": 200,
+          "warm_ns_per_call": 20.585,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41410751,
+          "cold": {
+            "setup_ns": 192658237,
+            "first_call_ns": 231,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 196861062,
+          "first_call_ns": 240,
+          "warm_ns_per_call": 18.635,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413606612,
+          "cold": {
+            "setup_ns": 191583063,
+            "first_call_ns": 210,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192875144,
+          "first_call_ns": 220,
+          "warm_ns_per_call": 21.39,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415449976,
+          "cold": {
+            "setup_ns": 191751920,
+            "first_call_ns": 220,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191411181,
+          "first_call_ns": 301,
+          "warm_ns_per_call": 18.085,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414736499,
+          "cold": {
+            "setup_ns": 191152656,
+            "first_call_ns": 291,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191725189,
+          "first_call_ns": 270,
+          "warm_ns_per_call": 19.035,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41471011,
+          "cold": {
+            "setup_ns": 192556237,
+            "first_call_ns": 300,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191792095,
+          "first_call_ns": 210,
+          "warm_ns_per_call": 18.085,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414892071,
+          "cold": {
+            "setup_ns": 191345337,
+            "first_call_ns": 431,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.415634963,
+            0.41195092,
+            0.416349602,
+            0.41410751,
+            0.413606612,
+            0.415449976,
+            0.414736499,
+            0.41471011,
+            0.414892071
+          ],
+          "median": 0.414736499,
+          "min": 0.41195092,
+          "max": 0.416349602,
+          "stdev": 0.0012853795509749364
+        },
+        "setup_ns": {
+          "samples": [
+            191280416,
+            189791616,
+            191169157,
+            191408285,
+            196861062,
+            192875144,
+            191411181,
+            191725189,
+            191792095
+          ],
+          "median": 191411181,
+          "min": 189791616,
+          "max": 196861062,
+          "stdev": 1977545.0912446978
+        },
+        "first_call_ns": {
+          "samples": [
+            241,
+            221,
+            250,
+            200,
+            240,
+            220,
+            301,
+            270,
+            210
+          ],
+          "median": 240,
+          "min": 200,
+          "max": 301,
+          "stdev": 31.57838571625289
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            18.385,
+            22.89,
+            17.635,
+            20.585,
+            18.635,
+            21.39,
+            18.085,
+            19.035,
+            18.085
+          ],
+          "median": 18.635,
+          "min": 17.635,
+          "max": 22.89,
+          "stdev": 1.7980906153781877
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0.0
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    },
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "direct-checked",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "none",
+      "raw": [
+        {
+          "setup_ns": 191104697,
+          "first_call_ns": 48731,
+          "warm_ns_per_call": 14082.935,
+          "loops": 200,
+          "traced_peak_bytes": 2252,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.411434733,
+          "cold": {
+            "setup_ns": 190616131,
+            "first_call_ns": 48171,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190899472,
+          "first_call_ns": 47990,
+          "warm_ns_per_call": 13993.82,
+          "loops": 200,
+          "traced_peak_bytes": 1996,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415172406,
+          "cold": {
+            "setup_ns": 191816220,
+            "first_call_ns": 49512,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192936309,
+          "first_call_ns": 48510,
+          "warm_ns_per_call": 13957.805,
+          "loops": 200,
+          "traced_peak_bytes": 2252,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415327146,
+          "cold": {
+            "setup_ns": 192009311,
+            "first_call_ns": 48471,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192307259,
+          "first_call_ns": 48591,
+          "warm_ns_per_call": 14247.395,
+          "loops": 200,
+          "traced_peak_bytes": 1996,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.436174949,
+          "cold": {
+            "setup_ns": 191729347,
+            "first_call_ns": 49553,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190991074,
+          "first_call_ns": 47650,
+          "warm_ns_per_call": 14152.32,
+          "loops": 200,
+          "traced_peak_bytes": 1996,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.412910739,
+          "cold": {
+            "setup_ns": 191322805,
+            "first_call_ns": 47519,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191936295,
+          "first_call_ns": 47839,
+          "warm_ns_per_call": 13806.27,
+          "loops": 200,
+          "traced_peak_bytes": 1996,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413138325,
+          "cold": {
+            "setup_ns": 190772965,
+            "first_call_ns": 47529,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191428623,
+          "first_call_ns": 50305,
+          "warm_ns_per_call": 13972.23,
+          "loops": 200,
+          "traced_peak_bytes": 2252,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414165579,
+          "cold": {
+            "setup_ns": 191383780,
+            "first_call_ns": 58730,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191774301,
+          "first_call_ns": 51016,
+          "warm_ns_per_call": 14066.16,
+          "loops": 200,
+          "traced_peak_bytes": 1996,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41790152,
+          "cold": {
+            "setup_ns": 193168613,
+            "first_call_ns": 51025,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190916825,
+          "first_call_ns": 50184,
+          "warm_ns_per_call": 14165.395,
+          "loops": 200,
+          "traced_peak_bytes": 2211,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413393713,
+          "cold": {
+            "setup_ns": 191224791,
+            "first_call_ns": 56346,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.411434733,
+            0.415172406,
+            0.415327146,
+            0.436174949,
+            0.412910739,
+            0.413138325,
+            0.414165579,
+            0.41790152,
+            0.413393713
+          ],
+          "median": 0.414165579,
+          "min": 0.411434733,
+          "max": 0.436174949,
+          "stdev": 0.007558157314179822
+        },
+        "setup_ns": {
+          "samples": [
+            191104697,
+            190899472,
+            192936309,
+            192307259,
+            190991074,
+            191936295,
+            191428623,
+            191774301,
+            190916825
+          ],
+          "median": 191428623,
+          "min": 190899472,
+          "max": 192936309,
+          "stdev": 709853.6281640705
+        },
+        "first_call_ns": {
+          "samples": [
+            48731,
+            47990,
+            48510,
+            48591,
+            47650,
+            47839,
+            50305,
+            51016,
+            50184
+          ],
+          "median": 48591,
+          "min": 47650,
+          "max": 51016,
+          "stdev": 1216.3284004650134
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            14082.935,
+            13993.82,
+            13957.805,
+            14247.395,
+            14152.32,
+            13806.27,
+            13972.23,
+            14066.16,
+            14165.395
+          ],
+          "median": 14066.16,
+          "min": 13806.27,
+          "max": 14247.395,
+          "stdev": 132.85380047254952
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            2252,
+            1996,
+            2252,
+            1996,
+            1996,
+            1996,
+            2252,
+            1996,
+            2211
+          ],
+          "median": 1996,
+          "min": 1996,
+          "max": 2252,
+          "stdev": 130.12856890185355
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "median": 40,
+          "min": 40,
+          "max": 40,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    },
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "facade",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "authenticated Cott facade",
+      "raw": [
+        {
+          "setup_ns": 192222771,
+          "first_call_ns": 1343007,
+          "warm_ns_per_call": 31987.235,
+          "loops": 200,
+          "traced_peak_bytes": 2492,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.417366147,
+          "cold": {
+            "setup_ns": 192446621,
+            "first_call_ns": 1344829,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191800490,
+          "first_call_ns": 1337045,
+          "warm_ns_per_call": 31656.965,
+          "loops": 200,
+          "traced_peak_bytes": 2492,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.416480748,
+          "cold": {
+            "setup_ns": 192663828,
+            "first_call_ns": 1338939,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192545316,
+          "first_call_ns": 1346362,
+          "warm_ns_per_call": 32766.495,
+          "loops": 200,
+          "traced_peak_bytes": 2236,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415619644,
+          "cold": {
+            "setup_ns": 191731240,
+            "first_call_ns": 1348787,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191634629,
+          "first_call_ns": 1322528,
+          "warm_ns_per_call": 32163.465,
+          "loops": 200,
+          "traced_peak_bytes": 2332,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.417155342,
+          "cold": {
+            "setup_ns": 192693714,
+            "first_call_ns": 1360609,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191869740,
+          "first_call_ns": 1334590,
+          "warm_ns_per_call": 31590.64,
+          "loops": 200,
+          "traced_peak_bytes": 2236,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.417503173,
+          "cold": {
+            "setup_ns": 192618382,
+            "first_call_ns": 1357404,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192493609,
+          "first_call_ns": 1342696,
+          "warm_ns_per_call": 32799.51,
+          "loops": 200,
+          "traced_peak_bytes": 2236,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.4160019,
+          "cold": {
+            "setup_ns": 192275249,
+            "first_call_ns": 1337777,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192207413,
+          "first_call_ns": 1320714,
+          "warm_ns_per_call": 32058.865,
+          "loops": 200,
+          "traced_peak_bytes": 2492,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41766703,
+          "cold": {
+            "setup_ns": 192351142,
+            "first_call_ns": 1349870,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192328329,
+          "first_call_ns": 1334230,
+          "warm_ns_per_call": 32929.1,
+          "loops": 200,
+          "traced_peak_bytes": 2492,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415949893,
+          "cold": {
+            "setup_ns": 191880941,
+            "first_call_ns": 1325464,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192289356,
+          "first_call_ns": 1351051,
+          "warm_ns_per_call": 31748.54,
+          "loops": 200,
+          "traced_peak_bytes": 2236,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": false
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41658342,
+          "cold": {
+            "setup_ns": 192271783,
+            "first_call_ns": 1336995,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.417366147,
+            0.416480748,
+            0.415619644,
+            0.417155342,
+            0.417503173,
+            0.4160019,
+            0.41766703,
+            0.415949893,
+            0.41658342
+          ],
+          "median": 0.41658342,
+          "min": 0.415619644,
+          "max": 0.41766703,
+          "stdev": 0.0007508390975843287
+        },
+        "setup_ns": {
+          "samples": [
+            192222771,
+            191800490,
+            192545316,
+            191634629,
+            191869740,
+            192493609,
+            192207413,
+            192328329,
+            192289356
+          ],
+          "median": 192222771,
+          "min": 191634629,
+          "max": 192545316,
+          "stdev": 316281.6156830983
+        },
+        "first_call_ns": {
+          "samples": [
+            1343007,
+            1337045,
+            1346362,
+            1322528,
+            1334590,
+            1342696,
+            1320714,
+            1334230,
+            1351051
+          ],
+          "median": 1337045,
+          "min": 1320714,
+          "max": 1351051,
+          "stdev": 10257.281767115497
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            31987.235,
+            31656.965,
+            32766.495,
+            32163.465,
+            31590.64,
+            32799.51,
+            32058.865,
+            32929.1,
+            31748.54
+          ],
+          "median": 32058.865,
+          "min": 31590.64,
+          "max": 32929.1,
+          "stdev": 518.0936393913532
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            2492,
+            2492,
+            2236,
+            2332,
+            2236,
+            2236,
+            2492,
+            2492,
+            2236
+          ],
+          "median": 2332,
+          "min": 2236,
+          "max": 2492,
+          "stdev": 128.44367550711783
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "median": 40,
+          "min": 40,
+          "max": 40,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    },
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "direct-unchecked",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "none",
+      "raw": [
+        {
+          "setup_ns": 191847368,
+          "first_call_ns": 200,
+          "warm_ns_per_call": 18.135,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.412568557,
+          "cold": {
+            "setup_ns": 190995511,
+            "first_call_ns": 221,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 194405230,
+          "first_call_ns": 211,
+          "warm_ns_per_call": 23.69,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414200966,
+          "cold": {
+            "setup_ns": 191474379,
+            "first_call_ns": 240,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192017076,
+          "first_call_ns": 200,
+          "warm_ns_per_call": 20.44,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414296435,
+          "cold": {
+            "setup_ns": 191910727,
+            "first_call_ns": 210,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191550352,
+          "first_call_ns": 270,
+          "warm_ns_per_call": 18.335,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.418384825,
+          "cold": {
+            "setup_ns": 193354873,
+            "first_call_ns": 200,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191008767,
+          "first_call_ns": 221,
+          "warm_ns_per_call": 17.83,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.417372309,
+          "cold": {
+            "setup_ns": 193418362,
+            "first_call_ns": 260,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192037634,
+          "first_call_ns": 221,
+          "warm_ns_per_call": 18.485,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.411498883,
+          "cold": {
+            "setup_ns": 190020225,
+            "first_call_ns": 190,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191105107,
+          "first_call_ns": 291,
+          "warm_ns_per_call": 19.49,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415635503,
+          "cold": {
+            "setup_ns": 191766196,
+            "first_call_ns": 241,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190806137,
+          "first_call_ns": 231,
+          "warm_ns_per_call": 19.54,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41614557,
+          "cold": {
+            "setup_ns": 192644481,
+            "first_call_ns": 191,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190971647,
+          "first_call_ns": 211,
+          "warm_ns_per_call": 18.385,
+          "loops": 200,
+          "traced_peak_bytes": 0,
+          "traced_retained_bytes": 0,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": null
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413772182,
+          "cold": {
+            "setup_ns": 191668893,
+            "first_call_ns": 211,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.412568557,
+            0.414200966,
+            0.414296435,
+            0.418384825,
+            0.417372309,
+            0.411498883,
+            0.415635503,
+            0.41614557,
+            0.413772182
+          ],
+          "median": 0.414296435,
+          "min": 0.411498883,
+          "max": 0.418384825,
+          "stdev": 0.0022212397677755466
+        },
+        "setup_ns": {
+          "samples": [
+            191847368,
+            194405230,
+            192017076,
+            191550352,
+            191008767,
+            192037634,
+            191105107,
+            190806137,
+            190971647
+          ],
+          "median": 191550352,
+          "min": 190806137,
+          "max": 194405230,
+          "stdev": 1102025.0199856828
+        },
+        "first_call_ns": {
+          "samples": [
+            200,
+            211,
+            200,
+            270,
+            221,
+            221,
+            291,
+            231,
+            211
+          ],
+          "median": 221,
+          "min": 200,
+          "max": 291,
+          "stdev": 31.591577639899178
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            18.135,
+            23.69,
+            20.44,
+            18.335,
+            17.83,
+            18.485,
+            19.49,
+            19.54,
+            18.385
+          ],
+          "median": 18.485,
+          "min": 17.83,
+          "max": 23.69,
+          "stdev": 1.8225017146768343
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0.0
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    },
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "direct-checked",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "none",
+      "raw": [
+        {
+          "setup_ns": 191241002,
+          "first_call_ns": 72746,
+          "warm_ns_per_call": 21465.67,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415487517,
+          "cold": {
+            "setup_ns": 191846636,
+            "first_call_ns": 73788,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191684894,
+          "first_call_ns": 72676,
+          "warm_ns_per_call": 21835.515,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414812983,
+          "cold": {
+            "setup_ns": 191912520,
+            "first_call_ns": 74590,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191875992,
+          "first_call_ns": 77034,
+          "warm_ns_per_call": 21630.38,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.411836756,
+          "cold": {
+            "setup_ns": 190788925,
+            "first_call_ns": 72095,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190861500,
+          "first_call_ns": 73067,
+          "warm_ns_per_call": 21968.665,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.412984697,
+          "cold": {
+            "setup_ns": 191401452,
+            "first_call_ns": 76363,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 193226953,
+          "first_call_ns": 75191,
+          "warm_ns_per_call": 21394.89,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415033496,
+          "cold": {
+            "setup_ns": 192068301,
+            "first_call_ns": 73637,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191988793,
+          "first_call_ns": 74519,
+          "warm_ns_per_call": 21435.965,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.417708418,
+          "cold": {
+            "setup_ns": 193243815,
+            "first_call_ns": 75601,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 190627562,
+          "first_call_ns": 74089,
+          "warm_ns_per_call": 21543.965,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.412913474,
+          "cold": {
+            "setup_ns": 190933987,
+            "first_call_ns": 73417,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191225714,
+          "first_call_ns": 73037,
+          "warm_ns_per_call": 22269.025,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414596407,
+          "cold": {
+            "setup_ns": 192792198,
+            "first_call_ns": 75111,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 195557770,
+          "first_call_ns": 74740,
+          "warm_ns_per_call": 21741.49,
+          "loops": 200,
+          "traced_peak_bytes": 2644,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.412450827,
+          "cold": {
+            "setup_ns": 190377784,
+            "first_call_ns": 76494,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.415487517,
+            0.414812983,
+            0.411836756,
+            0.412984697,
+            0.415033496,
+            0.417708418,
+            0.412913474,
+            0.414596407,
+            0.412450827
+          ],
+          "median": 0.414596407,
+          "min": 0.411836756,
+          "max": 0.417708418,
+          "stdev": 0.0018361260493398232
+        },
+        "setup_ns": {
+          "samples": [
+            191241002,
+            191684894,
+            191875992,
+            190861500,
+            193226953,
+            191988793,
+            190627562,
+            191225714,
+            195557770
+          ],
+          "median": 191684894,
+          "min": 190627562,
+          "max": 195557770,
+          "stdev": 1525776.2552573672
+        },
+        "first_call_ns": {
+          "samples": [
+            72746,
+            72676,
+            77034,
+            73067,
+            75191,
+            74519,
+            74089,
+            73037,
+            74740
+          ],
+          "median": 74089,
+          "min": 72676,
+          "max": 77034,
+          "stdev": 1433.4254815340457
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            21465.67,
+            21835.515,
+            21630.38,
+            21968.665,
+            21394.89,
+            21435.965,
+            21543.965,
+            22269.025,
+            21741.49
+          ],
+          "median": 21630.38,
+          "min": 21394.89,
+          "max": 22269.025,
+          "stdev": 287.8680087924177
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            2644,
+            2644,
+            2644,
+            2644,
+            2644,
+            2644,
+            2644,
+            2644,
+            2644
+          ],
+          "median": 2644,
+          "min": 2644,
+          "max": 2644,
+          "stdev": 0.0
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "median": 40,
+          "min": 40,
+          "max": 40,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    },
+    {
+      "project": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1",
+      "runtime": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python",
+      "arm": "facade",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "loops": 200,
+      "profile": false,
+      "input_sha256": "566435cda2ad7aae22d0ee9e3887390b2b486ca5f6baa73e9bfd6a90a1c352c3",
+      "provenance": "authenticated Cott facade",
+      "raw": [
+        {
+          "setup_ns": 191638196,
+          "first_call_ns": 1366530,
+          "warm_ns_per_call": 53156.6,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.4163648,
+          "cold": {
+            "setup_ns": 191476933,
+            "first_call_ns": 1372752,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191931054,
+          "first_call_ns": 1371841,
+          "warm_ns_per_call": 52806.695,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415917082,
+          "cold": {
+            "setup_ns": 192132321,
+            "first_call_ns": 1369206,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192509849,
+          "first_call_ns": 1394633,
+          "warm_ns_per_call": 53338.34,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.416175876,
+          "cold": {
+            "setup_ns": 191898654,
+            "first_call_ns": 1374335,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191780442,
+          "first_call_ns": 1369988,
+          "warm_ns_per_call": 52988.985,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.41913975,
+          "cold": {
+            "setup_ns": 193973431,
+            "first_call_ns": 1389864,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192108908,
+          "first_call_ns": 1382380,
+          "warm_ns_per_call": 53520.385,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.415325963,
+          "cold": {
+            "setup_ns": 191805329,
+            "first_call_ns": 1372702,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191745376,
+          "first_call_ns": 1379485,
+          "warm_ns_per_call": 53746.755,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.416933435,
+          "cold": {
+            "setup_ns": 192851891,
+            "first_call_ns": 1409481,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191362539,
+          "first_call_ns": 1354819,
+          "warm_ns_per_call": 53408.875,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413523166,
+          "cold": {
+            "setup_ns": 191160652,
+            "first_call_ns": 1371150,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 191536796,
+          "first_call_ns": 1379004,
+          "warm_ns_per_call": 54872.615,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.414211045,
+          "cold": {
+            "setup_ns": 191505678,
+            "first_call_ns": 1389163,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        },
+        {
+          "setup_ns": 192209256,
+          "first_call_ns": 1387580,
+          "warm_ns_per_call": 54578.365,
+          "loops": 200,
+          "traced_peak_bytes": 2884,
+          "traced_retained_bytes": 40,
+          "correctness": {
+            "valid_equal": true,
+            "invalid_rejected": true
+          },
+          "profile": [],
+          "interpreter": {
+            "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "version": "3.14.6 (main, Aug  4 2026, 18:27:20) [Clang 22.1.3 ]",
+            "cache_tag": "cpython-314"
+          },
+          "cold_process_seconds": 0.413714705,
+          "cold": {
+            "setup_ns": 191089568,
+            "first_call_ns": 1382821,
+            "correctness": {
+              "valid_equal": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "cold_process_seconds": {
+          "samples": [
+            0.4163648,
+            0.415917082,
+            0.416175876,
+            0.41913975,
+            0.415325963,
+            0.416933435,
+            0.413523166,
+            0.414211045,
+            0.413714705
+          ],
+          "median": 0.415917082,
+          "min": 0.413523166,
+          "max": 0.41913975,
+          "stdev": 0.001771499116836242
+        },
+        "setup_ns": {
+          "samples": [
+            191638196,
+            191931054,
+            192509849,
+            191780442,
+            192108908,
+            191745376,
+            191362539,
+            191536796,
+            192209256
+          ],
+          "median": 191780442,
+          "min": 191362539,
+          "max": 192509849,
+          "stdev": 359013.58822229836
+        },
+        "first_call_ns": {
+          "samples": [
+            1366530,
+            1371841,
+            1394633,
+            1369988,
+            1382380,
+            1379485,
+            1354819,
+            1379004,
+            1387580
+          ],
+          "median": 1379004,
+          "min": 1354819,
+          "max": 1394633,
+          "stdev": 11907.70918821547
+        },
+        "warm_ns_per_call": {
+          "samples": [
+            53156.6,
+            52806.695,
+            53338.34,
+            52988.985,
+            53520.385,
+            53746.755,
+            53408.875,
+            54872.615,
+            54578.365
+          ],
+          "median": 53408.875,
+          "min": 52806.695,
+          "max": 54872.615,
+          "stdev": 699.004519630019
+        },
+        "traced_peak_bytes": {
+          "samples": [
+            2884,
+            2884,
+            2884,
+            2884,
+            2884,
+            2884,
+            2884,
+            2884,
+            2884
+          ],
+          "median": 2884,
+          "min": 2884,
+          "max": 2884,
+          "stdev": 0.0
+        },
+        "traced_retained_bytes": {
+          "samples": [
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "median": 40,
+          "min": 40,
+          "max": 40,
+          "stdev": 0.0
+        }
+      },
+      "runtime_identity": {
+        "path": "/tmp/cott-boundary-benchmark-6vbfxj23/test-only-1/generated/python/cott_runtime/__init__.py",
+        "sha256": "4b4e462bc0d742ba703a144a2c26a36984d3c613628f6d56a1793c5b90bd6013",
+        "bytes": 110425,
+        "compiler_export": null,
+        "package_bytes": 110425
+      }
+    }
+  ],
+  "blockers": [],
+  "status": "measured"
+}

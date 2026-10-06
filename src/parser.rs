@@ -58,8 +58,15 @@ impl Parser {
         if self.at(&kind) {
             Some(self.bump())
         } else {
-            let s = self.span_here();
-            self.error(message, s);
+            let mut diagnostic = Diagnostic::new(message, self.span_here());
+            diagnostic.expected = Some(format!("{kind:?}"));
+            diagnostic.actual = Some(format!("{:?}", self.current().kind));
+            diagnostic.reason =
+                Some("the current token does not match the required grammar token".to_owned());
+            diagnostic
+                .help
+                .push("Correct the token at the highlighted Cott source location.".to_owned());
+            self.errors.push(diagnostic);
             None
         }
     }
@@ -3693,6 +3700,7 @@ fn intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
             "cyclic_by" => Intrinsic::CyclicBy,
             "permutation_by" => Intrinsic::PermutationBy,
             "dependency_ordered_by" => Intrinsic::DependencyOrderedBy,
+            "ready_ordered_by" => Intrinsic::ReadyOrderedBy,
             _ => return None,
         }),
         _ => None,

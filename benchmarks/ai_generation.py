@@ -14,7 +14,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from ai_generation_protocol import MODEL, REQUIREMENTS, THINKING, direct_prompt
+from ai_generation_protocol import REQUIREMENTS, direct_prompt
 from contract_value import (
     COMMAND_TIMEOUT,
     Infra,
@@ -30,7 +30,6 @@ from contract_value import (
 
 SOURCE = ROOT / "examples/complex/artifact-pipeline"
 PROTOCOL = Path(__file__).resolve().parent / "ai_generation_protocol.py"
-PROVIDER, _, MODEL_NAME = MODEL.partition("/")
 COTT_USAGE_REASON = (
     "Cott native OMP adapter provenance records durations and stream digests only; "
     "token usage is not retained and is not inferred from characters or direct-arm usage"
@@ -115,10 +114,10 @@ def copy_state(src, dst):
     if not copied:
         raise Infra(f"no config.yml or agent.db in {src}")
 
-def configure_state(omp, state):
+def configure_state(omp, state, model, thinking):
     sets = (
-        ("modelRoles", json.dumps({"default": f"{MODEL}:{THINKING}"}, separators=(",", ":"))),
-        ("defaultThinkingLevel", THINKING),
+        ("modelRoles", json.dumps({"default": f"{model}:{thinking}"}, separators=(",", ":"))),
+        ("defaultThinkingLevel", thinking),
         ("retry.modelFallback", "false"),
         ("prewalk.enabled", "false"),
         ("startup.checkUpdate", "false"),
@@ -186,7 +185,8 @@ def json_events(text):
             yield item
 
 
-def direct_usage(stdout):
+def direct_usage(stdout, model):
+    provider, _, model_name = model.partition("/")
     matched, unmatched = [], []
     for event in json_events(stdout):
         if event.get("type") != "message_end":
@@ -196,7 +196,7 @@ def direct_usage(stdout):
             continue
         usage = message.get("usage") if isinstance(message.get("usage"), dict) else None
         row = {"provider": message.get("provider"), "model": message.get("model"), "usage": usage}
-        if row["provider"] == PROVIDER and row["model"] == MODEL_NAME and usage is not None:
+        if row["provider"] == provider and row["model"] == model_name and usage is not None:
             matched.append(row)
         else:
             unmatched.append(row)
@@ -223,7 +223,7 @@ def direct_usage(stdout):
             break
         cost += float(item["total"])
     return {"ok": True, **totals, "cost_estimated": cost, "cost_note": "priced cost estimated not billing",
-            "provider": PROVIDER, "model": MODEL_NAME, "message_end_count": total,
+            "provider": provider, "model": model_name, "message_end_count": total,
             "reason": None, "evidence": None}
 
 
@@ -294,14 +294,25 @@ def skip_cmd(reason):
     return {**SKIPPED, "stderr": reason, "argv": []}
 
 
+def cott_generate_command(cott, project, model, jobs):
+    return [str(cott), "generate", "--agent", "omp", "--target", "python",
+            "--model", model, "-j", str(jobs), "--project", str(project)]
+
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--cott", required=True)
+    parser.add_argument("--model", required=True, help="verified provider/model ID; no default or fallback")
+    parser.add_argument("--thinking", required=True, choices=("off", "minimal", "low", "medium", "high", "xhigh", "max"))
     parser.add_argument("--agent-state")
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+    provider, separator, model_name = args.model.partition("/")
+    if not separator or not provider or not model_name or any(ch.isspace() for ch in args.model) or ":" in args.model:
+        parser.error("--model must be an explicit provider/model ID; pass thinking separately")
     if not 1 <= args.jobs <= 3:
         print("error: --jobs must be 1..3", file=sys.stderr)
         return 2
@@ -339,7 +350,7 @@ def main(argv=None):
     try:
         template = tmp / "omp-template"
         copy_state(user_state, template)
-        configure_state(omp, template)
+        configure_state(omp, template, args.model, args.thinking)
         for index in range(args.repeat):
             order = ("cott", "direct") if index % 2 == 0 else ("direct", "cott")
             pair = {"index": index, "order": list(order), "arms": {}}
@@ -354,8 +365,7 @@ def main(argv=None):
                     keep(arts, f"{prefix}/cott.toml", project / "cott.toml")
                     keep(arts, f"{prefix}/GENERATOR_RULES.txt", project / "GENERATOR_RULES.txt")
                     gen = run(
-                        [str(cott), "generate", "--agent", "omp", "--target", "python",
-                         "-j", str(args.jobs), "--project", str(project)],
+                        cott_generate_command(cott, project, args.model, args.jobs),
                         env=env, timeout=GEN_TIMEOUT,
                     )
                     facade = project / "generated/python/curriculum/artifact_pipeline.py"
@@ -395,6 +405,7 @@ def main(argv=None):
                          "--no-session", "--no-rules", "--no-skills", "--no-extensions",
                          "--no-lsp", "--no-pty", "--no-title", "--tools", "read,grep,glob,edit,write",
                          "--approval-mode", "yolo", "--max-time", f"{COMMAND_TIMEOUT}s",
+                         "--model", args.model,
                          "--config", str(overlay), f"@{prompt}"],
                         env=env, timeout=GEN_TIMEOUT,
                     )
@@ -406,7 +417,7 @@ def main(argv=None):
                     dump(arts, f"{prefix}/stdout.txt", tmp / f"t{index}-direct-stdout.txt", gen["stdout"])
                     dump(arts, f"{prefix}/stderr.txt", tmp / f"t{index}-direct-stderr.txt", gen["stderr"])
                     keep(arts, f"{prefix}/pipeline.py", pipeline)
-                    extra = {"agent_runs": None, "retries": None, "usage": direct_usage(gen["stdout"])}
+                    extra = {"agent_runs": None, "retries": None, "usage": direct_usage(gen["stdout"], args.model)}
                 if gen["infrastructure"]:
                     fatal.append(f"trial {index} {arm}: {clip(gen['stderr'])}")
                 elif arm == "direct" and gen["ok"] and not extra["usage"]["ok"]:
@@ -433,12 +444,12 @@ def main(argv=None):
             }
         zpath = output.with_suffix(".zip")
         results = {
-            "task": "artifact-pipeline", "model": MODEL, "thinking": THINKING,
-            "provider": PROVIDER, "model_name": MODEL_NAME,
+            "task": "artifact-pipeline", "model": args.model, "thinking": args.thinking,
+            "provider": provider, "model_name": model_name,
             "sample_size": n, "jobs": args.jobs, "caveats": list(CAVEATS),
             "model_settings": {
-                "modelRoles": {"default": f"{MODEL}:{THINKING}"},
-                "defaultThinkingLevel": THINKING,
+                "modelRoles": {"default": f"{args.model}:{args.thinking}"},
+                "defaultThinkingLevel": args.thinking,
                 "retry.modelFallback": False,
             },
             "identity": {

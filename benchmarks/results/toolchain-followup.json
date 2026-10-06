@@ -1,0 +1,775 @@
+{
+  "scope": "isolated tool preparation and supported facade measurement receipt; NOT Cott provenance",
+  "status": "completed",
+  "resolved_requirements": [
+    "R2",
+    "R5",
+    "R10",
+    "R11",
+    "R12"
+  ],
+  "isolated_root": "/home/arthur/Code/cott/target/facade-toolchain-followup",
+  "preservation": {
+    "system_python": "CPython 3.14.4 unchanged",
+    "global_install": false,
+    "sudo": false,
+    "user_configuration_modified": false,
+    "compiler_or_harness_changed_this_round": false,
+    "historical_component_and_blocked_results_preserved": true
+  },
+  "availability": {
+    "scope": "official distribution availability, not compiler certification",
+    "checked_at_utc": "2026-10-06T13:08:22.569576+00:00",
+    "probe_python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+    "request_timeout_seconds": 20,
+    "per_response_byte_limit": 8388608,
+    "requests": [
+      {
+        "label": "python.org-index",
+        "url": "https://www.python.org/ftp/python/",
+        "method": "GET",
+        "status": 200,
+        "response_sha256": "4c729d67a8f95d34c88e13c3269820c9f8720a98abf85b2eccd3672cbb188808",
+        "response_bytes": 33990,
+        "final_url": "https://www.python.org/ftp/python/",
+        "available_3_14_directories": [
+          "3.14.0",
+          "3.14.1",
+          "3.14.2",
+          "3.14.3",
+          "3.14.4",
+          "3.14.5",
+          "3.14.6",
+          "3.14.7",
+          "3.14.8"
+        ],
+        "matching_required_directories": [
+          "3.14.6",
+          "3.14.7",
+          "3.14.8"
+        ],
+        "seconds": 0.04945654099901731
+      },
+      {
+        "label": "python.org-3.14.6",
+        "url": "https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz",
+        "method": "HEAD",
+        "status": 200,
+        "response_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "response_bytes": 0,
+        "final_url": "https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz",
+        "seconds": 0.026516710999203497
+      },
+      {
+        "label": "pypi-uv",
+        "url": "https://pypi.org/pypi/uv/json",
+        "method": "GET",
+        "status": 200,
+        "response_sha256": "10903fed36902c6372534bad03b2820c8b3fd27501d193c83cb1eab89937e02f",
+        "response_bytes": 4951492,
+        "final_url": "https://pypi.org/pypi/uv/json",
+        "latest": "0.12.23",
+        "latest_stable_versions": [
+          "0.12.14",
+          "0.12.15",
+          "0.12.16",
+          "0.12.17",
+          "0.12.18",
+          "0.12.19",
+          "0.12.20",
+          "0.12.21",
+          "0.12.22",
+          "0.12.23"
+        ],
+        "seconds": 0.5391706789996533
+      },
+      {
+        "label": "pypi-basedpyright",
+        "url": "https://pypi.org/pypi/basedpyright/json",
+        "method": "GET",
+        "status": 200,
+        "response_sha256": "8e4ca9a5bc1860eba99807a258d072d2d6b27f11c699e0c5a32a478b175addaf",
+        "response_bytes": 192097,
+        "final_url": "https://pypi.org/pypi/basedpyright/json",
+        "latest": "1.40.2",
+        "latest_stable_versions": [
+          "1.39.4",
+          "1.39.5",
+          "1.39.6",
+          "1.39.7",
+          "1.39.8",
+          "1.39.9",
+          "1.39.10",
+          "1.40.0",
+          "1.40.1",
+          "1.40.2"
+        ],
+        "matching_required_versions": [
+          "1.39.9",
+          "1.39.10",
+          "1.40.0",
+          "1.40.1",
+          "1.40.2"
+        ],
+        "seconds": 0.06083110200052033
+      },
+      {
+        "label": "npm-basedpyright",
+        "url": "https://registry.npmjs.org/basedpyright",
+        "method": "GET",
+        "status": 200,
+        "response_sha256": "c110aa7725ca7036a2c525aab6fc17e11f4c2e53197e8fbdff4e7aa4960bd7e0",
+        "response_bytes": 3827592,
+        "final_url": "https://registry.npmjs.org/basedpyright",
+        "dist_tags": {
+          "latest": "1.40.2",
+          "canary": "1.40.1-2832ea0b8999645748d7b01ce2b89be71b4ab821"
+        },
+        "latest_stable_versions": [
+          "1.39.4",
+          "1.39.5",
+          "1.39.6",
+          "1.39.7",
+          "1.39.8",
+          "1.39.9",
+          "1.39.10",
+          "1.40.0",
+          "1.40.1",
+          "1.40.2"
+        ],
+        "matching_required_versions": [
+          "1.39.9",
+          "1.39.10",
+          "1.40.0",
+          "1.40.1",
+          "1.40.2"
+        ],
+        "seconds": 0.5639239850006561
+      }
+    ]
+  },
+  "uv_bootstrap": {
+    "source": "https://pypi.org/pypi/uv/json",
+    "version": "0.12.23",
+    "filename": "uv-0.12.23-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/e5/83/85a6c63c24905af4924fddb11a499b934913f59a134248367a1ef1a4716f/uv-0.12.23-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "565c6e2874dbeae86c02f3dea97255e878fec672659a73d4930c6b93fcab2fff",
+    "actual_sha256": "565c6e2874dbeae86c02f3dea97255e878fec672659a73d4930c6b93fcab2fff",
+    "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv"
+  },
+  "bootstrap_retry": {
+    "command": "python3 target/facade-toolchain-followup/install_uv.py",
+    "first_exit": 1,
+    "error": "AssertionError: rglob selected both uv package directory and uv executable",
+    "resolution": "Restricted selection to is_file; reused the same SHA-256-verified official wheel. No executable contents changed."
+  },
+  "tool_setup": {
+    "isolated_environment": {
+      "PATH": "/home/arthur/.pi/agent/bin:/home/arthur/development/flutter/bin:/home/arthur/.local/opt/jdk-17/bin:/home/arthur/Android/Sdk/cmdline-tools/latest/bin:/home/arthur/Android/Sdk/platform-tools:/home/arthur/Android/Sdk/emulator:/home/arthur/.nvm/versions/node/v24.21.0/bin:/home/arthur/.local/bin:/home/arthur/.bun/bin:/home/arthur/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+      "HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/home",
+      "LANG": "C.UTF-8",
+      "XDG_CACHE_HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache",
+      "UV_CACHE_DIR": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache/uv",
+      "UV_PYTHON_INSTALL_DIR": "/home/arthur/Code/cott/target/facade-toolchain-followup/python",
+      "UV_PYTHON_BIN_DIR": "/home/arthur/Code/cott/target/facade-toolchain-followup/bin",
+      "UV_TOOL_DIR": "/home/arthur/Code/cott/target/facade-toolchain-followup/tools",
+      "UV_TOOL_BIN_DIR": "/home/arthur/Code/cott/target/facade-toolchain-followup/tool-bin",
+      "UV_NO_CONFIG": "1",
+      "UV_LINK_MODE": "copy",
+      "UV_HTTP_TIMEOUT": "30",
+      "UV_HTTP_RETRIES": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "UV_DEFAULT_INDEX": "https://pypi.org/simple"
+    },
+    "commands": [
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv",
+          "--no-config",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "uv 0.12.23 (x86_64-unknown-linux-gnu)\n",
+        "stderr": "",
+        "seconds": 0.005247171000519302,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv",
+          "--no-config",
+          "--no-progress",
+          "-v",
+          "python",
+          "install",
+          "3.14.6",
+          "--no-bin"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "DEBUG uv 0.12.23 (x86_64-unknown-linux-gnu)\nDEBUG Using request connect timeout of 10s and read timeout of 30s\nDEBUG No installation found for request `3.14.6 (cpython-3.14.6-linux-x86_64-gnu)`\nDEBUG Found download `cpython-3.14.6-linux-x86_64-gnu` for request `3.14.6 (cpython-3.14.6-linux-x86_64-gnu)`\nDEBUG Downloading `https://releases.astral.sh/github/python-build-standalone/releases/download/20260804/cpython-3.14.6%2B20260804-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz`\nDEBUG Extracting `cpython-3.14.6-20260804-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz` to temporary location `/home/arthur/Code/cott/target/facade-toolchain-followup/python/.temp/.tmpM3A1Ir`\nDownloading cpython-3.14.6-linux-x86_64-gnu (download) (34.2MiB)\n Downloaded cpython-3.14.6-linux-x86_64-gnu (download)\nDEBUG Moving `/home/arthur/Code/cott/target/facade-toolchain-followup/python/.temp/.tmpM3A1Ir/python` to `python/cpython-3.14.6-linux-x86_64-gnu`\nDEBUG Created link `python/cpython-3.14-linux-x86_64-gnu` -> `python/cpython-3.14.6-linux-x86_64-gnu`\nInstalled Python 3.14.6 in 5.56s\n + cpython-3.14.6-linux-x86_64-gnu\n",
+        "seconds": 5.576782460999311,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv",
+          "--no-config",
+          "python",
+          "find",
+          "--managed-python",
+          "3.14.6"
+        ],
+        "returncode": 0,
+        "stdout": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14\n",
+        "stderr": "",
+        "seconds": 0.14606687000014063,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "Python 3.14.6\n",
+        "stderr": "",
+        "seconds": 0.0015844589997868752,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv",
+          "--no-config",
+          "venv",
+          "--python",
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/venv"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "Using CPython 3.14.6 interpreter at: python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14\nCreating virtual environment at: venv\n",
+        "seconds": 0.008234328000980895,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv",
+          "--no-config",
+          "--no-progress",
+          "pip",
+          "install",
+          "--python",
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/python",
+          "--index-url",
+          "https://pypi.org/simple",
+          "basedpyright==1.39.9"
+        ],
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "Using Python 3.14.6 environment at: venv\nResolved 2 packages in 122ms\nDownloading basedpyright (12.8MiB)\nDownloading nodejs-wheel-binaries (58.3MiB)\n Downloaded basedpyright\n Downloaded nodejs-wheel-binaries\nPrepared 2 packages in 6.59s\nInstalled 2 packages in 551ms\n + basedpyright==1.39.9\n + nodejs-wheel-binaries==24.19.0\n",
+        "seconds": 7.410748562999288,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout": "basedpyright 1.39.9\nbased on pyright 1.1.411\n",
+        "stderr": "",
+        "seconds": 0.36659671800043725,
+        "timeout_seconds": 180
+      },
+      {
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/python",
+          "-c",
+          "import sys,platform,importlib.metadata as m; print(sys.executable); print(platform.python_implementation(),platform.python_version()); print(\"basedpyright\",m.version(\"basedpyright\"))"
+        ],
+        "returncode": 0,
+        "stdout": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/python\nCPython 3.14.6\nbasedpyright 1.39.9\n",
+        "stderr": "",
+        "seconds": 0.26138833800177963,
+        "timeout_seconds": 180
+      }
+    ]
+  },
+  "package_sources": [
+    {
+      "name": "basedpyright",
+      "requested_version": "1.39.9",
+      "url": "https://pypi.org/pypi/basedpyright/1.39.9/json",
+      "timeout_seconds": 20,
+      "status": 200,
+      "version": "1.39.9",
+      "metadata_sha256": "0b60ada4503bdb2e0d82ff9e4e2fe25790cbc092f12a5b1801851316abde456e",
+      "compatible_files": [
+        {
+          "filename": "basedpyright-1.39.9-py3-none-any.whl",
+          "url": "https://files.pythonhosted.org/packages/2a/d4/e1fa108710d0498a18c77b1e13897f31eab47c69aa8cfe2d2a4df746541e/basedpyright-1.39.9-py3-none-any.whl",
+          "digests": {
+            "blake2b_256": "2ad4e1fa108710d0498a18c77b1e13897f31eab47c69aa8cfe2d2a4df746541e",
+            "md5": "c797953cdf6f15d201a09f84527c3f35",
+            "sha256": "6b0837b9eba972c71895167ab9b127e6afdbc17abc92312e3f8d15ca82a5611c"
+          },
+          "size": 13374276
+        }
+      ],
+      "seconds": 0.03818799399959971
+    },
+    {
+      "name": "nodejs-wheel-binaries",
+      "requested_version": "24.19.0",
+      "url": "https://pypi.org/pypi/nodejs-wheel-binaries/24.19.0/json",
+      "timeout_seconds": 20,
+      "status": 200,
+      "version": "24.19.0",
+      "metadata_sha256": "f1274cd4a340ad7e6ef2eb734d8297f82fe3c6ee80e5320b0d67609e8613dbf6",
+      "compatible_files": [
+        {
+          "filename": "nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_x86_64.whl",
+          "url": "https://files.pythonhosted.org/packages/f4/89/6631d0982353da1bb7bc00bb1988f702822c62b42634f57999ee53b5c337/nodejs_wheel_binaries-24.19.0-py2.py3-none-manylinux_2_28_x86_64.whl",
+          "digests": {
+            "blake2b_256": "f4896631d0982353da1bb7bc00bb1988f702822c62b42634f57999ee53b5c337",
+            "md5": "1761cc03a5a06214f218036bff3afc44",
+            "sha256": "4196a947bcc883f2003ab101762d729f3e99b5e86b75bd09151563403e2eceb8"
+          },
+          "size": 61123607
+        }
+      ],
+      "seconds": 0.21443371899840713
+    }
+  ],
+  "installed_packages": {
+    "argv": [
+      "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/python",
+      "-c",
+      "import importlib.metadata as m,json; print(json.dumps({n: {\"version\":m.version(n), \"installer\":m.distribution(n).read_text(\"INSTALLER\")} for n in (\"basedpyright\",\"nodejs-wheel-binaries\")}))"
+    ],
+    "returncode": 0,
+    "stdout": "{\"basedpyright\": {\"version\": \"1.39.9\", \"installer\": \"uv\"}, \"nodejs-wheel-binaries\": {\"version\": \"24.19.0\", \"installer\": \"uv\"}}\n",
+    "stderr": ""
+  },
+  "tool_paths": {
+    "python": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+    "venv_python": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/python",
+    "basedpyright": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+    "uv": "/home/arthur/Code/cott/target/facade-toolchain-followup/uv-wheel/uv-0.12.23.data/scripts/uv"
+  },
+  "measurement_commands": {
+    "smoke": {
+      "environment": {
+        "PATH": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin:/home/arthur/.pi/agent/bin:/home/arthur/development/flutter/bin:/home/arthur/.local/opt/jdk-17/bin:/home/arthur/Android/Sdk/cmdline-tools/latest/bin:/home/arthur/Android/Sdk/platform-tools:/home/arthur/Android/Sdk/emulator:/home/arthur/.nvm/versions/node/v24.21.0/bin:/home/arthur/.local/bin:/home/arthur/.bun/bin:/home/arthur/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+        "HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/home",
+        "XDG_CACHE_HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "commands": [
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/boundary-baseline/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/facade-smoke-before.json",
+            "--label",
+            "supported-smoke-before",
+            "--sizes",
+            "4",
+            "--depths",
+            "1",
+            "--repeat",
+            "1",
+            "--loops",
+            "1"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/target/facade-toolchain-followup/facade-smoke-before.json (3 rows)\n",
+          "stderr": "",
+          "seconds": 11.791797928999586
+        },
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/debug/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/facade-smoke-after.json",
+            "--label",
+            "supported-smoke-after",
+            "--sizes",
+            "4",
+            "--depths",
+            "1",
+            "--repeat",
+            "1",
+            "--loops",
+            "1"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/target/facade-toolchain-followup/facade-smoke-after.json (3 rows)\n",
+          "stderr": "",
+          "seconds": 11.572814438000933
+        }
+      ]
+    },
+    "main": {
+      "environment": {
+        "PATH": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin:/home/arthur/.pi/agent/bin:/home/arthur/development/flutter/bin:/home/arthur/.local/opt/jdk-17/bin:/home/arthur/Android/Sdk/cmdline-tools/latest/bin:/home/arthur/Android/Sdk/platform-tools:/home/arthur/Android/Sdk/emulator:/home/arthur/.nvm/versions/node/v24.21.0/bin:/home/arthur/.local/bin:/home/arthur/.bun/bin:/home/arthur/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+        "HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/home",
+        "XDG_CACHE_HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "commands": [
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/boundary-baseline/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/benchmarks/results/facade-supported-before.json",
+            "--label",
+            "supported-facade-before",
+            "--modes",
+            "boundary",
+            "test-only",
+            "off",
+            "--sizes",
+            "4",
+            "128",
+            "--depths",
+            "1",
+            "3",
+            "--repeat",
+            "7",
+            "--loops",
+            "80",
+            "--profile"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/benchmarks/results/facade-supported-before.json (48 rows)\n",
+          "stderr": "",
+          "seconds": 378.69739466600004,
+          "timeout_seconds": 600
+        },
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/debug/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/benchmarks/results/facade-supported-after.json",
+            "--label",
+            "supported-facade-after",
+            "--modes",
+            "boundary",
+            "test-only",
+            "off",
+            "--sizes",
+            "4",
+            "128",
+            "--depths",
+            "1",
+            "3",
+            "--repeat",
+            "7",
+            "--loops",
+            "80",
+            "--profile"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/benchmarks/results/facade-supported-after.json (48 rows)\n",
+          "stderr": "",
+          "seconds": 349.94436132300143,
+          "timeout_seconds": 600
+        }
+      ]
+    },
+    "reversed_control": {
+      "environment": {
+        "PATH": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin:/home/arthur/.pi/agent/bin:/home/arthur/development/flutter/bin:/home/arthur/.local/opt/jdk-17/bin:/home/arthur/Android/Sdk/cmdline-tools/latest/bin:/home/arthur/Android/Sdk/platform-tools:/home/arthur/Android/Sdk/emulator:/home/arthur/.nvm/versions/node/v24.21.0/bin:/home/arthur/.local/bin:/home/arthur/.bun/bin:/home/arthur/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+        "HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/home",
+        "XDG_CACHE_HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "commands": [
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/debug/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/benchmarks/results/facade-control-after.json",
+            "--label",
+            "supported-facade-reverse-control-after",
+            "--modes",
+            "test-only",
+            "--sizes",
+            "4",
+            "--depths",
+            "1",
+            "--repeat",
+            "9",
+            "--loops",
+            "200"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/benchmarks/results/facade-control-after.json (6 rows)\n",
+          "stderr": "",
+          "seconds": 54.136682063999615,
+          "timeout_seconds": 180
+        },
+        {
+          "argv": [
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+            "/home/arthur/Code/cott/benchmarks/python_boundary.py",
+            "--cott",
+            "/home/arthur/Code/cott/target/boundary-baseline/cott",
+            "--type-checker",
+            "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+            "--output",
+            "/home/arthur/Code/cott/benchmarks/results/facade-control-before.json",
+            "--label",
+            "supported-facade-reverse-control-before",
+            "--modes",
+            "test-only",
+            "--sizes",
+            "4",
+            "--depths",
+            "1",
+            "--repeat",
+            "9",
+            "--loops",
+            "200"
+          ],
+          "returncode": 0,
+          "stdout": "measured: /home/arthur/Code/cott/benchmarks/results/facade-control-before.json (6 rows)\n",
+          "stderr": "",
+          "seconds": 54.13361695099957,
+          "timeout_seconds": 180
+        }
+      ]
+    }
+  },
+  "result_files": [
+    "facade-supported-before.json",
+    "facade-supported-after.json",
+    "facade-supported-comparison.json",
+    "facade-control-before.json",
+    "facade-control-after.json",
+    "facade-control-comparison.json",
+    "abi-supported-before.json",
+    "abi-supported-after.json"
+  ],
+  "checks": {
+    "environment": {
+      "PATH": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin:/home/arthur/.pi/agent/bin:/home/arthur/development/flutter/bin:/home/arthur/.local/opt/jdk-17/bin:/home/arthur/Android/Sdk/cmdline-tools/latest/bin:/home/arthur/Android/Sdk/platform-tools:/home/arthur/Android/Sdk/emulator:/home/arthur/.nvm/versions/node/v24.21.0/bin:/home/arthur/.local/bin:/home/arthur/.bun/bin:/home/arthur/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+      "HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/home",
+      "XDG_CACHE_HOME": "/home/arthur/Code/cott/target/facade-toolchain-followup/cache",
+      "LANG": "C.UTF-8",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "COTT_BENCH_RUNTIME": "/tmp/cott-boundary-candidate-native",
+      "COTT_BENCH_COTT": "/home/arthur/Code/cott/target/debug/cott"
+    },
+    "commands": [
+      {
+        "label": "benchmark-tests-supported",
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "benchmarks",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "returncode": 0,
+        "seconds": 11.06571038400034,
+        "stdout_path": "/home/arthur/Code/cott/target/facade-toolchain-followup/benchmark-tests-supported.log",
+        "stderr": "test_cold_is_separate_from_warm_work (test_python_boundary.HarnessTests.test_cold_is_separate_from_warm_work) ... ok\ntest_comparison_rejects_mixed_scope_interpreter_and_harness (test_python_boundary.HarnessTests.test_comparison_rejects_mixed_scope_interpreter_and_harness) ... ok\ntest_emitted_predicates_match_direct_checker_without_claiming_provenance (test_python_boundary.HarnessTests.test_emitted_predicates_match_direct_checker_without_claiming_provenance) ... ok\ntest_failed_verify_never_runs_worker_or_claims_certificate (test_python_boundary.HarnessTests.test_failed_verify_never_runs_worker_or_claims_certificate) ... ok\ntest_fixture_uses_same_algorithm_and_real_interpreter (test_python_boundary.HarnessTests.test_fixture_uses_same_algorithm_and_real_interpreter) ... ok\ntest_generation_requires_explicit_model_and_disables_fallback (test_python_boundary.HarnessTests.test_generation_requires_explicit_model_and_disables_fallback) ... ok\ntest_native_worker_modes_nesting_correctness_and_memory (test_python_boundary.HarnessTests.test_native_worker_modes_nesting_correctness_and_memory) ... ok\ntest_scopes_limits_and_history_are_explicit (test_python_boundary.HarnessTests.test_scopes_limits_and_history_are_explicit) ... ok\ntest_summary_keeps_raw_and_variation (test_python_boundary.HarnessTests.test_summary_keeps_raw_and_variation) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 10.710s\n\nOK\n"
+      },
+      {
+        "label": "abi-supported-before",
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "tests/support/python_abi_cases.py",
+          "/tmp/cott-boundary-original-native"
+        ],
+        "returncode": 0,
+        "seconds": 0.3685261040009209,
+        "stdout_path": "/home/arthur/Code/cott/benchmarks/results/abi-supported-before.json",
+        "stderr": ""
+      },
+      {
+        "label": "abi-supported-after",
+        "argv": [
+          "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "tests/support/python_abi_cases.py",
+          "/tmp/cott-boundary-candidate-native"
+        ],
+        "returncode": 0,
+        "seconds": 0.36840103899885435,
+        "stdout_path": "/home/arthur/Code/cott/benchmarks/results/abi-supported-after.json",
+        "stderr": ""
+      },
+      {
+        "label": "abi-supported-cmp",
+        "argv": [
+          "cmp",
+          "benchmarks/results/abi-supported-before.json",
+          "benchmarks/results/abi-supported-after.json"
+        ],
+        "returncode": 0,
+        "seconds": 0.004023458999654395,
+        "stdout_path": "/home/arthur/Code/cott/target/facade-toolchain-followup/abi-supported-cmp.log",
+        "stderr": ""
+      },
+      {
+        "label": "diff-check",
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "returncode": 0,
+        "seconds": 0.013574153999798,
+        "stdout_path": "/home/arthur/Code/cott/target/facade-toolchain-followup/diff-check.log",
+        "stderr": ""
+      },
+      {
+        "label": "protected-paths",
+        "argv": [
+          "git",
+          "diff",
+          "--exit-code",
+          "--",
+          "schemas",
+          "examples",
+          "benchmarks/contract-value-results.json",
+          "benchmarks/ai-generation-results.json",
+          "benchmarks/maintenance-results.json"
+        ],
+        "returncode": 0,
+        "seconds": 0.0037655160012946,
+        "stdout_path": "/home/arthur/Code/cott/target/facade-toolchain-followup/protected-paths.log",
+        "stderr": ""
+      },
+      {
+        "label": "system-python-unchanged",
+        "argv": [
+          "/usr/bin/python3",
+          "--version"
+        ],
+        "returncode": 0,
+        "seconds": 0.0010459699988132343,
+        "stdout_path": "/home/arthur/Code/cott/target/facade-toolchain-followup/system-python-unchanged.log",
+        "stderr": ""
+      }
+    ]
+  },
+  "audit": {
+    "scope": "result consistency audit; not Cott certification evidence",
+    "status": "passed",
+    "protected_starting_files_unchanged": [
+      "Cargo.toml",
+      "architecture.md",
+      "benchmarks/ai_generation.py",
+      "benchmarks/ai_generation_protocol.py",
+      "benchmarks/compare_python_boundary.py",
+      "benchmarks/export_runtime.rs",
+      "benchmarks/python_boundary.py",
+      "benchmarks/results/abi-after.json",
+      "benchmarks/results/abi-before.json",
+      "benchmarks/results/boundary-after.json",
+      "benchmarks/results/boundary-before.json",
+      "benchmarks/results/boundary-comparison.json",
+      "benchmarks/results/facade-attempt.json",
+      "benchmarks/results/noise-followup-after.json",
+      "benchmarks/results/noise-followup-before.json",
+      "benchmarks/results/noise-followup-comparison.json",
+      "benchmarks/test_python_boundary.py",
+      "src/cli.rs",
+      "src/diagnostics.rs",
+      "src/intent.rs",
+      "src/lsp.rs",
+      "src/parser.rs",
+      "src/python_runtime.rs",
+      "tests/cli.rs",
+      "tests/lsp_protocol.rs",
+      "tests/python_benchmark.rs",
+      "tests/python_runtime.rs",
+      "tests/support/benchmark_parity.py",
+      "tests/support/lsp_protocol.py",
+      "tests/support/python_abi_cases.py"
+    ],
+    "counts": {
+      "real_emit_successes": 16,
+      "real_verify_successes": 16,
+      "failed_real_emit_or_verify": 0,
+      "main_rows": 96,
+      "main_facade_rows": 32,
+      "main_warm_samples": 672,
+      "main_facade_warm_samples": 224,
+      "main_facade_cold_samples": 224,
+      "supported_harness_tests": 9,
+      "supported_abi_identical_observations": 61,
+      "provider_calls": 0,
+      "generate_calls": 0
+    },
+    "assertions": [
+      "same supported interpreter and final harness on both sides",
+      "same authored algorithm, source and input hashes per fixture",
+      "all real emit/verify success, current equals last_verified, correct tool hashes and versions",
+      "all measured facade calls use authenticated loader without substitution",
+      "measured runtime hashes match prior compiler-owned original/optimized outputs",
+      "cold/warm valid inputs and expected malformed-input rejection preserved",
+      "no old component, blocked report, compiler, harness or schema rewritten"
+    ]
+  },
+  "previous_full_suite": {
+    "reference": "checks.json#checks",
+    "passed": 998,
+    "failed": 0,
+    "ignored": 103,
+    "rerun_this_round": false,
+    "reason": "Only tool provisioning, result files and documentation changed; compiler/harness bytes unchanged."
+  },
+  "generation": {
+    "requested_model": "gpt 6.1 sol",
+    "actual_provider_calls": 0,
+    "actual_generate_calls": 0,
+    "reason": "Fixed authored benchmark algorithm needs no model call; no alternative model used."
+  },
+  "limits": [
+    "Synthetic identity algorithm, not whole-application performance or natural-language correctness.",
+    "Direct arms carry no provenance; facade arms used real emit, explicit verify and the unchanged authenticated loader.",
+    "Cold includes new process/import/fixture setup/first call, not OS page-cache eviction.",
+    "Sequential unpaired samples; host scheduling not controlled. Range separation is not a significance test.",
+    "tracemalloc covers Python peak/retained allocations, not RSS/native bytes/total churn.",
+    "Old unsupported CPython 3.14.4 component results remain historical; never pooled with these supported CPython 3.14.6 facade results."
+  ],
+  "remaining_blockers_for_R2_R5": [],
+  "git_commit_or_push": false
+}

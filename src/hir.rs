@@ -1224,6 +1224,7 @@ pub enum HirIntrinsic {
     CyclicBy,
     PermutationBy,
     DependencyOrderedBy,
+    ReadyOrderedBy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4167,7 +4168,8 @@ impl<'a> OwnedLower<'a> {
                             | ast::Intrinsic::EndsWith
                             | ast::Intrinsic::Contains
                             | ast::Intrinsic::PermutationBy
-                            | ast::Intrinsic::DependencyOrderedBy => 2,
+                            | ast::Intrinsic::DependencyOrderedBy
+                            | ast::Intrinsic::ReadyOrderedBy => 2,
                             _ => 1,
                         };
                         (index < values).then(|| self.expr(module, argument, env))
@@ -4186,6 +4188,7 @@ impl<'a> OwnedLower<'a> {
                     ast::Intrinsic::CyclicBy => HirIntrinsic::CyclicBy,
                     ast::Intrinsic::PermutationBy => HirIntrinsic::PermutationBy,
                     ast::Intrinsic::DependencyOrderedBy => HirIntrinsic::DependencyOrderedBy,
+                    ast::Intrinsic::ReadyOrderedBy => HirIntrinsic::ReadyOrderedBy,
                 };
                 let graph = matches!(
                     intrinsic,
@@ -4193,6 +4196,7 @@ impl<'a> OwnedLower<'a> {
                         | HirIntrinsic::SelfDependencyBy
                         | HirIntrinsic::CyclicBy
                         | HirIntrinsic::DependencyOrderedBy
+                        | HirIntrinsic::ReadyOrderedBy
                 );
                 let exact_str_key = graph
                     || matches!(
@@ -4389,7 +4393,9 @@ impl<'a> OwnedLower<'a> {
                             && selector.is_some()
                             && dependencies.is_some() == graph
                     }
-                    HirIntrinsic::PermutationBy | HirIntrinsic::DependencyOrderedBy => {
+                    HirIntrinsic::PermutationBy
+                    | HirIntrinsic::DependencyOrderedBy
+                    | HirIntrinsic::ReadyOrderedBy => {
                         source_arguments.len() == kind.arity()
                             && arguments.len() == 2
                             && arguments[0].ty

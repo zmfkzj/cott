@@ -415,7 +415,7 @@ fn render_intrinsic(
                 kotlin_string(dependencies)
             ))
         }
-        "permutation_by" | "dependency_ordered_by" => {
+        "permutation_by" | "dependency_ordered_by" | "ready_ordered_by" => {
             let second =
                 second.ok_or_else(|| format!("contract intrinsic `{name}` needs two arguments"))?;
             let (owner, key) = intrinsic_selector(object, name, "selector")?;
@@ -427,8 +427,13 @@ fn render_intrinsic(
                 ));
             }
             let (_, dependencies) = intrinsic_selector(object, name, "dependencies")?;
+            let helper = if name == "ready_ordered_by" {
+                "readyOrderedBy"
+            } else {
+                "dependencyOrderedBy"
+            };
             Ok(format!(
-                "cott_runtime.CottRuntime.dependencyOrderedBy({first}, {second}, {}, {}, {})",
+                "cott_runtime.CottRuntime.{helper}({first}, {second}, {}, {}, {})",
                 kotlin_string(owner),
                 kotlin_string(key),
                 kotlin_string(dependencies)

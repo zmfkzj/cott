@@ -310,7 +310,7 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
         1 => code::INTERNAL,
         _ => code::CONTRACT,
     };
-    let mut diagnostics = Vec::new();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut sources = SourceMap::default();
     let mut source_ids = BTreeMap::new();
     for (source_order, line) in String::from_utf8_lossy(&output.stderr)
@@ -318,6 +318,33 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
         .filter(|line| !line.is_empty())
         .enumerate()
     {
+        // These continuation fields come from Diagnostic::display_message; retain them
+        // in diagnostics schema 1 instead of reclassifying them as separate failures.
+        if let Some(last) = diagnostics.last_mut() {
+            if let Some(value) = line.strip_prefix("  expected: ") {
+                last.expected = Some(value.to_owned());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("  actual: ") {
+                last.actual = Some(value.to_owned());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("  reason: ") {
+                last.reason = Some(value.to_owned());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("  help: ") {
+                last.help.push(value.to_owned());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("  related: ") {
+                last.related.push(crate::diagnostics::RelatedDiagnostic {
+                    message: value.to_owned(),
+                    span: None,
+                });
+                continue;
+            }
+        }
         let warning = line.starts_with("warning: ");
         let body = line
             .strip_prefix(if warning { "warning: " } else { "error: " })
@@ -3833,7 +3860,7 @@ fn diff_project(
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let session = match ProjectSession::acquire(&root) {
+    let session = match ProjectSession::acquire_for_inspection(&root) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");
@@ -3905,13 +3932,29 @@ fn diff_project(
             return 1;
         }
     };
-    let report = match generation_diff(&baseline_snapshot, &current) {
+    let mut report = match generation_diff(&baseline_snapshot, &current) {
         Ok(report) => report,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
+    // Resolution already chose these unresolved callables. Advice explains that decision;
+    // it never adds eligibility, invokes an agent, or publishes the inspection plan.
+    let rules = match configured_rule_bytes(&plan.config, &plan.paths) {
+        Ok(rules) => rules,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 4;
+        }
+    };
+    append_regeneration_advice(
+        &mut report,
+        &baseline_snapshot,
+        &current,
+        &plan.config,
+        &rules,
+    );
     match format {
         OutputFormat::Human => print_diff_report(&report),
         OutputFormat::Json => {
@@ -3992,6 +4035,60 @@ struct DiffReport {
     required_version_bump: VersionBump,
     changes: Vec<DiffChange>,
     advice: Vec<MigrationAdvice>,
+}
+
+fn append_regeneration_advice(
+    report: &mut DiffReport,
+    baseline: &crate::provenance::GenerationSnapshot,
+    current: &crate::provenance::GenerationSnapshot,
+    config: &crate::manifest::ProjectConfig,
+    rules: &[u8],
+) {
+    let old = intent::recorded_fingerprints(&baseline.tools)
+        .ok()
+        .flatten();
+    let new = intent::recorded_fingerprints(&current.tools).ok().flatten();
+    // A snapshot stores rule digests, not old rule text. The manifest also owns the rule path.
+    let same_rules = baseline.inputs.get("cott.toml") == current.inputs.get("cott.toml")
+        && baseline.inputs.get("cott.toml").is_some()
+        && config.generator.rules.as_ref().is_none_or(|path| {
+            baseline
+                .inputs
+                .get(path)
+                .and_then(serde_json::Value::as_str)
+                == Some(format!("sha256:{}", sha256_hex(rules)).as_str())
+        });
+    for pending in &current.unresolved {
+        let symbol = &pending.cott_symbol;
+        let hashes = old
+            .as_ref()
+            .and_then(|hashes| hashes.get(symbol))
+            .zip(new.as_ref().and_then(|hashes| hashes.get(symbol)));
+        let reason = match hashes {
+            Some((before, after)) if before != after => {
+                if same_rules {
+                    match intent::changed_context_declarations(
+                        &baseline.contract_surface, &current.contract_surface, symbol, rules,
+                    ) {
+                        Ok(names) if !names.is_empty() => format!(
+                            "scoped intent changed in {}", names.join(", ")
+                        ),
+                        _ => "scoped intent fingerprint changed; exact earlier context is unavailable".to_owned(),
+                    }
+                } else {
+                    "scoped intent fingerprint changed; previous manifest/rule text is not stored, so the exact edit cannot be reconstructed".to_owned()
+                }
+            }
+            _ => "no reusable implementation in the current resolution; saved evidence does not identify an earlier change (it may already be pending)".to_owned(),
+        };
+        report.advice.push(MigrationAdvice {
+            kind: DiffKind::ImplementationChanged,
+            subject: symbol.clone(),
+            message: format!(
+                "{reason} -> `{symbol}` requires generation. Next: `cott prompt {symbol}`, then `cott generate {symbol} --agent <agent> --model <confirmed-model> --target python`, then explicit `cott verify`. This is not requirement-fulfillment evidence."
+            ),
+        });
+    }
 }
 
 fn generation_diff(
@@ -4373,7 +4470,7 @@ fn named_members(
 }
 
 fn print_diff_report(report: &DiffReport) {
-    if report.changes.is_empty() {
+    if report.changes.is_empty() && report.advice.is_empty() {
         println!("NO CHANGE");
         return;
     }
@@ -6321,7 +6418,7 @@ fn print_project_diagnostics(diagnostics: &[ProjectDiagnostic]) {
             diagnostic.path.display(),
             diagnostic.diagnostic.span.start,
             diagnostic.diagnostic.span.end,
-            diagnostic.diagnostic.message
+            diagnostic.diagnostic.display_message()
         );
     }
 }

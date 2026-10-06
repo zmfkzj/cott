@@ -1,0 +1,1601 @@
+{
+  "scope": "runtime fragment microbenchmark, NOT certified facade",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "constructor_before": "new",
+  "constructor_after": "from_scalar (temporary construction index only)",
+  "layout_before": "set_u64_size=24 map_u64_size=24",
+  "layout_after": "set_u64_size=24 map_u64_size=24",
+  "rows": [
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 22,
+        "after_median": 23,
+        "before_range": [
+          22,
+          27
+        ],
+        "after_range": [
+          21,
+          28
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 1,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          1,
+          1
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 64,
+        "after_median": 64,
+        "before_range": [
+          64,
+          64
+        ],
+        "after_range": [
+          64,
+          64
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 28,
+        "after_median": 28,
+        "before_range": [
+          28,
+          35
+        ],
+        "after_range": [
+          27,
+          35
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 1,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          1,
+          1
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 128,
+        "after_median": 128,
+        "before_range": [
+          128,
+          128
+        ],
+        "after_range": [
+          128,
+          128
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 13,
+        "after_median": 15,
+        "before_range": [
+          13,
+          17
+        ],
+        "after_range": [
+          15,
+          19
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 13,
+        "after_median": 13,
+        "before_range": [
+          13,
+          17
+        ],
+        "after_range": [
+          13,
+          17
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 8,
+        "after_median": 12,
+        "before_range": [
+          8,
+          11
+        ],
+        "after_range": [
+          9,
+          23
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 9,
+        "after_median": 11,
+        "before_range": [
+          9,
+          11
+        ],
+        "after_range": [
+          9,
+          63
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 149,
+        "after_median": 157,
+        "before_range": [
+          146,
+          184
+        ],
+        "after_range": [
+          150,
+          225
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 9,
+        "after_median": 9,
+        "before_range": [
+          9,
+          9
+        ],
+        "after_range": [
+          9,
+          9
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 288,
+        "after_median": 288,
+        "before_range": [
+          288,
+          288
+        ],
+        "after_range": [
+          288,
+          288
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 179,
+        "after_median": 175,
+        "before_range": [
+          177,
+          261
+        ],
+        "after_range": [
+          174,
+          221
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 9,
+        "after_median": 9,
+        "before_range": [
+          9,
+          9
+        ],
+        "after_range": [
+          9,
+          9
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 352,
+        "after_median": 352,
+        "before_range": [
+          352,
+          352
+        ],
+        "after_range": [
+          352,
+          352
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 69,
+        "after_median": 67,
+        "before_range": [
+          69,
+          148
+        ],
+        "after_range": [
+          67,
+          84
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 86,
+        "after_median": 111,
+        "before_range": [
+          86,
+          108
+        ],
+        "after_range": [
+          89,
+          147
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 56,
+        "after_median": 68,
+        "before_range": [
+          54,
+          70
+        ],
+        "after_range": [
+          55,
+          106
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 62,
+        "after_median": 73,
+        "before_range": [
+          58,
+          78
+        ],
+        "after_range": [
+          59,
+          109
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 1098,
+        "after_median": 1165,
+        "before_range": [
+          1070,
+          1296
+        ],
+        "after_range": [
+          1092,
+          1368
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 1,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          1,
+          1
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 1024,
+        "after_median": 1024,
+        "before_range": [
+          1024,
+          1024
+        ],
+        "after_range": [
+          1024,
+          1024
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 2322,
+        "after_median": 2292,
+        "before_range": [
+          2290,
+          2363
+        ],
+        "after_range": [
+          2283,
+          3823
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 1,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          1,
+          1
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 2048,
+        "after_median": 2048,
+        "before_range": [
+          2048,
+          2048
+        ],
+        "after_range": [
+          2048,
+          2048
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 994,
+        "after_median": 1055,
+        "before_range": [
+          992,
+          1115
+        ],
+        "after_range": [
+          1022,
+          1264
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 2645,
+        "after_median": 2654,
+        "before_range": [
+          2251,
+          4170
+        ],
+        "after_range": [
+          2277,
+          3764
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 919,
+        "after_median": 970,
+        "before_range": [
+          890,
+          1630
+        ],
+        "after_range": [
+          890,
+          1149
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 1465,
+        "after_median": 1512,
+        "before_range": [
+          1432,
+          2242
+        ],
+        "after_range": [
+          1441,
+          1844
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 18115,
+        "after_median": 9597,
+        "before_range": [
+          18012,
+          21438
+        ],
+        "after_range": [
+          9466,
+          10224
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 129,
+        "after_median": 137,
+        "before_range": [
+          129,
+          129
+        ],
+        "after_range": [
+          137,
+          137
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 4608,
+        "after_median": 13084,
+        "before_range": [
+          4608,
+          4608
+        ],
+        "after_range": [
+          13084,
+          13084
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 23952,
+        "after_median": 9632,
+        "before_range": [
+          23384,
+          24732
+        ],
+        "after_range": [
+          9532,
+          10022
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 129,
+        "after_median": 137,
+        "before_range": [
+          129,
+          129
+        ],
+        "after_range": [
+          137,
+          137
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 5632,
+        "after_median": 15132,
+        "before_range": [
+          5632,
+          5632
+        ],
+        "after_range": [
+          15132,
+          15132
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 15116,
+        "after_median": 15278,
+        "before_range": [
+          15080,
+          15543
+        ],
+        "after_range": [
+          15015,
+          16010
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 19669,
+        "after_median": 19504,
+        "before_range": [
+          19607,
+          20391
+        ],
+        "after_range": [
+          19383,
+          19785
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 13278,
+        "after_median": 13203,
+        "before_range": [
+          13179,
+          14294
+        ],
+        "after_range": [
+          13105,
+          14412
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 14093,
+        "after_median": 12238,
+        "before_range": [
+          14050,
+          15261
+        ],
+        "after_range": [
+          12216,
+          12531
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 201978,
+        "after_median": 83942,
+        "before_range": [
+          201548,
+          229990
+        ],
+        "after_range": [
+          83207,
+          86429
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 13,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          13,
+          13
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 16384,
+        "after_median": 118876,
+        "before_range": [
+          16384,
+          16384
+        ],
+        "after_range": [
+          118876,
+          118876
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 427290,
+        "after_median": 84827,
+        "before_range": [
+          426803,
+          465119
+        ],
+        "after_range": [
+          84636,
+          86321
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 1,
+        "after_median": 13,
+        "before_range": [
+          1,
+          1
+        ],
+        "after_range": [
+          13,
+          13
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 32768,
+        "after_median": 151644,
+        "before_range": [
+          32768,
+          32768
+        ],
+        "after_range": [
+          151644,
+          151644
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 195813,
+        "after_median": 196770,
+        "before_range": [
+          195720,
+          251128
+        ],
+        "after_range": [
+          195792,
+          207452
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 428196,
+        "after_median": 439623,
+        "before_range": [
+          426370,
+          596382
+        ],
+        "after_range": [
+          431944,
+          454380
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 174739,
+        "after_median": 175778,
+        "before_range": [
+          174613,
+          350181
+        ],
+        "after_range": [
+          174567,
+          180172
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 275748,
+        "after_median": 278677,
+        "before_range": [
+          274539,
+          295729
+        ],
+        "after_range": [
+          275403,
+          301470
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_create",
+      "ns": {
+        "before_median": 3636713,
+        "after_median": 169269,
+        "before_range": [
+          3635822,
+          4282720
+        ],
+        "after_range": [
+          168248,
+          169878
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 2049,
+        "after_median": 2061,
+        "before_range": [
+          2049,
+          2049
+        ],
+        "after_range": [
+          2061,
+          2061
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 73728,
+        "after_median": 208988,
+        "before_range": [
+          73728,
+          73728
+        ],
+        "after_range": [
+          208988,
+          208988
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_create",
+      "ns": {
+        "before_median": 5079659,
+        "after_median": 193225,
+        "before_range": [
+          5049004,
+          5127576
+        ],
+        "after_range": [
+          192696,
+          194591
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 2049,
+        "after_median": 2061,
+        "before_range": [
+          2049,
+          2049
+        ],
+        "after_range": [
+          2061,
+          2061
+        ],
+        "ranges_overlap": false
+      },
+      "requested_bytes": {
+        "before_median": 90112,
+        "after_median": 241756,
+        "before_range": [
+          90112,
+          90112
+        ],
+        "after_range": [
+          241756,
+          241756
+        ],
+        "ranges_overlap": false
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_lookup",
+      "ns": {
+        "before_median": 3479956,
+        "after_median": 3586514,
+        "before_range": [
+          3460871,
+          3556076
+        ],
+        "after_range": [
+          3572721,
+          3701305
+        ],
+        "ranges_overlap": false
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_lookup",
+      "ns": {
+        "before_median": 4671365,
+        "after_median": 4967015,
+        "before_range": [
+          4651508,
+          4954915
+        ],
+        "after_range": [
+          4942633,
+          5003712
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_equal",
+      "ns": {
+        "before_median": 3210837,
+        "after_median": 3151301,
+        "before_range": [
+          3188806,
+          3232615
+        ],
+        "after_range": [
+          3130089,
+          3387946
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_equal",
+      "ns": {
+        "before_median": 3247362,
+        "after_median": 3106084,
+        "before_range": [
+          3228987,
+          3671777
+        ],
+        "after_range": [
+          3088339,
+          3300814
+        ],
+        "ranges_overlap": true
+      },
+      "allocations": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      },
+      "requested_bytes": {
+        "before_median": 0,
+        "after_median": 0,
+        "before_range": [
+          0,
+          0
+        ],
+        "after_range": [
+          0,
+          0
+        ],
+        "ranges_overlap": true
+      }
+    }
+  ],
+  "limits": [
+    "release opt-level3, one process per sample, no CPU isolation",
+    "nanoseconds per full operation (lookup visits all input keys)",
+    "allocation count and requested bytes for a separate operation, including owned input clones; not RSS/retained/peak; std allocator counter adds timing overhead",
+    "25% duplicate integer/string keys; same inputs and compiler flags; do not generalize to user key types",
+    "Range separation is not a significance test; lookup/equality keep the original linear implementation."
+  ]
+}

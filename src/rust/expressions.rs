@@ -174,7 +174,11 @@ pub(crate) fn render_expression_contextual(
                 .collect::<Result<Vec<_>, _>>()?;
             match text(e, "kind")? {
                 "list" => format!("vec![{}]", args.join(", ")),
-                "set" => format!("crate::cott_runtime::Set::new(vec![{}])", args.join(", ")),
+                "set" => format!(
+                    "crate::cott_runtime::Set::{}(vec![{}])",
+                    super::types::collection_constructor(e["type"].get("item")),
+                    args.join(", ")
+                ),
                 "array" => format!("crate::cott_runtime::Array::new(vec![{}])", args.join(", ")),
                 "tuple" if args.len() > 12 => format!(
                     "crate::cott_runtime::Tuple{}({})",
@@ -189,7 +193,8 @@ pub(crate) fn render_expression_contextual(
             }
         }
         "map" => format!(
-            "crate::cott_runtime::Map::new(vec![{}])",
+            "crate::cott_runtime::Map::{}(vec![{}])",
+            super::types::collection_constructor(e["type"].get("key")),
             items(e, "entries")?
                 .iter()
                 .map(|entry| Ok(format!(
@@ -308,6 +313,12 @@ fn intrinsic(e: &Value, module: Option<&str>) -> Result<String, String> {
             "crate::cott_runtime::permutation_by(&({first}), &({}), |v| v.{}())",
             args.get(1).ok_or("missing second argument")?,
             field("selector")?
+        ),
+        "ready_ordered_by" => format!(
+            "crate::cott_runtime::ready_ordered_by(&({first}), &({}), |v| v.{}().as_str(), |v| v.{}().iter().map(String::as_str))",
+            args.get(1).ok_or("missing second argument")?,
+            field("selector")?,
+            field("dependencies")?
         ),
         "dependency_ordered_by" => format!(
             "crate::cott_runtime::dependency_ordered_by(&({first}), &({}), |v| v.{}(), |v| v.{}())",

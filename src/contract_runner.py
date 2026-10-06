@@ -778,7 +778,7 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
             return helper(arguments[0], field("selector"), field("dependencies"))
         if name == "permutation_by":
             return helper(arguments[0], arguments[1], field("selector"))
-        if name == "dependency_ordered_by":
+        if name in ("dependency_ordered_by", "ready_ordered_by"):
             return helper(arguments[0], arguments[1], field("selector"), field("dependencies"))
         raise ValueError(f"unsupported contract intrinsic {name}")
     raise ValueError(f"unsupported canonical expression {kind}")

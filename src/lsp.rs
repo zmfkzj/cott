@@ -8,7 +8,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::ast::{self, Declaration, DocBlock};
 use crate::compiler::{self, ParsedProject, SourceFile};
-use crate::diagnostics::{Diagnostic as CompilerDiagnostic, Span};
+use crate::diagnostics::{Diagnostic as CompilerDiagnostic, SourceMap, Span};
 
 const BUILTIN_TYPES: &[&str] = &[
     "Bool",
@@ -100,6 +100,7 @@ struct Analysis {
     root: PathBuf,
     texts: BTreeMap<PathBuf, String>,
     diagnostics: BTreeMap<PathBuf, Vec<CompilerDiagnostic>>,
+    source_map: SourceMap,
     sources: Vec<SourceInfo>,
     symbols: Vec<Symbol>,
     locals: Vec<Local>,
@@ -146,7 +147,9 @@ impl Backend {
                         .get(path)
                         .into_iter()
                         .flatten()
-                        .map(|diagnostic| lsp_diagnostic(diagnostic, text))
+                        .map(|diagnostic| {
+                            lsp_diagnostic(diagnostic, text, &analysis.source_map, &analysis.root)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -480,10 +483,15 @@ fn analyze_sources(
         .iter()
         .map(|source| (source.path.clone(), source.text.clone()))
         .collect::<BTreeMap<_, _>>();
+    let mut source_map = SourceMap::default();
+    for source in &sources {
+        source_map.add(source.path.clone(), source.text.as_bytes().to_vec());
+    }
     let mut analysis = Analysis {
         root: root.clone().unwrap_or_default(),
         texts,
         diagnostics: BTreeMap::new(),
+        source_map,
         sources: Vec::new(),
         symbols: Vec::new(),
         locals: Vec::new(),
@@ -798,7 +806,35 @@ fn position_for(text: &str, offset: usize) -> Position {
     }
 }
 
-fn lsp_diagnostic(diagnostic: &CompilerDiagnostic, text: &str) -> Diagnostic {
+fn lsp_diagnostic(
+    diagnostic: &CompilerDiagnostic,
+    text: &str,
+    sources: &SourceMap,
+    root: &Path,
+) -> Diagnostic {
+    let related = diagnostic
+        .related
+        .iter()
+        .filter_map(|related| {
+            let span = related.span?;
+            let text = sources.text(span.file)?;
+            // Do not invent a location for absent/invalid source evidence.
+            if span.start_byte > span.end_byte
+                || span.end_byte > text.len()
+                || !text.is_char_boundary(span.start_byte)
+                || !text.is_char_boundary(span.end_byte)
+            {
+                return None;
+            }
+            Some(DiagnosticRelatedInformation {
+                location: Location {
+                    uri: uri_for(sources.path(span.file)?, root)?,
+                    range: range_for(text, Span::new(span.start_byte, span.end_byte)),
+                },
+                message: related.message.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
     Diagnostic {
         range: range_for(text, diagnostic.span.clone()),
         severity: Some(match diagnostic.severity {
@@ -808,7 +844,8 @@ fn lsp_diagnostic(diagnostic: &CompilerDiagnostic, text: &str) -> Diagnostic {
         }),
         code: Some(NumberOrString::String(diagnostic.code.clone())),
         source: Some("cott".to_owned()),
-        message: diagnostic.message.clone(),
+        message: diagnostic.display_message(),
+        related_information: (!related.is_empty()).then_some(related),
         ..Diagnostic::default()
     }
 }
@@ -874,6 +911,66 @@ mod tests {
 
     fn source(path: &str, text: &str) -> SourceFile {
         SourceFile::new(path, text)
+    }
+
+    #[test]
+    fn diagnostic_details_and_related_locations_survive_lsp_serialization() {
+        use crate::diagnostics::{FileId, RelatedDiagnostic, SourceSpan};
+        let mut sources = SourceMap::default();
+        let file = sources.add(PathBuf::from("other.cott"), "a😀b\n".as_bytes().to_vec());
+        let mut diagnostic =
+            CompilerDiagnostic::error("COTT-T102", "nominal mismatch", Span::new(0, 1));
+        diagnostic.expected = Some("First".to_owned());
+        diagnostic.actual = Some("Second".to_owned());
+        diagnostic.reason = Some("different nominal declarations".to_owned());
+        diagnostic
+            .help
+            .push("Use an explicit conversion.".to_owned());
+        diagnostic.related = vec![
+            RelatedDiagnostic {
+                message: "declaration".to_owned(),
+                span: Some(SourceSpan {
+                    file,
+                    start_byte: 1,
+                    end_byte: 5,
+                }),
+            },
+            RelatedDiagnostic {
+                message: "unlocated context".to_owned(),
+                span: None,
+            },
+            RelatedDiagnostic {
+                message: "missing source".to_owned(),
+                span: Some(SourceSpan {
+                    file: FileId(99),
+                    start_byte: 0,
+                    end_byte: 1,
+                }),
+            },
+        ];
+        let lsp = lsp_diagnostic(&diagnostic, "x", &sources, Path::new("/tmp/project/src"));
+        assert_eq!(lsp.message, diagnostic.display_message());
+        assert!(
+            lsp.message
+                .contains("  reason: different nominal declarations")
+        );
+        assert!(lsp.message.contains("unlocated context"));
+        assert!(lsp.message.contains("missing source"));
+        let wire = serde_json::to_value(&lsp).unwrap();
+        assert_eq!(wire["code"], "COTT-T102");
+        assert_eq!(wire["relatedInformation"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            wire["relatedInformation"][0]["location"]["uri"],
+            "file:///tmp/project/src/other.cott"
+        );
+        assert_eq!(
+            wire["relatedInformation"][0]["location"]["range"]["end"]["character"],
+            3
+        );
+        let plain = CompilerDiagnostic::error("COTT-P001", "tool unavailable", Span::new(0, 0));
+        let lsp = lsp_diagnostic(&plain, "", &SourceMap::default(), Path::new("/tmp"));
+        assert_eq!(lsp.message, "tool unavailable");
+        assert!(lsp.related_information.is_none());
     }
 
     #[test]

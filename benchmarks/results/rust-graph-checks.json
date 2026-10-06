@@ -1,0 +1,1856 @@
+{
+  "scope": "Rust collection and closed graph predicate implementation receipt; not generation provenance",
+  "status": "implemented; one existing native loopback scenario remains environment-blocked",
+  "head_at_start": "921158c838150c880c5b2792b02969d922626602",
+  "baseline": {
+    "path": "target/rust-graph-followup/baseline/",
+    "files": 3132,
+    "hash_inventory": "target/rust-graph-followup/baseline-hashes.json",
+    "prior_reports_preserved": 21,
+    "prior_cli_lsp_intent_and_python_fast_path_unchanged": true
+  },
+  "checks": {
+    "fmt": {
+      "command": "cargo fmt --check",
+      "exit_code": 0
+    },
+    "baseline_semantics_before_optimization": {
+      "command": "CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 --test rust_collections",
+      "passed": 2,
+      "failed": 0,
+      "log": "target/rust-graph-followup/collections-baseline-test.log"
+    },
+    "full": {
+      "command": "CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 -- --test-threads=4",
+      "passed": 1005,
+      "failed": 0,
+      "ignored": 108,
+      "suites": 80,
+      "exit_code": 0,
+      "log": "target/rust-graph-followup/cargo-test-final.log"
+    },
+    "new_native": {
+      "command": "COTT_CARGO=/usr/bin/cargo COTT_RUSTC=/usr/bin/rustc COTT_PYTHON=<owned CPython3.14.6> COTT_BASEDPYRIGHT=<owned BasedPyright1.39.9> COTT_KOTLIN_HOME=<owned Kotlin2.2.10> JAVA_HOME=/home/arthur/.local/opt/jdk-17 COTT_DART=/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart COTT_READY_EVIDENCE=$PWD/target/rust-graph-followup/evidence CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 --test ready_ordered --test rust_collections -- --include-ignored --test-threads=1",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 2,
+      "exit_code": 0,
+      "log": "target/rust-graph-followup/new-native-final.log"
+    },
+    "additional_native": {
+      "command": "COTT_CARGO=/usr/bin/cargo COTT_RUSTC=/usr/bin/rustc CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 --test rust_runtime --test rust_native --test rust_runner --test rust_verify --test rust_cli -- --ignored --test-threads=1",
+      "passed": 8,
+      "failed": 1,
+      "ignored": 0,
+      "suites": 2,
+      "exit_code": 101,
+      "log": "target/rust-graph-followup/rust-native.log"
+    },
+    "remaining_native": {
+      "command": "COTT_CARGO=/usr/bin/cargo COTT_RUSTC=/usr/bin/rustc CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 --test rust_runtime --test rust_runner --test rust_verify -- --ignored --test-threads=1",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 3,
+      "exit_code": 0,
+      "log": "target/rust-graph-followup/rust-native-remaining.log"
+    }
+  },
+  "targets": {
+    "python": {
+      "verified_snapshot": "sha256:9a989e02b219e1361d77b2682d79b2805186b5abc94e33c2ddca99ab7c3a0ff7",
+      "record_sha256": "00aa414a7528d03e9f7f1c8468a0cf1673f7004acfe229a8ae7c61b2ab3110c2",
+      "record_path": "target/rust-graph-followup/evidence/python-verified.json",
+      "scenarios_passed": 46,
+      "assertions_passed": 92,
+      "clauses": [
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 9
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            }
+          ],
+          "span": {
+            "end_byte": 234,
+            "end_column": 87,
+            "end_line": 8,
+            "start_byte": 152,
+            "start_column": 5,
+            "start_line": 8
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 9
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            }
+          ],
+          "span": {
+            "end_byte": 319,
+            "end_column": 84,
+            "end_line": 10,
+            "start_byte": 240,
+            "start_column": 5,
+            "start_line": 10
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 9
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            }
+          ],
+          "span": {
+            "end_byte": 9132,
+            "end_column": 85,
+            "end_line": 241,
+            "start_byte": 9052,
+            "start_column": 5,
+            "start_line": 241
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 9
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            },
+            {
+              "grade": "test observation",
+              "mode": "boundary",
+              "reason": null,
+              "valid_cases": 1
+            }
+          ],
+          "span": {
+            "end_byte": 9215,
+            "end_column": 82,
+            "end_line": 243,
+            "start_byte": 9138,
+            "start_column": 5,
+            "start_line": 243
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        }
+      ],
+      "tools": {
+        "basedpyright": {
+          "content_hash": "sha256:ddee9f0df83d56c558487573c4fa6adc7c41b429442de3a387850266f42b2d13",
+          "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/venv/bin/basedpyright",
+          "version": "1.39.9"
+        },
+        "compiler": {
+          "content_hash": "sha256:c00a7fac2633a4a61cd892067f34101b9de50a0e62cf38ef60208d1583d6afa8",
+          "executable": "/home/arthur/Code/cott/target/debug/cott",
+          "version": "1.0.0"
+        },
+        "python": {
+          "cache_tag": "cpython-314",
+          "content_hash": "sha256:2f7fff382c9d335d6d63f134b55cb8ced9d0b2e1d47e6f210ad3f059adfa71c1",
+          "executable": "/home/arthur/Code/cott/target/facade-toolchain-followup/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+          "implementation": "cpython",
+          "machine": "x86_64",
+          "os": "linux",
+          "platform": "linux-x86_64",
+          "version": "3.14.6"
+        },
+        "runtime": {
+          "abi": "7",
+          "version": "1.0.0"
+        }
+      },
+      "negative_binding_verify": "rejected, current unverified and last_verified preserved (asserted by test)",
+      "negative_log": "target/rust-graph-followup/evidence/python-rejected.txt"
+    },
+    "kotlin": {
+      "verified_snapshot": "sha256:8a3554a2a8b761681c1ec7071938661fb6ee1c6ed92a74aec172d20a348a5bbb",
+      "record_sha256": "de6b92fd2794dbc7b7690ae84351c370c8b3c196c191d013a464994a7a5a4080",
+      "record_path": "target/rust-graph-followup/evidence/kotlin-verified.json",
+      "scenarios_passed": 46,
+      "assertions_passed": 92,
+      "clauses": [
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 234,
+            "end_column": 87,
+            "end_line": 8,
+            "start_byte": 152,
+            "start_column": 5,
+            "start_line": 8
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 319,
+            "end_column": 84,
+            "end_line": 10,
+            "start_byte": 240,
+            "start_column": 5,
+            "start_line": 10
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9132,
+            "end_column": 85,
+            "end_line": 241,
+            "start_byte": 9052,
+            "start_column": 5,
+            "start_line": 241
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9215,
+            "end_column": 82,
+            "end_line": 243,
+            "start_byte": 9138,
+            "start_column": 5,
+            "start_line": 243
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        }
+      ],
+      "tools": {
+        "compile_inputs": {
+          "classpath": [],
+          "compile_only": []
+        },
+        "cott": {
+          "content_hash": "sha256:c00a7fac2633a4a61cd892067f34101b9de50a0e62cf38ef60208d1583d6afa8",
+          "executable": "/home/arthur/Code/cott/target/debug/cott",
+          "version": "1.0.0"
+        },
+        "jar": {
+          "content_hash": "sha256:368f155e363dae619e6fe6456140d910342198e5bef6d1d0709853dcf93b70bc",
+          "executable": "/home/arthur/.local/opt/jdk-17.0.20.1+1/bin/jar",
+          "version": "17.0.20.1"
+        },
+        "java": {
+          "content_hash": "sha256:f5aed21d3a0b0f4b05d3a3f9fe71263916d5bc0d47b53aa52a3340b90f0b4805",
+          "executable": "/home/arthur/.local/opt/jdk-17.0.20.1+1/bin/java",
+          "home": "/home/arthur/.local/opt/jdk-17.0.20.1+1",
+          "major": 17,
+          "version": "17.0.20.1"
+        },
+        "kotlin": {
+          "compiler_libraries": {
+            "allopen-compiler-plugin.jar": {
+              "content_hash": "sha256:a9ae3467ad4d9bb1d3f461cd70c5f8547b0bf740b8292db60b4044c14d9c4dfe",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/allopen-compiler-plugin.jar"
+            },
+            "android-extensions-compiler.jar": {
+              "content_hash": "sha256:425174946378046f74919efa2b397fcd13f15d7967cf4956dc3321f0a8ae6282",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/android-extensions-compiler.jar"
+            },
+            "android-extensions-runtime.jar": {
+              "content_hash": "sha256:1cc63780e04df323ffed94eb6bf039ce5a7d18e4ad91bd5a1fdd4a7371a54e2a",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/android-extensions-runtime.jar"
+            },
+            "annotations-13.0.jar": {
+              "content_hash": "sha256:ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/annotations-13.0.jar"
+            },
+            "assignment-compiler-plugin.jar": {
+              "content_hash": "sha256:8e6a62ea5ee95783d36204c9143acc9b94b790f05488e2aaa7cd360eb336deb3",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/assignment-compiler-plugin.jar"
+            },
+            "compose-compiler-plugin.jar": {
+              "content_hash": "sha256:e8d570aae05353ba325ed93539f429da670df3cd5503efff87a123e0ff3d2c12",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/compose-compiler-plugin.jar"
+            },
+            "jvm-abi-gen.jar": {
+              "content_hash": "sha256:7454f046b73aaef9631efde6f14370badfe523ba677d27623e5dc5fb48b8d0df",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/jvm-abi-gen.jar"
+            },
+            "kotlin-annotation-processing-cli.jar": {
+              "content_hash": "sha256:8acfb152e1fc6bf906c4fa8d0c4534d8e74036a1bc614fa3c618e590bac75570",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-annotation-processing-cli.jar"
+            },
+            "kotlin-annotation-processing-runtime.jar": {
+              "content_hash": "sha256:46d95cb91be59b6f555e8c63018f8dfd75f27c07406e35110d26165aad6991c9",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-annotation-processing-runtime.jar"
+            },
+            "kotlin-annotation-processing.jar": {
+              "content_hash": "sha256:571f45be44ed3afad261ddbec376f2adc12a92cb38453b99c11c6712177d5980",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-annotation-processing.jar"
+            },
+            "kotlin-annotations-jvm-sources.jar": {
+              "content_hash": "sha256:bf594d0e3a35c21b1f07097d9e10b6ab524ae5bb2ffdb92ea9b1f79f28e8ab09",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-annotations-jvm-sources.jar"
+            },
+            "kotlin-annotations-jvm.jar": {
+              "content_hash": "sha256:6054230599c840c69af3657c292b768f2b585c25fba91d26cd5ad8c992757b03",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-annotations-jvm.jar"
+            },
+            "kotlin-ant.jar": {
+              "content_hash": "sha256:f91522cd01c39950aaa543d24217724f9bdbce9ea1e87b8879bc3ec8cb33bb8d",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-ant.jar"
+            },
+            "kotlin-compiler.jar": {
+              "content_hash": "sha256:a98e58e601f4c351780608650d93ad5b24140f6ff92474539c9ba38fa6dd4193",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-compiler.jar"
+            },
+            "kotlin-daemon-client.jar": {
+              "content_hash": "sha256:2e18ccb9ae8388a32c16c9fee68093d7a204ff714fd3717423824b8b8537f0df",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-daemon-client.jar"
+            },
+            "kotlin-daemon.jar": {
+              "content_hash": "sha256:c4a134f885d97ad64946f80cbb45297e0f55cc0239e21a985634f35383229261",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-daemon.jar"
+            },
+            "kotlin-imports-dumper-compiler-plugin.jar": {
+              "content_hash": "sha256:3e31eb67841086a946be00cd2dc9ee677126d5a40e93846e3481210283c215ee",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-imports-dumper-compiler-plugin.jar"
+            },
+            "kotlin-main-kts.jar": {
+              "content_hash": "sha256:c15a41887b7678ed121fda3e302e0522981ebe807829159dad7f94742e9783a5",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-main-kts.jar"
+            },
+            "kotlin-metadata-jvm-sources.jar": {
+              "content_hash": "sha256:2ab97ab16e203e715633593c480bcf0ac1cc151e54cd2adaaa7dca1085835ede",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-metadata-jvm-sources.jar"
+            },
+            "kotlin-metadata-jvm.jar": {
+              "content_hash": "sha256:02243e2c2470470d0090268d928cbc6db7fd850f51e54b53f574a261441e8ef9",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-metadata-jvm.jar"
+            },
+            "kotlin-preloader.jar": {
+              "content_hash": "sha256:167d6f62ca2221e871db77526a5651bd538bb263a1ee88e0ea00865a95d3e091",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-preloader.jar"
+            },
+            "kotlin-reflect-sources.jar": {
+              "content_hash": "sha256:e9719062ea18b7c10f231ee170306f95acf78c31b4f4592d32e8376ca3779f0b",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-reflect-sources.jar"
+            },
+            "kotlin-reflect.jar": {
+              "content_hash": "sha256:c48db4f8cd1bfd67f72d59255065fb41bfda43ca2942dac4d9deb897aa126ba4",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-reflect.jar"
+            },
+            "kotlin-runner.jar": {
+              "content_hash": "sha256:f8c8d1aa4659344e387bc9aab2c5db17577e1bbfb8f17319f3d1cd5426a97687",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-runner.jar"
+            },
+            "kotlin-script-runtime-sources.jar": {
+              "content_hash": "sha256:d9d6b416bf1267d5d9a2fffb309c8d02fa707608154d7b0d7dd318d2dd7daa96",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-script-runtime-sources.jar"
+            },
+            "kotlin-script-runtime.jar": {
+              "content_hash": "sha256:c304a67dba6a61dde560e6310920bed746307c3854f6675c29ac29114731b6b0",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-script-runtime.jar"
+            },
+            "kotlin-scripting-common.jar": {
+              "content_hash": "sha256:16257fc00d625c179f422adc2e000ec53324435e65d9b67d02be72f1e4d0138f",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-scripting-common.jar"
+            },
+            "kotlin-scripting-compiler-impl.jar": {
+              "content_hash": "sha256:6f61c7c7cb1ced59f84cf14119a81373f4d5e8cc259caa155920f9bf04a904f1",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-scripting-compiler-impl.jar"
+            },
+            "kotlin-scripting-compiler.jar": {
+              "content_hash": "sha256:0e9bfefa0144f33dab8cf40837e88f039ccab9b79c454bd4132b42e81779bf78",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-scripting-compiler.jar"
+            },
+            "kotlin-scripting-jvm.jar": {
+              "content_hash": "sha256:2580de81c7cbe9412e43d99cec207949afdaf0883a81269635a3618db4b6f2e0",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-scripting-jvm.jar"
+            },
+            "kotlin-serialization-compiler-plugin.jar": {
+              "content_hash": "sha256:d2271622104a804d8ff3f7b3b6abee2bb3e9660997a096483875f366e070fcb3",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-serialization-compiler-plugin.jar"
+            },
+            "kotlin-stdlib-jdk7-sources.jar": {
+              "content_hash": "sha256:2534c8908432e06de73177509903d405b55f423dd4c2f747e16b92a2162611e6",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-jdk7-sources.jar"
+            },
+            "kotlin-stdlib-jdk7.jar": {
+              "content_hash": "sha256:cf95eccc6cc784dff479dee0b8834f3584b93292cc5d91972e82f5d7b9e13e3b",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-jdk7.jar"
+            },
+            "kotlin-stdlib-jdk8-sources.jar": {
+              "content_hash": "sha256:3cb6895054a0985bba591c165503fe4dd63a215af53263b67a071ccdc242bf6e",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-jdk8-sources.jar"
+            },
+            "kotlin-stdlib-jdk8.jar": {
+              "content_hash": "sha256:8974bfdd08b1d81843fe8d11f0729ab6e5b3c1f88d671ebe0c006358129ce149",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-jdk8.jar"
+            },
+            "kotlin-stdlib-js-sources.jar": {
+              "content_hash": "sha256:8b4e5433cf21385e7ad258e1fbcd23930c265bca428fa317a7885063a4b82dac",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-js-sources.jar"
+            },
+            "kotlin-stdlib-sources.jar": {
+              "content_hash": "sha256:2983f21e626325f256bc4443c7fe45a83912bba077be119142f68210c0548173",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib-sources.jar"
+            },
+            "kotlin-stdlib.jar": {
+              "content_hash": "sha256:9c67cc79efd6b9215b49d2a4308f5f3433537376c7c88e89bdd6729bd096e61a",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib.jar"
+            },
+            "kotlin-test-js-sources.jar": {
+              "content_hash": "sha256:4a7a5f653f89107e847345688171be7b2d4172332f7f9a5771b9240bf07e8f18",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-js-sources.jar"
+            },
+            "kotlin-test-junit-sources.jar": {
+              "content_hash": "sha256:c411a0dad1218f3f652b6619f228fefee498903ee6e11c36c990fbc3fe823f18",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-junit-sources.jar"
+            },
+            "kotlin-test-junit.jar": {
+              "content_hash": "sha256:c08ac2115b2d987050fc2695bb996fe63a5003b987cd138450a5f3488928b2e7",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-junit.jar"
+            },
+            "kotlin-test-junit5-sources.jar": {
+              "content_hash": "sha256:891c56d8183d2cd3e912cf250adeca889dba51d02b07fce3015321e08f72b4a2",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-junit5-sources.jar"
+            },
+            "kotlin-test-junit5.jar": {
+              "content_hash": "sha256:a40ef78a111cc09de667d6500afc0007f58ec2c3b35a783cfe30774a464303f5",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-junit5.jar"
+            },
+            "kotlin-test-sources.jar": {
+              "content_hash": "sha256:c8445545032c2e09195fc883b274260dd414b33f2cdc1dadd4f3441c1a4e456b",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-sources.jar"
+            },
+            "kotlin-test-testng-sources.jar": {
+              "content_hash": "sha256:748366365d0b3e985289aab702aecab84d0bd8ef6dd104659e86c1f31359c5aa",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-testng-sources.jar"
+            },
+            "kotlin-test-testng.jar": {
+              "content_hash": "sha256:290433cc4ba59f03d2f864b37329f443ce0393368fdbe3cc4490cd83f70bce1f",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test-testng.jar"
+            },
+            "kotlin-test.jar": {
+              "content_hash": "sha256:10c25376bcc75c325c7cf238ea120b6ba8e6127b7eb3214bba5ae1208f6c51f8",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-test.jar"
+            },
+            "kotlinx-coroutines-core-jvm.jar": {
+              "content_hash": "sha256:9860906a1937490bf5f3b06d2f0e10ef451e65b95b269f22daf68a3d1f5065c5",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlinx-coroutines-core-jvm.jar"
+            },
+            "kotlinx-serialization-compiler-plugin.jar": {
+              "content_hash": "sha256:d2271622104a804d8ff3f7b3b6abee2bb3e9660997a096483875f366e070fcb3",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar"
+            },
+            "lombok-compiler-plugin.jar": {
+              "content_hash": "sha256:bfa264dfb00e12a47147a33f984202def18d972e4fe38275118dab0d0b21fc02",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/lombok-compiler-plugin.jar"
+            },
+            "mutability-annotations-compat.jar": {
+              "content_hash": "sha256:8c76693fde1f34baaeaf5298e1953fca489c8e90ce6c065f96dd20d978c2003b",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/mutability-annotations-compat.jar"
+            },
+            "noarg-compiler-plugin.jar": {
+              "content_hash": "sha256:5479da2ac9292674e541920216bc53a2e45d2b28c9de806a496769bb67d83798",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/noarg-compiler-plugin.jar"
+            },
+            "parcelize-compiler.jar": {
+              "content_hash": "sha256:ba765d4f9c56073f2a6e42446c1d4bbd36f8831d32da6d0e22ac39c179af6c06",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/parcelize-compiler.jar"
+            },
+            "parcelize-runtime.jar": {
+              "content_hash": "sha256:29f35c814bfd2bc12c9ee1ae5de49c63359dff972a88924cb1e66a41bed5324f",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/parcelize-runtime.jar"
+            },
+            "power-assert-compiler-plugin.jar": {
+              "content_hash": "sha256:d2ba15fc8299e9da3377cbf6ca17cf91bd09a6bbf79b52060f6320bbfa6be399",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/power-assert-compiler-plugin.jar"
+            },
+            "sam-with-receiver-compiler-plugin.jar": {
+              "content_hash": "sha256:773d984f3b3d502c64d9d73f1ac08c35762d67ef8c20bf45618a33f19fa4d988",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/sam-with-receiver-compiler-plugin.jar"
+            },
+            "scripting-compiler.jar": {
+              "content_hash": "sha256:0e9bfefa0144f33dab8cf40837e88f039ccab9b79c454bd4132b42e81779bf78",
+              "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/scripting-compiler.jar"
+            }
+          },
+          "content_hash": "sha256:64d62a197fbec5f32f77c6724cce33ead4034b2ec3f873c056cde19fe00f324e",
+          "distribution": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc",
+          "executable": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/bin/kotlinc",
+          "jvm_target": 17,
+          "version": "2.2.10"
+        },
+        "runtime": {
+          "abi": 1,
+          "version": "1.0.0"
+        },
+        "runtime_dependencies": {
+          "kotlin_stdlib": {
+            "bundled": false,
+            "content_hash": "sha256:9c67cc79efd6b9215b49d2a4308f5f3433537376c7c88e89bdd6729bd096e61a",
+            "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlin-stdlib.jar",
+            "provided_by": "Kotlin compiler or Android Gradle plugin",
+            "required": true,
+            "version": "2.2.10"
+          },
+          "kotlinx_coroutines_core_jvm": {
+            "artifact": "runtime-libs/kotlinx-coroutines-core-jvm.jar",
+            "bundled": true,
+            "content_hash": "sha256:9860906a1937490bf5f3b06d2f0e10ef451e65b95b269f22daf68a3d1f5065c5",
+            "path": "/home/arthur/Code/cott/target/rust-graph-followup/kotlin/kotlinc/lib/kotlinx-coroutines-core-jvm.jar",
+            "version": "1.8.0"
+          }
+        },
+        "sandbox": {
+          "environment": [
+            "HOME",
+            "JAVA_HOME",
+            "JAVA_OPTS",
+            "LC_ALL",
+            "PATH",
+            "TMPDIR"
+          ],
+          "network": "disabled_by_default",
+          "provider": "bubblewrap"
+        },
+        "target": {
+          "jvm_target": 17,
+          "language": "kotlin"
+        }
+      },
+      "negative_binding_verify": "rejected, current unverified and last_verified preserved (asserted by test)",
+      "negative_log": "target/rust-graph-followup/evidence/kotlin-rejected.txt"
+    },
+    "dart": {
+      "verified_snapshot": "sha256:6eb09f48441d30b3cd4ca3ba67ee709a008e72072ef5b694bea48eb988c7cb5b",
+      "record_sha256": "951dbf083acd7df248888a65bd0d2e006979885682e5d60c8206be3ef6a79d3e",
+      "record_path": "target/rust-graph-followup/evidence/dart-verified.json",
+      "scenarios_passed": 46,
+      "assertions_passed": 92,
+      "clauses": [
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 234,
+            "end_column": 87,
+            "end_line": 8,
+            "start_byte": 152,
+            "start_column": 5,
+            "start_line": 8
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 319,
+            "end_column": 84,
+            "end_line": 10,
+            "start_byte": 240,
+            "start_column": 5,
+            "start_line": 10
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9132,
+            "end_column": 85,
+            "end_line": 241,
+            "start_byte": 9052,
+            "start_column": 5,
+            "start_line": 241
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9215,
+            "end_column": 82,
+            "end_line": 243,
+            "start_byte": 9138,
+            "start_column": 5,
+            "start_line": 243
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        }
+      ],
+      "tools": {
+        "commands": {
+          "analyze": {
+            "arguments": [
+              "analyze",
+              "--fatal-infos",
+              "<scratch>/package"
+            ],
+            "cwd": "<scratch>/compiler",
+            "environment": {
+              "CI": "true",
+              "DART_SUPPRESS_ANALYTICS": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin:/usr/bin:/bin",
+              "PUB_CACHE": "<scratch>/compiler/pub-cache",
+              "TMPDIR": "<scratch>"
+            },
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "network": "disabled"
+          },
+          "compile_kernel": {
+            "arguments": [
+              "compile",
+              "kernel",
+              "--packages=<scratch>/package/.dart_tool/package_config.json",
+              "--depfile=<scratch>/compiler/cott-module.d",
+              "--no-embed-sources",
+              "--output=<scratch>/compiler/cott-module.dill",
+              "<scratch>/compiler/entry.dart"
+            ],
+            "cwd": "<scratch>/compiler",
+            "environment": {
+              "CI": "true",
+              "DART_SUPPRESS_ANALYTICS": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin:/usr/bin:/bin",
+              "PUB_CACHE": "<scratch>/compiler/pub-cache",
+              "TMPDIR": "<scratch>"
+            },
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "network": "disabled"
+          },
+          "compile_runner_kernel": {
+            "arguments": [
+              "compile",
+              "kernel",
+              "--packages=<scratch>/package/.dart_tool/package_config.json",
+              "--depfile=<scratch>/compiler/cott-contract-runner.d",
+              "--no-embed-sources",
+              "--output=<scratch>/compiler/cott-contract-runner.dill",
+              "<scratch>/compiler/runner/runner.dart"
+            ],
+            "cwd": "<scratch>/compiler",
+            "environment": {
+              "CI": "true",
+              "DART_SUPPRESS_ANALYTICS": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin:/usr/bin:/bin",
+              "PUB_CACHE": "<scratch>/compiler/pub-cache",
+              "TMPDIR": "<scratch>"
+            },
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "network": "disabled"
+          },
+          "pub_get": {
+            "arguments": [
+              "pub",
+              "get",
+              "--offline",
+              "--enforce-lockfile",
+              "--no-precompile",
+              "--no-example"
+            ],
+            "cwd": "<scratch>/package",
+            "environment": {
+              "CI": "true",
+              "DART_SUPPRESS_ANALYTICS": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin:/usr/bin:/bin",
+              "PUB_CACHE": "<scratch>/compiler/pub-cache",
+              "TMPDIR": "<scratch>"
+            },
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "network": "disabled"
+          },
+          "run_kernel": {
+            "arguments": [
+              "--disable-dart-dev",
+              "<scratch>/compiler/cott-contract-runner.dill"
+            ],
+            "cwd": "<scratch>/compiler",
+            "environment": {
+              "CI": "true",
+              "DART_SUPPRESS_ANALYTICS": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin:/usr/bin:/bin",
+              "PUB_CACHE": "<scratch>/compiler/pub-cache",
+              "TMPDIR": "<scratch>"
+            },
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "network": "disabled"
+          }
+        },
+        "compiler_support": {
+          "archive": "https://pub.dev/api/archives/crypto-3.0.7.tar.gz",
+          "archive_sha256": "sha256:c8ea0233063ba03258fbcf2ca4d6dadfefe14f02fab57702265467a19f27fadf",
+          "package": "crypto",
+          "sources": [
+            {
+              "content_hash": "sha256:85337aeeee55c79d4a1da86d1393354c14e4a5f0daf402de66ffe974c51694bf",
+              "path": "crypto/AUTHORS"
+            },
+            {
+              "content_hash": "sha256:ad6a71997da90924b2cfb1fb47ec46537f70faf469efe016168794ae45ed6888",
+              "path": "crypto/LICENSE"
+            },
+            {
+              "content_hash": "sha256:0aa3fc33d3f17661ba26881463ae30e63bef2dc3a70089a3b9369b79c574349d",
+              "path": "crypto/digest.dart"
+            },
+            {
+              "content_hash": "sha256:9912d304a55d1b9eb534ad49e9983eed9acf914e13444e1c51c7d3b71be40ca2",
+              "path": "crypto/digest_sink.dart"
+            },
+            {
+              "content_hash": "sha256:6a896dc98a5de35ebf6a71deb41cd0af940e3468fec1912c24c17a5a65fdd45a",
+              "path": "crypto/hash.dart"
+            },
+            {
+              "content_hash": "sha256:2b0642541390cd748d257d0a7f774f4854cd737639ca4e0d7a1ec910c9e603c3",
+              "path": "crypto/hash_sink.dart"
+            },
+            {
+              "content_hash": "sha256:5f7dd7c618144cc8c2dbdc7d2596922287214a7b25d17c9f89aaa0b41a43f6cd",
+              "path": "crypto/hmac.dart"
+            },
+            {
+              "content_hash": "sha256:64b2b537d597a8306c0ad77e69e8b2b2e3b97adef46c622fab681333813a3797",
+              "path": "crypto/sha256.dart"
+            },
+            {
+              "content_hash": "sha256:6894378a65f58f75948e070797584c326571c806500fc6f83d390a3a1b127c71",
+              "path": "crypto/utils.dart"
+            }
+          ],
+          "version": "3.0.7"
+        },
+        "cott": {
+          "content_hash": "sha256:c00a7fac2633a4a61cd892067f34101b9de50a0e62cf38ef60208d1583d6afa8",
+          "executable": "/home/arthur/Code/cott/target/debug/cott",
+          "version": "1.0.0"
+        },
+        "dart": {
+          "content_hash": "sha256:85261d86cfb808e762d7b951f2d9745d8746eb9f1f2f62547d87753fd001ea89",
+          "distribution": "/home/arthur/development/flutter/bin/cache/dart-sdk",
+          "distribution_files": [
+            {
+              "content_hash": "sha256:85261d86cfb808e762d7b951f2d9745d8746eb9f1f2f62547d87753fd001ea89",
+              "path": "bin/dart"
+            },
+            {
+              "content_hash": "sha256:94f940ac0087ba7a3be77ef416f620b69e19a80e22b13779181f043e9ccdd93e",
+              "path": "bin/snapshots/analysis_server_aot.dart.snapshot"
+            },
+            {
+              "content_hash": "sha256:1058f7a778c29f8be623a4fe78a5cad6870c541e240b191a59629894c016083d",
+              "path": "bin/snapshots/dartdev_aot.dart.snapshot"
+            },
+            {
+              "content_hash": "sha256:ccfbd16a45491cf4b149ca9d008985fd17d094a65f4e600c77e3e3ef5fc4dea1",
+              "path": "bin/snapshots/gen_kernel_aot.dart.snapshot"
+            },
+            {
+              "content_hash": "sha256:3333778598e3d179143093df72734e8e817f0ae2aa0e9b623e09bdccc5d13157",
+              "path": "bin/snapshots/kernel-service.dart.snapshot"
+            },
+            {
+              "content_hash": "sha256:e72b03ed5b70312f2782f2b05055c55b24670e126d50e24c4f2c559bf288f810",
+              "path": "version"
+            }
+          ],
+          "distribution_hash": "sha256:2e39e5bbecacf1302d09ce85d4f923df05c5b050a054da6c5728b23c9fa2a249",
+          "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+          "platform": {
+            "abi": "linux_x64",
+            "executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "operating_system": "linux",
+            "operating_system_version": "Linux 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026",
+            "resolved_executable": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart",
+            "version": "3.13.5 (stable) (Tue Sep 29 01:00:52 2026 -0700) on \"linux_x64\""
+          },
+          "version": "3.13.5"
+        },
+        "required_inputs": {
+          "package_config": "sha256:c77a8443ce2cab85a378cf5c9751116f2d2c4fdc7c6108042d6d042eea347129",
+          "runtime_dependencies": [],
+          "support": "private relative crypto 3.0.7 source closure"
+        },
+        "runtime": {
+          "abi": 2,
+          "version": "1.0.0"
+        },
+        "runtime_sandbox": {
+          "network": "disabled",
+          "provider": "bubblewrap"
+        },
+        "sandbox": {
+          "environment": [
+            "CI",
+            "DART_SUPPRESS_ANALYTICS",
+            "HOME",
+            "LC_ALL",
+            "PATH",
+            "PUB_CACHE",
+            "TMPDIR"
+          ],
+          "network": "disabled",
+          "provider": "bubblewrap"
+        },
+        "target": {
+          "language": "dart",
+          "sdk": "/home/arthur/development/flutter/bin/cache/dart-sdk/bin/dart"
+        }
+      },
+      "negative_binding_verify": "rejected, current unverified and last_verified preserved (asserted by test)",
+      "negative_log": "target/rust-graph-followup/evidence/dart-rejected.txt"
+    },
+    "rust": {
+      "verified_snapshot": "sha256:3acbaf86a7027a113e28a5125d250074bd6596d781bb518be88639b6ba9a8f0d",
+      "record_sha256": "e3bab073229fa8f7186e44ddeee4868ba2ab0e5dcca2fde718886bfaf35facf6",
+      "record_path": "target/rust-graph-followup/evidence/rust-verified.json",
+      "scenarios_passed": 46,
+      "assertions_passed": 92,
+      "clauses": [
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 234,
+            "end_column": 87,
+            "end_line": 8,
+            "start_byte": 152,
+            "start_column": 5,
+            "start_line": 8
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 319,
+            "end_column": 84,
+            "end_line": 10,
+            "start_byte": 240,
+            "start_column": 5,
+            "start_line": 10
+          },
+          "status": "observed",
+          "symbol": "graph.decide_list"
+        },
+        {
+          "clause_id": "requires:0",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "requires"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9132,
+            "end_column": 85,
+            "end_line": 241,
+            "start_byte": 9052,
+            "start_column": 5,
+            "start_line": 241
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        },
+        {
+          "clause_id": "ensures:1",
+          "evidence": [
+            {
+              "applicable_cases": 27,
+              "grade": "runtime check",
+              "phases": [
+                "ensures"
+              ],
+              "positive_applicable": true,
+              "status": "passed",
+              "valid_cases": 27
+            }
+          ],
+          "span": {
+            "end_byte": 9215,
+            "end_column": 82,
+            "end_line": 243,
+            "start_byte": 9138,
+            "start_column": 5,
+            "start_line": 243
+          },
+          "status": "observed",
+          "symbol": "graph.decide_set"
+        }
+      ],
+      "tools": {
+        "cargo": {
+          "executable": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+          "hash": "sha256:e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+          "release": "1.99.0",
+          "version": "cargo 1.99.0 (5f94df478 2026-08-27)"
+        },
+        "commands": {
+          "build_library": {
+            "arguments": [
+              "build",
+              "--lib",
+              "--offline",
+              "--locked",
+              "--jobs",
+              "1",
+              "--message-format=json"
+            ],
+            "cwd": "<scratch>/package",
+            "environment": {
+              "CARGO_HOME": "<scratch>/compiler/cargo-home",
+              "CARGO_INCREMENTAL": "0",
+              "CARGO_PROFILE_DEV_DEBUG": "0",
+              "CARGO_TARGET_DIR": "<scratch>/compiler/target",
+              "CI": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+              "RUSTC": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+              "RUSTFLAGS": "-D warnings",
+              "TMPDIR": "<scratch>/compiler/tmp"
+            },
+            "executable": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+            "network": "disabled"
+          },
+          "build_runner": {
+            "arguments": [
+              "build",
+              "--offline",
+              "--locked",
+              "--jobs",
+              "1",
+              "--message-format=json"
+            ],
+            "cwd": "<scratch>/runner",
+            "environment": {
+              "CARGO_HOME": "<scratch>/compiler/cargo-home",
+              "CARGO_INCREMENTAL": "0",
+              "CARGO_PROFILE_DEV_DEBUG": "0",
+              "CARGO_TARGET_DIR": "<scratch>/compiler/target",
+              "CI": "true",
+              "HOME": "<scratch>/compiler/home",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+              "RUSTC": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+              "RUSTFLAGS": "-D warnings",
+              "TMPDIR": "<scratch>/compiler/tmp"
+            },
+            "executable": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+            "network": "disabled"
+          },
+          "run": {
+            "arguments": [],
+            "cwd": "<scratch>/runtime",
+            "environment": {
+              "HOME": "<scratch>/runtime",
+              "LC_ALL": "C.UTF-8",
+              "PATH": "/usr/bin:/bin",
+              "TMPDIR": "<scratch>/runtime"
+            },
+            "executable": "<scratch>/compiler/target/cott-contract-runner-frozen",
+            "network": "disabled"
+          }
+        },
+        "compiler_support": {
+          "files": {
+            "confinement.rs": "sha256:dc08f3298215447ec5d9fc4d37e8d6529d38f55911554b32da999eda4213e46f",
+            "evidence.rs": "sha256:ee02a3de88666ed958ad1aaf4b6547a74bb396b9ae540803169442abd5b0a3e7",
+            "scenario.rs": "sha256:5432ecb3eaedcd6de8df422cf2a21876bdeef1ab882dc9b1793233c48e94e5f2"
+          },
+          "implementation": "std-only SHA-256/HMAC-SHA256"
+        },
+        "cott": {
+          "content_hash": "sha256:c00a7fac2633a4a61cd892067f34101b9de50a0e62cf38ef60208d1583d6afa8",
+          "executable": "/home/arthur/Code/cott/target/debug/cott",
+          "version": "1.0.0"
+        },
+        "identity_files": {
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo": "sha256:e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc": "sha256:f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM-23-rust-1.99.0-stable.so": "sha256:805279dd64ec14a4d5034a0809cb9569a5247d66350d992db173d04fe0ea5300",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/libLLVM.so.23.1-rust-1.99.0-stable": "sha256:7c2c7ebb79211f07e3b32e408a1a65b4d205656792f9c51bdbefcb21c0868cbd",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/librustc_driver-999a121de2f042be.so": "sha256:f45c41337f1516bb9f4d504a2a507202a01c431fc2063334913dde5480ffee03",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-df57c875825aae11.rlib": "sha256:7d5faa10ada9e68002f8095e447e5e180aac98e5c462112bf30e33933a8a38a3",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-df57c875825aae11.rmeta": "sha256:d6a8b3858429a805581db40e88fdfc59751469d0849983c8d3b22523d13a46c2",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-c92358cf71ab9d80.rlib": "sha256:e6f0cbed050616bd9f99d4740996b4c618a19076d00aa6866e435a4493e890c3",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-c92358cf71ab9d80.rmeta": "sha256:0546f028f3652aa54fd934b454933e2a3cab6ab502f057232fe1795beca7368d",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-a8d2bee804de7f49.rlib": "sha256:314cf1b77fb97fb37b101ddbf7bf2aa2f23dc4592526e930096dd587a57ee276",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-a8d2bee804de7f49.rmeta": "sha256:0fc57c34a3ce832526573d670fe6630ab5e5b458040c7bdd5cae5994fd68ce42",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-276f567c6e916760.rlib": "sha256:37c588690acbf4b69a9bab259034e106492b36ffd0da467e9437ac2f20931603",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-276f567c6e916760.rmeta": "sha256:99a09d1cc265f1b51675f739c927e80c7d23cfd373580d785d77f79ac3ca1867",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-2ae2df7d631cccc2.rlib": "sha256:750af4390d1114744fa53efd851f0f682f7aacca0bcb900d12e98a56a9156132",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-2ae2df7d631cccc2.rmeta": "sha256:9bd639a27ec74e08bbe567a91bd236e3e30c5460fd24247f5f8e91214f5c6e51",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-667b96598095cbda.rlib": "sha256:c15838ef7badc5864374c239ca1ba61f2a38e75258a75424ad302ac3f0cb5599",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-667b96598095cbda.rmeta": "sha256:e1c204a52a389f7e52132035e63909428be4615aeb6463d42caf76cf5b3cf087",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgetopts-0ed6ac41bd0ec920.rlib": "sha256:9fe03a401592e383864cca41faccec40536d3ae83af061fa84e71e5c65f56925",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgetopts-0ed6ac41bd0ec920.rmeta": "sha256:d61759e0a6fcfdf25fbc3a394d05647e99cabbc60f1181c5b31535783ddbcc98",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-ccadb29741f100ae.rlib": "sha256:753b666aac5863f3aca31ee79d87a2f1de449c9a20ff9d539d4bce9f232c2a94",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-ccadb29741f100ae.rmeta": "sha256:de64f42f3fad6be2b1f48011da9c02f13cd19f9d659b9d2463f84a0dd879c656",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-a866a54442f41e1a.rlib": "sha256:ee8209ba5e81d8b862f508680fd6eeedd6804dc5ec0fe60040b2a228c46bb27d",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-a866a54442f41e1a.rmeta": "sha256:b09b156afc5141caa764cccce314d6c7b57bffc64b61f96ee1b6f0daa67f9a55",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-00ed1c777b5c740b.rlib": "sha256:d797bbca6777aa7cb4393bfc89581dee5e4f7d7e7c86f241e9f0773c6f21a84f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-00ed1c777b5c740b.rmeta": "sha256:7767a7ae0f69964d017911b6de468ce2b4dd5620c86484644ba8255e8577c562",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-a82e71cb639e1c05.rlib": "sha256:863b3aca5a3166361cd26673f9a380ca994dfa2662d389bea946acc06b6cc789",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-a82e71cb639e1c05.rmeta": "sha256:890ce0df64d6c0428e9d7042846efe7d17baef751bee1df84f5a9d007a67c2ff",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-a9ecb409b41a7a16.rlib": "sha256:45876922e1d420919baa5c3e074e8d29c12cd9f2b65e0010f7fa8a535f9dfab8",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-a9ecb409b41a7a16.rmeta": "sha256:9e0c0b7c7d8d245fc2c3d6a4d814d13c93316e59b19f396ec4c5c6e810094456",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-3804a19dce00e58e.rlib": "sha256:9dfc587a64d94a3e1c617ff34e694dfe7bde88f190ab157610c3185189d1af58",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-3804a19dce00e58e.rmeta": "sha256:baacb6c9618c1e3480f500e10ab4789774e151c13f42d9173ff2812e348c25a6",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_abort-b7133f5b77305b61.rlib": "sha256:cb23ec82709b016b305d457f893f23d341c9c8fcb9f897b0c2747b5b43b0913f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_abort-b7133f5b77305b61.rmeta": "sha256:535f3973e723330ff709e33345962941071fafa487fed08126fc0a51e8c2090c",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-9c7be438a18dddd7.rlib": "sha256:b202594269a703d92e5008109e1116c3d2b76e49e6d267f2c4c8c8cc2a1ed5eb",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-9c7be438a18dddd7.rmeta": "sha256:f00aeab60b85c0831bdc2c39685cf2987ef714d637dfc9c1e3a3a138045f8963",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libproc_macro-b65ef0711b0c0bc7.rlib": "sha256:bd4beb4d6cdd3cad281c86c9189690c29e54f9b23cc13984c298dd394277bdd0",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libproc_macro-b65ef0711b0c0bc7.rmeta": "sha256:c418771d34d7cf108ed6885a9a9eca7c6fe216ca5be4a95abba302fda672f12f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libprofiler_builtins-0ffc34a329b998ac.rlib": "sha256:e2d92758b2eb822277c5691b80b59ae86a714fdcfffef20057eedd9bc44d6bce",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libprofiler_builtins-0ffc34a329b998ac.rmeta": "sha256:1089112278d26232c3d2679e887379f580b9685144c52952a6ef00fdb7adbe73",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.asan.a": "sha256:b7cfb860c2bc7906d5db4b1258da3943a8d1bb6fa21a1df43af5d3c7292e0f16",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.dfsan.a": "sha256:33b00d043c34388e49202e43294864adb3dcccd67b8f22fdd574220aada35a36",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.lsan.a": "sha256:f1359a2732d47191816714a3a4dc47ce66f46aebd98518457ac611136f491470",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.msan.a": "sha256:3ddff9f86d2c6de29b3331f0078c9e0accb1288f48bfab4e71bbe4ce9c57f5da",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.rtsan.a": "sha256:9930ebe77a314710392e3888fad648cb14840d93a4d1c04b6bc4a5997ecf82f9",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.safestack.a": "sha256:4759b5ca604104d6909d3c0966edb783494c473db3ed0c67796644aa9b18c06e",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.tsan.a": "sha256:a24426ac26d91e95d9d769ef60fb2708e6a2f4c3fd518bf0866ea2654706a9f6",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-stable_rt.ubsan.a": "sha256:9697096312e9a6139102cd763e3f39789267240ac419cbe9de735030a9208fa3",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-f424ec8139a3c700.rlib": "sha256:ca5365533277923543d7c5c9e609a6204f40ab88e39fc41dec6a6c868af9c698",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-f424ec8139a3c700.rmeta": "sha256:8d4020f073edadafed798fd62c3d2dc78aeb129eaf18131671f840f2093c3b66",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_literal_escaper-593ddd7d8172bc83.rlib": "sha256:b36c1013c91dd626fe7f71dabd9973270aae58b78235590d007a59c7ce44e496",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_literal_escaper-593ddd7d8172bc83.rmeta": "sha256:9af6bb9da4c20567c0ba08fa154ee08e78a9b97a42fc5cf4a25c69759c7a0706",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-d711658231dabeba.rlib": "sha256:1ecf1148a8f906c68ad8d2078de14c9d0562015bfe7189fb51bd124526beca99",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-d711658231dabeba.rmeta": "sha256:8a4d004717d956381051a2e299fb834f50b9c33b2f0ed6e1059b0dcd6769c3b2",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-9b5da76dfc4ac20c.rlib": "sha256:2d2fe1af330d7b85708dec8f7bd7af1bfdaabb6cdfd0f03c16f4a0d2ceb7a863",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-9b5da76dfc4ac20c.rmeta": "sha256:dbe1d1709378230d2860b9dc4d7b6be7f37b6d717ad336543302dc1f2017df37",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_std-f0d350f8e9074f2b.rlib": "sha256:896e9ffe03305d5d8fe8bedc489658b05c0250a89eb0af15ff32409afd3f496a",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_std-f0d350f8e9074f2b.rmeta": "sha256:054386c1bf28154c638d81dba39c40c5e07132747e51a4624c78a1358badd59f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-44675f186029a4cd.rlib": "sha256:fac69b9ff15fec1098a5de2ec37129dbbb95d8234c43b28d09f619f62fa2538f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-44675f186029a4cd.rmeta": "sha256:a4df9318335ea3195565c9c78eeb68e740d05922e8e6498d887edf78b063b06d",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-44675f186029a4cd.so": "sha256:eecfd9cf54451e1f7f89d14d72dea1e47c12a4e4de68ce17ea133fb2cf03aa09",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-fa6b165c4e946934.rlib": "sha256:a18acbe3b8e0ff89899bc79c7cabad152a71f3bdd864b8ffbdc7e21e399a755f",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-fa6b165c4e946934.rmeta": "sha256:2f7454cba870598b815a238c1c68ea3d36c28ec9d6fcff06593d16e5fcb0efd9",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libsysroot-bb936d41c642710b.rlib": "sha256:b5c0fff8eaa903066a0974d37380729174773011bd54ccb2c05f47cbba9d8346",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libsysroot-bb936d41c642710b.rmeta": "sha256:4cac7527aaacdc64fa4b1ffaeb0d23802a0d2c00ba5fe7e51bdf96bb874d721a",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libtest-6cd7df0c60c9e6ae.rlib": "sha256:0abde59a843bbc0035129124558914f7eae976fbc2687ee8239f5dee3985fa11",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libtest-6cd7df0c60c9e6ae.rmeta": "sha256:ebc82bb5271ab9cfb074046a995967ad633b88b0e17043fc6e67035c566665d1",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-f8ca72da0011281d.rlib": "sha256:46bbbb22b2928d691d3cf69f69107683b0085b06da5e5503c32ba801cf377dc5",
+          "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-f8ca72da0011281d.rmeta": "sha256:10589beb7b0749b0c437fe884c2ea2aaa37fef90641f528f660b7955878e9242"
+        },
+        "runtime": {
+          "abi": 1,
+          "version": "1.0.0"
+        },
+        "runtime_sandbox": {
+          "compilation_only": false,
+          "facade_only": true,
+          "filesystem_confinement": {
+            "applied_before_runtime_threads": true,
+            "mechanism": "landlock",
+            "minimum_abi": 3,
+            "proc_read_allowlist": []
+          },
+          "grade": "runtime check",
+          "network": "disabled",
+          "process_confinement": {
+            "applied_before_secret_input": true,
+            "child_execution": "denied",
+            "mechanism": "seccomp",
+            "non_thread_clone": "denied",
+            "thread_synchronization": true
+          },
+          "sandbox": "bubblewrap",
+          "status": "passed"
+        },
+        "rustc": {
+          "commit_hash": "b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
+          "executable": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+          "hash": "sha256:f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+          "host": "x86_64-unknown-linux-gnu",
+          "release": "1.99.0",
+          "version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1"
+        },
+        "sysroot": "/home/arthur/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+        "target": {
+          "cargo": "/usr/bin/cargo",
+          "language": "rust",
+          "rustc": "/usr/bin/rustc"
+        }
+      },
+      "negative_binding_verify": "rejected, current unverified and last_verified preserved (asserted by test)",
+      "negative_log": "target/rust-graph-followup/evidence/rust-rejected.txt"
+    }
+  },
+  "collections_native": {
+    "verified_record": "target/rust-graph-followup/evidence/collections-verified.json",
+    "snapshot": "sha256:b436135ebcc4465f3b4924fe96edbc2133609ea303abc5fdd2d149bf0d9044f4",
+    "asserted": "128-key typed literal scenario real verify; deployment consumed by offline native Cargo consumer; from_scalar and legacy PartialEq borrowed-key APIs both compile/run; covariance and Vec-only layout regression pass"
+  },
+  "microbenchmark": {
+    "before": "rust-collections-before.json",
+    "after": "rust-collections-after.json",
+    "comparison": "rust-collections-comparison.json",
+    "runtime_source_sha256": "35da54f47165de42b2b3974402e6ad5306f3704cb5375072f29e4c1e64868063",
+    "samples_per_side": 7,
+    "rows_per_sample": 36,
+    "scope": "runtime fragment microbenchmark, NOT certified facade",
+    "commands": [
+      "python3 benchmarks/rust_collections.py --source target/rust-graph-followup/collections-before.rs --rustc /usr/bin/rustc --output benchmarks/results/rust-collections-before.json",
+      "python3 benchmarks/rust_collections.py --source src/rust/runtime/collections.rs --rustc /usr/bin/rustc --indexed --output benchmarks/results/rust-collections-after.json"
+    ],
+    "limits": [
+      "release opt-level3, one process per sample, no CPU isolation",
+      "nanoseconds per full operation (lookup visits all input keys)",
+      "allocation count and requested bytes for a separate operation, including owned input clones; not RSS/retained/peak; std allocator counter adds timing overhead",
+      "25% duplicate integer/string keys; same inputs and compiler flags; do not generalize to user key types"
+    ],
+    "constructor": "from_scalar uses a temporary construction index only, then discards it; lookup and equality unchanged",
+    "iteration": "64-entry first candidate slowed 128-entry u64; thresholds adjusted to integer1024/String64/bool linear. Persistent index candidate rejected because stored typed hash callback would make borrowed-key types invariant. Final Vec-only layout, covariance and24-byte header preserved; all prior candidate files retained under owned target directory."
+  },
+  "tool_provisioning": {
+    "kotlin": {
+      "url": "https://github.com/JetBrains/kotlin/releases/download/v2.2.10/kotlin-compiler-2.2.10.zip",
+      "sha256": "302d1d8e671e5c3207e6ed62ff11fb555462a628e22a1158254dcaaf7e7394bc",
+      "bytes": 78048449
+    },
+    "kotlin_version": "kotlinc-jvm2.2.10",
+    "jdk": "Temurin17.0.20.1+1",
+    "dart": "3.13.5",
+    "python": "CPython3.14.6",
+    "basedpyright": "1.39.9",
+    "rust": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+    "global_settings_changed": false
+  },
+  "abi_schema_decision": {
+    "canonical_ir": 9,
+    "strategy": 6,
+    "python_generation_runtime": "8/7",
+    "kotlin_generation_runtime": "2/1",
+    "dart_generation_runtime": "2/2",
+    "rust_generation_runtime": "1/1",
+    "reason": "Additive named intrinsic using existing expression fields, unchanged canonical value/call semantics; strengthen closed name/shape/selector validation. Private native layout is not repr(C) or stable FFI. Managed/runtime/compiler byte hashes change; explicit emit+real verify still required. No record migration, alias or old-certification carry-over."
+  },
+  "environment_blocker": {
+    "test": "native_finite_filesystem_loopback_and_cooperative_cancellation_scenarios",
+    "error": "sandboxed Rust runtime execution failed: isolated loopback is unavailable",
+    "probe": "unshare --user --map-root-user --net true",
+    "probe_exit": 1,
+    "probe_error": "unshare: write failed /proc/self/uid_map: Operation not permitted",
+    "untested": "existing isolated-loopback HTTP scenario cannot complete in this host namespace policy; pure new graph/collection scenarios all ran",
+    "no_bypass": true
+  },
+  "generation": {
+    "requested_model": "gpt 6.1 sol",
+    "actual_provider_calls": 0,
+    "actual_generate_calls": 0,
+    "reason": "Independent deterministic authored test/benchmark fixtures need no generation; no alternate model or guessed ID. Full-suite mock generate remains test protocol only."
+  },
+  "git_commit_or_push": false
+}

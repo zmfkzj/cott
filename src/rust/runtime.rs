@@ -32,20 +32,7 @@ pub enum Never {}
 pub enum JsonValue { Null, Bool(bool), Integer(i128), Number(f64), String(String), Array(Vec<JsonValue>), Object(std::collections::BTreeMap<String, JsonValue>) }
 "#,
     include_str!("runtime/any.rs"),
-    r#"
-#[derive(Clone, Debug)]
-pub struct Set<T>(Vec<T>);
-impl<T:PartialEq> Set<T>{pub fn new(mut values:Vec<T>)->Self{let mut write=0;for read in 0..values.len(){if !values[..write].contains(&values[read]){if write!=read{values.swap(write,read)}write+=1;}}values.truncate(write);Self(values)}pub fn contains(&self,value:&T)->bool{self.0.contains(value)}}
-impl<T> Set<T>{pub fn len(&self)->usize{self.0.len()}pub fn is_empty(&self)->bool{self.0.is_empty()}pub fn iter(&self)->std::slice::Iter<'_,T>{self.0.iter()}pub fn into_vec(self)->Vec<T>{self.0}#[allow(dead_code)]pub(crate) fn __cott_from_unique(values:Vec<T>)->Self{Self(values)}}
-impl<T:PartialEq> PartialEq for Set<T>{fn eq(&self,other:&Self)->bool{self.len()==other.len()&&self.iter().all(|v|other.contains(v))}}
-impl<T:Eq> Eq for Set<T>{}
-#[derive(Clone,Debug)]
-pub struct Map<K,V>(Vec<(K,V)>);
-impl<K:PartialEq,V> Map<K,V>{pub fn new(mut values:Vec<(K,V)>)->Self{let mut write=values.len();for read in(0..values.len()).rev(){if !values[write..].iter().any(|entry|entry.0==values[read].0){write-=1;if write!=read{values.swap(write,read)}}}values.drain(..write);Self(values)}pub fn get(&self,key:&K)->Option<&V>{self.0.iter().find(|e|&e.0==key).map(|e|&e.1)}}
-impl<K,V> Map<K,V>{pub fn len(&self)->usize{self.0.len()}pub fn is_empty(&self)->bool{self.0.is_empty()}pub fn iter(&self)->std::slice::Iter<'_,(K,V)>{self.0.iter()}pub fn into_vec(self)->Vec<(K,V)>{self.0}#[allow(dead_code)]pub(crate) fn __cott_from_unique(values:Vec<(K,V)>)->Self{Self(values)}}
-impl<K:PartialEq,V:PartialEq> PartialEq for Map<K,V>{fn eq(&self,other:&Self)->bool{self.len()==other.len()&&self.iter().all(|(k,v)|other.get(k)==Some(v))}}
-impl<K:Eq,V:Eq> Eq for Map<K,V>{}
-"#,
+    include_str!("runtime/collections.rs"),
     include_str!("runtime/protocols.rs"),
     r#"
 
@@ -67,6 +54,7 @@ pub fn cyclic_by<T,K:PartialEq>(values:&[T],key:impl Fn(&T)->&K,deps:impl Fn(&T)
 pub fn dependency_ordered_by<T,K:PartialEq>(input:&[T],output:&[T],key:impl Fn(&T)->&K,deps:impl Fn(&T)->&Vec<K>)->bool{permutation_by(input,output,&key)&&output.iter().enumerate().all(|(i,v)|deps(v).iter().all(|d|output[..i].iter().any(|x|key(x)==d)))}
 
 "#,
+    include_str!("runtime/graph.rs"),
     include_str!("runtime/tasks.rs"),
     r#"
 

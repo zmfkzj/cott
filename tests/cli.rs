@@ -3727,6 +3727,48 @@ fn intent_doc_edit_queues_regeneration_without_washing_pending() {
     )
     .expect("doc edit should be writable");
 
+    let before_inspection = fs::read(project.path.join("generated/generation.json")).unwrap();
+    let explained = cott(&project.path, &["diff", "--format", "json"]);
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let explanation: serde_json::Value = serde_json::from_slice(&explained.stdout).unwrap();
+    let regeneration = explanation["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|advice| {
+            advice["message"]
+                .as_str()
+                .unwrap()
+                .contains("requires generation")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(regeneration.len(), 1);
+    assert_eq!(regeneration[0]["subject"], "app.primary");
+    assert!(
+        regeneration[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scoped intent changed in app.primary")
+    );
+    assert!(
+        regeneration[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("explicit `cott verify`")
+    );
+    let human = cott(&project.path, &["diff"]);
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("`app.primary` requires generation"));
+    assert!(!String::from_utf8_lossy(&human.stdout).contains("`app.sibling` requires generation"));
+    assert_eq!(
+        fs::read(project.path.join("generated/generation.json")).unwrap(),
+        before_inspection
+    );
+
     let pending = cott(&project.path, &["emit", "python"]);
     assert!(
         pending.status.success(),
@@ -3898,6 +3940,43 @@ fn intent_rules_tamper_and_partial_checkpoint_preserve_ownership() {
         "Prefer explicit returns.\nRegenerate after rule edits.\n",
     )
     .expect("rules should be writable");
+    let before_diff = fs::read(project.path.join("generated/generation.json")).unwrap();
+    let explained = cott(&project.path, &["diff", "--format", "json"]);
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&explained.stdout).unwrap();
+    let advice = report["advice"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            entry["message"]
+                .as_str()
+                .unwrap()
+                .contains("requires generation")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        advice
+            .iter()
+            .map(|entry| entry["subject"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["app.primary", "app.sibling"]
+    );
+    assert!(advice.iter().all(|entry| {
+        entry["message"]
+            .as_str()
+            .unwrap()
+            .contains("exact edit cannot be reconstructed")
+    }));
+    assert_eq!(
+        fs::read(project.path.join("generated/generation.json")).unwrap(),
+        before_diff
+    );
+
     let pending = cott(&project.path, &["emit", "python"]);
     assert!(
         pending.status.success(),

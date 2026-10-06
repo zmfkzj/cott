@@ -157,6 +157,20 @@ pub(crate) fn opaque_marker(tag: &str) -> String {
             .expect("hex digest")
     )
 }
+pub(crate) fn collection_constructor(key: Option<&Value>) -> &'static str {
+    if key.is_some_and(|ty| {
+        ty["kind"] == "primitive"
+            && matches!(
+                ty["name"].as_str(),
+                Some("str" | "bool" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64")
+            )
+    }) {
+        "from_scalar"
+    } else {
+        "new"
+    }
+}
+
 pub(crate) fn render_value_contextual(
     value: &Value,
     expected_type: Option<&Value>,
@@ -227,7 +241,11 @@ pub(crate) fn render_value_contextual(
                 .collect::<Result<Vec<_>, _>>()?;
             match text(value, "kind")? {
                 "list" => format!("vec![{}]", values.join(", ")),
-                "set" => format!("crate::cott_runtime::Set::new(vec![{}])", values.join(", ")),
+                "set" => format!(
+                    "crate::cott_runtime::Set::{}(vec![{}])",
+                    collection_constructor(expected_type.and_then(|t| t.get("item"))),
+                    values.join(", ")
+                ),
                 "array" => format!("[{}]", values.join(", ")),
                 _ => format!(
                     "({}{})",
@@ -242,7 +260,8 @@ pub(crate) fn render_value_contextual(
                 .map(|e| Ok(format!("({}, {})", render(&e[0])?, render(&e[1])?)))
                 .collect::<Result<Vec<_>, String>>()?;
             format!(
-                "crate::cott_runtime::Map::new(vec![{}])",
+                "crate::cott_runtime::Map::{}(vec![{}])",
+                collection_constructor(expected_type.and_then(|t| t.get("key"))),
                 entries.join(", ")
             )
         }

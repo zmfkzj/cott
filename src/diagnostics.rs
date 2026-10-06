@@ -75,6 +75,10 @@ impl SourceMap {
         self.files.get(id.0 as usize).map(|file| &file.path)
     }
 
+    pub fn text(&self, id: FileId) -> Option<&str> {
+        std::str::from_utf8(&self.files.get(id.0 as usize)?.bytes).ok()
+    }
+
     pub fn location(&self, span: SourceSpan) -> Option<RenderedSpan> {
         let file = self.files.get(span.file.0 as usize)?;
         let start = location(file, span.start_byte)?;
@@ -162,6 +166,28 @@ impl Diagnostic {
             related: Vec::new(),
             source_order: 0,
         }
+    }
+
+    /// Shared CLI/editor text; keep the closed JSON fields independent and unchanged.
+    /// Missing explanations stay missing, rather than being inferred from the error code.
+    pub fn display_message(&self) -> String {
+        let mut lines = vec![self.message.clone()];
+        for (label, value) in [
+            ("expected", &self.expected),
+            ("actual", &self.actual),
+            ("reason", &self.reason),
+        ] {
+            if let Some(value) = value {
+                lines.push(format!("  {label}: {value}"));
+            }
+        }
+        lines.extend(self.help.iter().map(|help| format!("  help: {help}")));
+        lines.extend(
+            self.related
+                .iter()
+                .map(|related| format!("  related: {}", related.message)),
+        );
+        lines.join("\n")
     }
 
     pub fn warning(code: impl Into<String>, message: impl Into<String>, span: Span) -> Self {

@@ -1,0 +1,106 @@
+{
+  "scope": "implementation validation receipt; NOT Cott generation/verification provenance",
+  "latest_status": "supported-facade follow-up completed; prior entries retained as historical evidence",
+  "head_at_start": "921158c838150c880c5b2792b02969d922626602",
+  "tool_versions": {
+    "python": "CPython 3.14.4 (GCC 15.2.0)",
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "cott": "cott 1.0.0"
+  },
+  "checks": [
+    {
+      "command": "cargo fmt --check",
+      "exit_code": 0,
+      "log": "target/implementation-checks/fmt.log"
+    },
+    {
+      "command": "CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 -- --test-threads=4",
+      "execution": "foreground",
+      "exit_code": 0,
+      "passed": 998,
+      "failed": 0,
+      "ignored": 103,
+      "suites": 78,
+      "log": "target/implementation-checks/cargo-test.log",
+      "limits": "Default ignored native/program regressions remain ignored. Existing fake pinned tools/providers are unit/integration fixtures, not real certification or model calls."
+    },
+    {
+      "command": "CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -j 2 --test python_runtime --test python_emit",
+      "exit_code": 0,
+      "python_emit_passed": 41,
+      "python_runtime_passed": 13,
+      "log": "/tmp/cott-implementation-python.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 COTT_BENCH_RUNTIME=/tmp/cott-boundary-candidate-native COTT_BENCH_COTT=$PWD/target/debug/cott python3 -m unittest discover -s benchmarks -p 'test_*.py' -v",
+      "exit_code": 0,
+      "passed": 9,
+      "skipped": 0,
+      "log": "target/implementation-checks/benchmark-tests.log"
+    },
+    {
+      "command": "cmp benchmarks/results/abi-before.json benchmarks/results/abi-after.json",
+      "exit_code": 0,
+      "observations": 61,
+      "limits": "Deterministic runtime acceptance/failure observations, not formal correctness or certification evidence."
+    },
+    {
+      "command": "git diff --check; git diff --exit-code -- schemas examples",
+      "exit_code": 0,
+      "result": "No whitespace errors; schemas and examples/accepted/generated example outputs unchanged."
+    }
+  ],
+  "retried_environment_failure": {
+    "execution": "initial background shell cargo test",
+    "exit_code": 101,
+    "test": "fixture_database_failure_boundary_preserves_real_connection_state",
+    "cause": "Background shell inherited SIGINT=SIG_IGN (1). Runtime correctly rejected the interrupt fixture. Foreground probe showed default_int_handler; full foreground rerun passed without runtime/test weakening.",
+    "log": "target/implementation-checks/cargo-test-background.log",
+    "probes": ["target/implementation-checks/signal-background.log", "target/implementation-checks/signal-foreground.log"]
+  },
+  "performance": {
+    "record_status": "historical initial blocked attempt; superseded for acceptance by supported_facade_followup, never relabeled as certified",
+    "scope": "non-certified compiler-rendered Python component, real CPython 3.14.4",
+    "reports": ["boundary-before.json", "boundary-after.json", "boundary-comparison.json"],
+    "noise_followup": ["noise-followup-before.json", "noise-followup-after.json", "noise-followup-comparison.json"],
+    "normal_facade_attempt": "facade-attempt.json",
+    "normal_emit_successes": 6,
+    "normal_verify_failures": 6,
+    "authenticated_facade_measurements": 0,
+    "blockers": ["BasedPyright executable missing", "Installed CPython 3.14.4 is below required >=3.14.6,<3.15"]
+  },
+  "generation": {
+    "requested_user_model": "gpt 6.1 sol",
+    "confirmed_provider_model_id": null,
+    "actual_provider_calls": 0,
+    "actual_cott_generate_calls": 0,
+    "reason": "Fixed-algorithm benchmark needs no generation; no installed codex/claude/omp CLI or confirmed requested model ID. No guess or fallback.",
+    "safe_catalog_probe": "pi --offline --no-extensions --no-skills --no-prompt-templates --no-themes --no-mcp --no-context-files --list-models 'gpt-6.1'",
+    "catalog_result": "No models available",
+    "policy": "Generation benchmark now requires explicit --model provider/model and --thinking; passes --model to Cott/OMP; disables retry.modelFallback in the isolated state."
+  },
+  "supported_facade_followup": {
+    "status": "completed",
+    "receipt": "toolchain-followup.json",
+    "documentation": "facade-supported.md",
+    "tools": {"uv": "0.12.23", "python": "CPython 3.14.6", "basedpyright": "1.39.9", "nodejs-wheel-binaries": "24.19.0"},
+    "installation_scope": "target/facade-toolchain-followup only; no global install, user configuration changes, fake versions or sandbox bypass",
+    "measurement_fixture_counts": {"emit_successes": 16, "real_verify_successes": 16, "failures": 0, "smoke_fixtures": 2, "main_fixtures": 12, "reversed_control_fixtures": 2},
+    "unit_wrapper_regression_emit_successes_not_counted_as_certification": 6,
+    "main_measurements": {"rows": 96, "warm_samples": 672, "facade_rows": 32, "facade_warm_samples": 224, "facade_cold_samples": 224},
+    "reports": ["facade-supported-before.json", "facade-supported-after.json", "facade-supported-comparison.json"],
+    "reversed_noise_control": ["facade-control-before.json", "facade-control-after.json", "facade-control-comparison.json"],
+    "harness_tests": {"passed": 9, "failed": 0, "skipped": 0, "interpreter": "CPython 3.14.6"},
+    "abi_comparison": {"identical_observations": 61, "reports": ["abi-supported-before.json", "abi-supported-after.json"]},
+    "compiler_and_harness_changed_this_round": false,
+    "full_cargo_suite_rerun_this_round": false,
+    "full_cargo_suite_reference": "Existing 998 passed / 0 failed / 103 ignored evidence above; only results/docs/tool provisioning changed in follow-up",
+    "actual_generate_calls": 0,
+    "actual_provider_calls": 0,
+    "resolved_acceptance": ["R2", "R5"],
+    "remaining_blockers": []
+  },
+  "remaining_acceptance": "R2/R5 supported-tool normal emit/verify/facade matrix completed. No remaining blocker for this scoped follow-up; results remain synthetic bounded observations, not general performance or correctness guarantees.",
+  "git_commit_or_push": false
+}

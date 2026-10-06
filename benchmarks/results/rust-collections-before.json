@@ -1,0 +1,3759 @@
+{
+  "scope": "runtime fragment microbenchmark, NOT certified facade",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "host": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+  "source": {
+    "path": "/home/arthur/Code/cott/target/rust-graph-followup/collections-before.rs",
+    "sha256": "4df22b42133981d4d228db4654717474ba9e8d808ab936c0e5e8eb11d6ea5f38"
+  },
+  "harness_sha256": "6c483014be6cdc3eea5479fad1c31c7135dc7b1e6c26634621958203dfda70e9",
+  "rust_harness_sha256": "a64cea9ed0b0a0a5ebab0a120719e4b3d4cede9555ea55a847b8f45037c5b0f8",
+  "input": "v1: sizes 8/128/2048, key i%(size*3/4), string key-{i:08}",
+  "indexed": false,
+  "samples": [
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 26,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 35,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 17,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 17,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 11,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 11,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 184,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 232,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 108,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 70,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 78,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1296,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2322,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 994,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 2645,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 1630,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 2242,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 21438,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 23952,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15080,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19635,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13362,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14136,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 201724,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 427056,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 195813,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 427709,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 174613,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 275845,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3905431,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5115257,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3556076,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4954915,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3191256,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3228987,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 22,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 31,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 8,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 9,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 149,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 179,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 148,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 57,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 62,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1070,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2363,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 998,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 2251,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 919,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 1462,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18099,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 23563,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15091,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19702,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13278,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14154,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 202392,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 429644,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 196045,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 478216,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 175756,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 277717,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3694877,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5127576,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3501241,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4694196,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3222561,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3275622,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 22,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 28,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 8,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 10,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 147,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 177,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 69,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 56,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 62,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1098,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2330,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 993,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 3586,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 890,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 1462,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18012,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 24564,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15180,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19669,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13230,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14093,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 201548,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 426803,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 195753,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 426370,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 174733,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 275016,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3636713,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5051789,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3479956,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4671365,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3210837,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3247362,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 22,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 28,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 8,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 9,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 146,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 178,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 69,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 56,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 58,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1081,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2335,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 993,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 2530,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 909,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 1465,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18115,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 24732,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15332,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19607,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13208,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14050,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 201978,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 427290,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 195724,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 427773,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 175788,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 275190,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3635822,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5079659,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3460871,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4668965,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3188806,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3233488,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 23,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 28,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 8,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 9,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 146,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 178,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 69,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 56,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 62,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1131,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2297,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 992,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 2535,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 890,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 1432,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18063,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 23536,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15116,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19612,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13557,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14083,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 208302,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 427077,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 195720,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 435883,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 174703,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 275748,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3636120,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5052593,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3463169,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4651508,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3190811,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3231287,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 22,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 28,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 13,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 9,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 9,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 177,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 179,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 69,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 56,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 62,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1084,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2290,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 1019,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 3811,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 982,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 1834,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18200,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 23384,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15101,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 19704,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 13179,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 14089,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 201969,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 428179,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 208928,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 428196,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 174739,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 274539,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 3636241,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5049004,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3462347,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4653616,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3212387,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3671777,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ],
+    [
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 27,
+        "allocations": 1,
+        "requested_bytes": 64
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 35,
+        "allocations": 1,
+        "requested_bytes": 128
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 17,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 17,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 11,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 11,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_create",
+        "ns": 183,
+        "allocations": 9,
+        "requested_bytes": 288
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_create",
+        "ns": 261,
+        "allocations": 9,
+        "requested_bytes": 352
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_lookup",
+        "ns": 84,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_lookup",
+        "ns": 86,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "set_equal",
+        "ns": 54,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 8,
+        "operation": "map_equal",
+        "ns": 63,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 1122,
+        "allocations": 1,
+        "requested_bytes": 1024
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 2293,
+        "allocations": 1,
+        "requested_bytes": 2048
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 1115,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 4170,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 1504,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 2011,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_create",
+        "ns": 18640,
+        "allocations": 129,
+        "requested_bytes": 4608
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_create",
+        "ns": 24332,
+        "allocations": 129,
+        "requested_bytes": 5632
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_lookup",
+        "ns": 15543,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_lookup",
+        "ns": 20391,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "set_equal",
+        "ns": 14294,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 128,
+        "operation": "map_equal",
+        "ns": 15261,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 229990,
+        "allocations": 1,
+        "requested_bytes": 16384
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 465119,
+        "allocations": 1,
+        "requested_bytes": 32768
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 251128,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 596382,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 350181,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "u64",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 295729,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_create",
+        "ns": 4282720,
+        "allocations": 2049,
+        "requested_bytes": 73728
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_create",
+        "ns": 5114913,
+        "allocations": 2049,
+        "requested_bytes": 90112
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_lookup",
+        "ns": 3486545,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_lookup",
+        "ns": 4676496,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "set_equal",
+        "ns": 3232615,
+        "allocations": 0,
+        "requested_bytes": 0
+      },
+      {
+        "key": "str",
+        "size": 2048,
+        "operation": "map_equal",
+        "ns": 3263331,
+        "allocations": 0,
+        "requested_bytes": 0
+      }
+    ]
+  ],
+  "limits": [
+    "release opt-level3, one process per sample, no CPU isolation",
+    "nanoseconds per full operation (lookup visits all input keys)",
+    "allocation count and requested bytes for a separate operation, including owned input clones; not RSS/retained/peak; std allocator counter adds timing overhead",
+    "25% duplicate integer/string keys; same inputs and compiler flags; do not generalize to user key types"
+  ],
+  "build": {
+    "argv": [
+      "/usr/bin/rustc",
+      "--edition=2024",
+      "-C",
+      "opt-level=3",
+      "/home/arthur/Code/cott/benchmarks/rust_collections.rs",
+      "-o",
+      "/tmp/cott-rust-collections-_nbepabm/bench"
+    ],
+    "returncode": 0,
+    "stderr": "warning: methods `is_empty` and `into_vec` are never used\n  --> /home/arthur/Code/cott/target/rust-graph-followup/collections-before.rs:19:12\n   |\n17 | impl<T> Set<T> {\n   | -------------- methods in this implementation\n18 |     pub fn len(&self) -> usize { self.0.len() }\n19 |     pub fn is_empty(&self) -> bool { self.0.is_empty() }\n   |            ^^^^^^^^\n20 |     pub fn iter(&self) -> std::slice::Iter<'_, T> { self.0.iter() }\n21 |     pub fn into_vec(self) -> Vec<T> { self.0 }\n   |            ^^^^^^^^\n   |\n   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: methods `is_empty` and `into_vec` are never used\n  --> /home/arthur/Code/cott/target/rust-graph-followup/collections-before.rs:47:12\n   |\n45 | impl<K, V> Map<K, V> {\n   | -------------------- methods in this implementation\n46 |     pub fn len(&self) -> usize { self.0.len() }\n47 |     pub fn is_empty(&self) -> bool { self.0.is_empty() }\n   |            ^^^^^^^^\n48 |     pub fn iter(&self) -> std::slice::Iter<'_, (K, V)> { self.0.iter() }\n49 |     pub fn into_vec(self) -> Vec<(K, V)> { self.0 }\n   |            ^^^^^^^^\n\nwarning: 2 warnings emitted\n\n"
+  },
+  "layout": "set_u64_size=24 map_u64_size=24",
+  "summary": [
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          26,
+          22,
+          22,
+          22,
+          23,
+          22,
+          27
+        ],
+        "median": 22,
+        "min": 22,
+        "max": 27
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          64,
+          64,
+          64,
+          64,
+          64,
+          64,
+          64
+        ],
+        "median": 64,
+        "min": 64,
+        "max": 64
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          35,
+          31,
+          28,
+          28,
+          28,
+          28,
+          35
+        ],
+        "median": 28,
+        "min": 28,
+        "max": 35
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "median": 128,
+        "min": 128,
+        "max": 128
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          17,
+          13,
+          13,
+          13,
+          13,
+          13,
+          17
+        ],
+        "median": 13,
+        "min": 13,
+        "max": 17
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          17,
+          13,
+          13,
+          13,
+          13,
+          13,
+          17
+        ],
+        "median": 13,
+        "min": 13,
+        "max": 17
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          11,
+          8,
+          8,
+          8,
+          8,
+          9,
+          11
+        ],
+        "median": 8,
+        "min": 8,
+        "max": 11
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 8,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          11,
+          9,
+          10,
+          9,
+          9,
+          9,
+          11
+        ],
+        "median": 9,
+        "min": 9,
+        "max": 11
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          184,
+          149,
+          147,
+          146,
+          146,
+          177,
+          183
+        ],
+        "median": 149,
+        "min": 146,
+        "max": 184
+      },
+      "allocations": {
+        "raw": [
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9
+        ],
+        "median": 9,
+        "min": 9,
+        "max": 9
+      },
+      "requested_bytes": {
+        "raw": [
+          288,
+          288,
+          288,
+          288,
+          288,
+          288,
+          288
+        ],
+        "median": 288,
+        "min": 288,
+        "max": 288
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          232,
+          179,
+          177,
+          178,
+          178,
+          179,
+          261
+        ],
+        "median": 179,
+        "min": 177,
+        "max": 261
+      },
+      "allocations": {
+        "raw": [
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9
+        ],
+        "median": 9,
+        "min": 9,
+        "max": 9
+      },
+      "requested_bytes": {
+        "raw": [
+          352,
+          352,
+          352,
+          352,
+          352,
+          352,
+          352
+        ],
+        "median": 352,
+        "min": 352,
+        "max": 352
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          86,
+          148,
+          69,
+          69,
+          69,
+          69,
+          84
+        ],
+        "median": 69,
+        "min": 69,
+        "max": 148
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          108,
+          86,
+          86,
+          86,
+          86,
+          86,
+          86
+        ],
+        "median": 86,
+        "min": 86,
+        "max": 108
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          70,
+          57,
+          56,
+          56,
+          56,
+          56,
+          54
+        ],
+        "median": 56,
+        "min": 54,
+        "max": 70
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 8,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          78,
+          62,
+          62,
+          58,
+          62,
+          62,
+          63
+        ],
+        "median": 62,
+        "min": 58,
+        "max": 78
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          1296,
+          1070,
+          1098,
+          1081,
+          1131,
+          1084,
+          1122
+        ],
+        "median": 1098,
+        "min": 1070,
+        "max": 1296
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024
+        ],
+        "median": 1024,
+        "min": 1024,
+        "max": 1024
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          2322,
+          2363,
+          2330,
+          2335,
+          2297,
+          2290,
+          2293
+        ],
+        "median": 2322,
+        "min": 2290,
+        "max": 2363
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "median": 2048,
+        "min": 2048,
+        "max": 2048
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          994,
+          998,
+          993,
+          993,
+          992,
+          1019,
+          1115
+        ],
+        "median": 994,
+        "min": 992,
+        "max": 1115
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          2645,
+          2251,
+          3586,
+          2530,
+          2535,
+          3811,
+          4170
+        ],
+        "median": 2645,
+        "min": 2251,
+        "max": 4170
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          1630,
+          919,
+          890,
+          909,
+          890,
+          982,
+          1504
+        ],
+        "median": 919,
+        "min": 890,
+        "max": 1630
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 128,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          2242,
+          1462,
+          1462,
+          1465,
+          1432,
+          1834,
+          2011
+        ],
+        "median": 1465,
+        "min": 1432,
+        "max": 2242
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          21438,
+          18099,
+          18012,
+          18115,
+          18063,
+          18200,
+          18640
+        ],
+        "median": 18115,
+        "min": 18012,
+        "max": 21438
+      },
+      "allocations": {
+        "raw": [
+          129,
+          129,
+          129,
+          129,
+          129,
+          129,
+          129
+        ],
+        "median": 129,
+        "min": 129,
+        "max": 129
+      },
+      "requested_bytes": {
+        "raw": [
+          4608,
+          4608,
+          4608,
+          4608,
+          4608,
+          4608,
+          4608
+        ],
+        "median": 4608,
+        "min": 4608,
+        "max": 4608
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          23952,
+          23563,
+          24564,
+          24732,
+          23536,
+          23384,
+          24332
+        ],
+        "median": 23952,
+        "min": 23384,
+        "max": 24732
+      },
+      "allocations": {
+        "raw": [
+          129,
+          129,
+          129,
+          129,
+          129,
+          129,
+          129
+        ],
+        "median": 129,
+        "min": 129,
+        "max": 129
+      },
+      "requested_bytes": {
+        "raw": [
+          5632,
+          5632,
+          5632,
+          5632,
+          5632,
+          5632,
+          5632
+        ],
+        "median": 5632,
+        "min": 5632,
+        "max": 5632
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          15080,
+          15091,
+          15180,
+          15332,
+          15116,
+          15101,
+          15543
+        ],
+        "median": 15116,
+        "min": 15080,
+        "max": 15543
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          19635,
+          19702,
+          19669,
+          19607,
+          19612,
+          19704,
+          20391
+        ],
+        "median": 19669,
+        "min": 19607,
+        "max": 20391
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          13362,
+          13278,
+          13230,
+          13208,
+          13557,
+          13179,
+          14294
+        ],
+        "median": 13278,
+        "min": 13179,
+        "max": 14294
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 128,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          14136,
+          14154,
+          14093,
+          14050,
+          14083,
+          14089,
+          15261
+        ],
+        "median": 14093,
+        "min": 14050,
+        "max": 15261
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          201724,
+          202392,
+          201548,
+          201978,
+          208302,
+          201969,
+          229990
+        ],
+        "median": 201978,
+        "min": 201548,
+        "max": 229990
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          16384,
+          16384,
+          16384,
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "median": 16384,
+        "min": 16384,
+        "max": 16384
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          427056,
+          429644,
+          426803,
+          427290,
+          427077,
+          428179,
+          465119
+        ],
+        "median": 427290,
+        "min": 426803,
+        "max": 465119
+      },
+      "allocations": {
+        "raw": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "requested_bytes": {
+        "raw": [
+          32768,
+          32768,
+          32768,
+          32768,
+          32768,
+          32768,
+          32768
+        ],
+        "median": 32768,
+        "min": 32768,
+        "max": 32768
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          195813,
+          196045,
+          195753,
+          195724,
+          195720,
+          208928,
+          251128
+        ],
+        "median": 195813,
+        "min": 195720,
+        "max": 251128
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          427709,
+          478216,
+          426370,
+          427773,
+          435883,
+          428196,
+          596382
+        ],
+        "median": 428196,
+        "min": 426370,
+        "max": 596382
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          174613,
+          175756,
+          174733,
+          175788,
+          174703,
+          174739,
+          350181
+        ],
+        "median": 174739,
+        "min": 174613,
+        "max": 350181
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "u64",
+      "size": 2048,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          275845,
+          277717,
+          275016,
+          275190,
+          275748,
+          274539,
+          295729
+        ],
+        "median": 275748,
+        "min": 274539,
+        "max": 295729
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_create",
+      "ns": {
+        "raw": [
+          3905431,
+          3694877,
+          3636713,
+          3635822,
+          3636120,
+          3636241,
+          4282720
+        ],
+        "median": 3636713,
+        "min": 3635822,
+        "max": 4282720
+      },
+      "allocations": {
+        "raw": [
+          2049,
+          2049,
+          2049,
+          2049,
+          2049,
+          2049,
+          2049
+        ],
+        "median": 2049,
+        "min": 2049,
+        "max": 2049
+      },
+      "requested_bytes": {
+        "raw": [
+          73728,
+          73728,
+          73728,
+          73728,
+          73728,
+          73728,
+          73728
+        ],
+        "median": 73728,
+        "min": 73728,
+        "max": 73728
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_create",
+      "ns": {
+        "raw": [
+          5115257,
+          5127576,
+          5051789,
+          5079659,
+          5052593,
+          5049004,
+          5114913
+        ],
+        "median": 5079659,
+        "min": 5049004,
+        "max": 5127576
+      },
+      "allocations": {
+        "raw": [
+          2049,
+          2049,
+          2049,
+          2049,
+          2049,
+          2049,
+          2049
+        ],
+        "median": 2049,
+        "min": 2049,
+        "max": 2049
+      },
+      "requested_bytes": {
+        "raw": [
+          90112,
+          90112,
+          90112,
+          90112,
+          90112,
+          90112,
+          90112
+        ],
+        "median": 90112,
+        "min": 90112,
+        "max": 90112
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_lookup",
+      "ns": {
+        "raw": [
+          3556076,
+          3501241,
+          3479956,
+          3460871,
+          3463169,
+          3462347,
+          3486545
+        ],
+        "median": 3479956,
+        "min": 3460871,
+        "max": 3556076
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_lookup",
+      "ns": {
+        "raw": [
+          4954915,
+          4694196,
+          4671365,
+          4668965,
+          4651508,
+          4653616,
+          4676496
+        ],
+        "median": 4671365,
+        "min": 4651508,
+        "max": 4954915
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "set_equal",
+      "ns": {
+        "raw": [
+          3191256,
+          3222561,
+          3210837,
+          3188806,
+          3190811,
+          3212387,
+          3232615
+        ],
+        "median": 3210837,
+        "min": 3188806,
+        "max": 3232615
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "key": "str",
+      "size": 2048,
+      "operation": "map_equal",
+      "ns": {
+        "raw": [
+          3228987,
+          3275622,
+          3247362,
+          3233488,
+          3231287,
+          3671777,
+          3263331
+        ],
+        "median": 3247362,
+        "min": 3228987,
+        "max": 3671777
+      },
+      "allocations": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "raw": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "min": 0,
+        "max": 0
+      }
+    }
+  ]
+}

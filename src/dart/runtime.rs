@@ -3143,6 +3143,40 @@ final class CottRuntime {
     return true;
   }
 
+  static bool readyOrderedBy(Iterable<Object?> order, Iterable<Object?> values,
+      String owner, String key, String dependencies) {
+    final nodes = <String, Object?>{};
+    for (final value in values) {
+      final name = _stringField(value, owner, key);
+      if (nodes.containsKey(name)) return false;
+      nodes[name] = value;
+    }
+    final incoming = <String, core.int>{for (final name in nodes.keys) name: 0};
+    final dependents = <String, Set<String>>{for (final name in nodes.keys) name: <String>{}};
+    for (final entry in nodes.entries) {
+      for (final dependency in _stringDependencies(entry.value, owner, dependencies)) {
+        final targets = dependents[dependency];
+        if (targets == null) return false;
+        if (targets.add(entry.key)) incoming[entry.key] = incoming[entry.key]! + 1;
+      }
+    }
+    final ready = SplayTreeSet<String>((a, b) => canonicalCompare(a, b));
+    for (final entry in incoming.entries) { if (entry.value == 0) ready.add(entry.key); }
+    var count = 0;
+    for (final raw in order) {
+      final name = _string(raw, 'order item');
+      if (ready.isEmpty || ready.first != name) return false;
+      ready.remove(name);
+      count++;
+      for (final target in dependents[name]!) {
+        incoming[target] = incoming[target]! - 1;
+        if (incoming[target] == 0) ready.add(target);
+      }
+    }
+    return count == nodes.length;
+  }
+
+
   static Object? field(Object? value, String ownerOrName, [String? name]) {
     if (value is! CottFieldValue) {
       return violation(

@@ -1510,6 +1510,7 @@ const fn intrinsic_name(intrinsic: Intrinsic) -> &'static str {
         Intrinsic::CyclicBy => "cyclic_by",
         Intrinsic::PermutationBy => "permutation_by",
         Intrinsic::DependencyOrderedBy => "dependency_ordered_by",
+        Intrinsic::ReadyOrderedBy => "ready_ordered_by",
     }
 }
 

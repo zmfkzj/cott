@@ -1,0 +1,597 @@
+{
+  "schema_version": 1,
+  "scope": "verified-facade-requested",
+  "rows": [
+    {
+      "arm": "direct-unchecked",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.414736499,
+          "after_median": 0.414898032,
+          "before_range": [
+            0.41195092,
+            0.416349602
+          ],
+          "after_range": [
+            0.413286773,
+            0.416378907
+          ],
+          "median_change_percent": 0.038948344404099444,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 191411181,
+          "after_median": 192222600,
+          "before_range": [
+            189791616,
+            196861062
+          ],
+          "after_range": [
+            191000761,
+            195399884
+          ],
+          "median_change_percent": 0.4239141077134967,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 240,
+          "after_median": 231,
+          "before_range": [
+            200,
+            301
+          ],
+          "after_range": [
+            200,
+            280
+          ],
+          "median_change_percent": -3.749999999999998,
+          "ranges_overlap": true
+        },
+        "warm_ns_per_call": {
+          "before_median": 18.635,
+          "after_median": 18.535,
+          "before_range": [
+            17.635,
+            22.89
+          ],
+          "after_range": [
+            17.685,
+            19.085
+          ],
+          "median_change_percent": -0.5366246310705702,
+          "ranges_overlap": true
+        },
+        "traced_peak_bytes": {
+          "before_median": 0,
+          "after_median": 0,
+          "before_range": [
+            0,
+            0
+          ],
+          "after_range": [
+            0,
+            0
+          ],
+          "median_change_percent": null,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 0,
+          "after_median": 0,
+          "before_range": [
+            0,
+            0
+          ],
+          "after_range": [
+            0,
+            0
+          ],
+          "median_change_percent": null,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    },
+    {
+      "arm": "direct-checked",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.414165579,
+          "after_median": 0.414736049,
+          "before_range": [
+            0.411434733,
+            0.436174949
+          ],
+          "after_range": [
+            0.412129654,
+            0.418156687
+          ],
+          "median_change_percent": 0.13773959713827555,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 191428623,
+          "after_median": 191766066,
+          "before_range": [
+            190899472,
+            192936309
+          ],
+          "after_range": [
+            190121474,
+            194329939
+          ],
+          "median_change_percent": 0.1762761465405216,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 48591,
+          "after_median": 48471,
+          "before_range": [
+            47650,
+            51016
+          ],
+          "after_range": [
+            47269,
+            50544
+          ],
+          "median_change_percent": -0.24695931345311006,
+          "ranges_overlap": true
+        },
+        "warm_ns_per_call": {
+          "before_median": 14066.16,
+          "after_median": 14076.125,
+          "before_range": [
+            13806.27,
+            14247.395
+          ],
+          "after_range": [
+            13943.475,
+            14259.62
+          ],
+          "median_change_percent": 0.07084378394672797,
+          "ranges_overlap": true
+        },
+        "traced_peak_bytes": {
+          "before_median": 1996,
+          "after_median": 1996,
+          "before_range": [
+            1996,
+            2252
+          ],
+          "after_range": [
+            1996,
+            2252
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 40,
+          "after_median": 40,
+          "before_range": [
+            40,
+            40
+          ],
+          "after_range": [
+            40,
+            40
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    },
+    {
+      "arm": "facade",
+      "mode": "test-only",
+      "test_context": false,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.41658342,
+          "after_median": 0.416109502,
+          "before_range": [
+            0.415619644,
+            0.41766703
+          ],
+          "after_range": [
+            0.414519292,
+            0.419396782
+          ],
+          "median_change_percent": -0.11376304894706868,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 192222771,
+          "after_median": 191680515,
+          "before_range": [
+            191634629,
+            192545316
+          ],
+          "after_range": [
+            191165169,
+            194998302
+          ],
+          "median_change_percent": -0.28209769174537547,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 1337045,
+          "after_median": 1322097,
+          "before_range": [
+            1320714,
+            1351051
+          ],
+          "after_range": [
+            1306989,
+            1345912
+          ],
+          "median_change_percent": -1.1179878014576872,
+          "ranges_overlap": true
+        },
+        "warm_ns_per_call": {
+          "before_median": 32058.865,
+          "after_median": 32069.485,
+          "before_range": [
+            31590.64,
+            32929.1
+          ],
+          "after_range": [
+            31554.675,
+            32475.2
+          ],
+          "median_change_percent": 0.033126562652796565,
+          "ranges_overlap": true
+        },
+        "traced_peak_bytes": {
+          "before_median": 2332,
+          "after_median": 2236,
+          "before_range": [
+            2236,
+            2492
+          ],
+          "after_range": [
+            2236,
+            2492
+          ],
+          "median_change_percent": -4.116638078902235,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 40,
+          "after_median": 40,
+          "before_range": [
+            40,
+            40
+          ],
+          "after_range": [
+            40,
+            40
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    },
+    {
+      "arm": "direct-unchecked",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.414296435,
+          "after_median": 0.41411734,
+          "before_range": [
+            0.411498883,
+            0.418384825
+          ],
+          "after_range": [
+            0.413016997,
+            0.414594984
+          ],
+          "median_change_percent": -0.043228708931564164,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 191550352,
+          "after_median": 192069434,
+          "before_range": [
+            190806137,
+            194405230
+          ],
+          "after_range": [
+            190922234,
+            195005676
+          ],
+          "median_change_percent": 0.27098984396540793,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 221,
+          "after_median": 231,
+          "before_range": [
+            200,
+            291
+          ],
+          "after_range": [
+            200,
+            310
+          ],
+          "median_change_percent": 4.52488687782806,
+          "ranges_overlap": true
+        },
+        "warm_ns_per_call": {
+          "before_median": 18.485,
+          "after_median": 18.535,
+          "before_range": [
+            17.83,
+            23.69
+          ],
+          "after_range": [
+            17.385,
+            24.35
+          ],
+          "median_change_percent": 0.270489586150946,
+          "ranges_overlap": true
+        },
+        "traced_peak_bytes": {
+          "before_median": 0,
+          "after_median": 0,
+          "before_range": [
+            0,
+            0
+          ],
+          "after_range": [
+            0,
+            0
+          ],
+          "median_change_percent": null,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 0,
+          "after_median": 0,
+          "before_range": [
+            0,
+            0
+          ],
+          "after_range": [
+            0,
+            0
+          ],
+          "median_change_percent": null,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    },
+    {
+      "arm": "direct-checked",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.414596407,
+          "after_median": 0.415166365,
+          "before_range": [
+            0.411836756,
+            0.417708418
+          ],
+          "after_range": [
+            0.411391121,
+            0.430409526
+          ],
+          "median_change_percent": 0.13747297139503623,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 191684894,
+          "after_median": 191373349,
+          "before_range": [
+            190627562,
+            195557770
+          ],
+          "after_range": [
+            190195282,
+            192644501
+          ],
+          "median_change_percent": -0.16252976095236793,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 74089,
+          "after_median": 68137,
+          "before_range": [
+            72676,
+            77034
+          ],
+          "after_range": [
+            65813,
+            71424
+          ],
+          "median_change_percent": -8.03358123338147,
+          "ranges_overlap": false
+        },
+        "warm_ns_per_call": {
+          "before_median": 21630.38,
+          "after_median": 19117.52,
+          "before_range": [
+            21394.89,
+            22269.025
+          ],
+          "after_range": [
+            19012.075,
+            20458.935
+          ],
+          "median_change_percent": -11.617271633692983,
+          "ranges_overlap": false
+        },
+        "traced_peak_bytes": {
+          "before_median": 2644,
+          "after_median": 2644,
+          "before_range": [
+            2644,
+            2644
+          ],
+          "after_range": [
+            2516,
+            2644
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 40,
+          "after_median": 40,
+          "before_range": [
+            40,
+            40
+          ],
+          "after_range": [
+            40,
+            40
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    },
+    {
+      "arm": "facade",
+      "mode": "test-only",
+      "test_context": true,
+      "size": 4,
+      "depth": 1,
+      "metrics": {
+        "cold_process_seconds": {
+          "before_median": 0.415917082,
+          "after_median": 0.415640454,
+          "before_range": [
+            0.413523166,
+            0.41913975
+          ],
+          "after_range": [
+            0.4137764,
+            0.417426339
+          ],
+          "median_change_percent": -0.06651037237273005,
+          "ranges_overlap": true
+        },
+        "setup_ns": {
+          "before_median": 191780442,
+          "after_median": 192034338,
+          "before_range": [
+            191362539,
+            192509849
+          ],
+          "after_range": [
+            191537477,
+            193053518
+          ],
+          "median_change_percent": 0.13238889083382333,
+          "ranges_overlap": true
+        },
+        "first_call_ns": {
+          "before_median": 1379004,
+          "after_median": 1367612,
+          "before_range": [
+            1354819,
+            1394633
+          ],
+          "after_range": [
+            1352744,
+            1401035
+          ],
+          "median_change_percent": -0.8261034775823739,
+          "ranges_overlap": true
+        },
+        "warm_ns_per_call": {
+          "before_median": 53408.875,
+          "after_median": 46015.42,
+          "before_range": [
+            52806.695,
+            54872.615
+          ],
+          "after_range": [
+            44935.945,
+            47026.615
+          ],
+          "median_change_percent": -13.843120642402596,
+          "ranges_overlap": false
+        },
+        "traced_peak_bytes": {
+          "before_median": 2884,
+          "after_median": 2884,
+          "before_range": [
+            2884,
+            2884
+          ],
+          "after_range": [
+            2884,
+            2884
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        },
+        "traced_retained_bytes": {
+          "before_median": 40,
+          "after_median": 40,
+          "before_range": [
+            40,
+            40
+          ],
+          "after_range": [
+            40,
+            40
+          ],
+          "median_change_percent": 0.0,
+          "ranges_overlap": true
+        }
+      },
+      "runtime_package_bytes": {
+        "before": 110425,
+        "after": 110684
+      }
+    }
+  ],
+  "limits": [
+    "Range separation is descriptive, not a statistical significance test.",
+    "Sequential unpaired runs; host scheduling/thermal state are uncontrolled.",
+    "No certification, application-throughput or developer-productivity inference."
+  ],
+  "reports": {
+    "before": "benchmarks/results/facade-control-before.json",
+    "after": "benchmarks/results/facade-control-after.json"
+  }
+}

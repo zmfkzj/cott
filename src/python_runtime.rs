@@ -334,6 +334,40 @@ def _cott_dependency_ordered_by(order: object, values: object, key: str, depende
     return True
 
 
+def _cott_ready_ordered_by(order: object, values: object, key: str, dependencies: str) -> bool:
+    # Closed finite graph check, not a callback or implementation oracle. Python str
+    # order is Unicode scalar lexicographic order for validated Cott Str values.
+    import heapq
+    nodes = {}
+    for value in values:
+        name = getattr(value, key)
+        if name in nodes:
+            return False
+        nodes[name] = value
+    if len(order) != len(nodes):
+        return False
+    incoming = dict.fromkeys(nodes, 0)
+    dependents = {name: set() for name in nodes}
+    for name, value in nodes.items():
+        for dependency in getattr(value, dependencies):
+            if dependency not in nodes:
+                return False
+            if name not in dependents[dependency]:
+                dependents[dependency].add(name)
+                incoming[name] += 1
+    ready = [name for name, count in incoming.items() if count == 0]
+    heapq.heapify(ready)
+    for name in order:
+        if not ready or heapq.heappop(ready) != name:
+            return False
+        for target in dependents[name]:
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                heapq.heappush(ready, target)
+    return True
+
+
+
 def _cott_normalize_scalar(value: object, annotation: object) -> object:
     metadata = next((item for item in _get_args(annotation)[1:] if isinstance(item, (CottInt, CottFloat))), None)
     if isinstance(metadata, CottInt):
@@ -789,6 +823,11 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$", _s
 
 
 def _cott_validate_abi_value(value: object, annotation: object, path: str, state: _CottTraversal, depth: int) -> object:
+    # Exact int leaves dominate fixed-width numeric containers. Dispatch before typing
+    # introspection; _cott_validate_abi still enters/completes the same traversal state,
+    # and Annotated integer bounds are checked before recursing to this base type.
+    if annotation is int and type(value) is int:
+        return value
     origin = _get_origin(annotation)
     args = _get_args(annotation)
     if origin is Annotated:
@@ -856,8 +895,6 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
     if annotation is Never:
         raise CottContractViolation(f"{path} cannot contain Never", phase="validation")
     if annotation is bool and type(value) is bool:
-        return value
-    if annotation is int and type(value) is int:
         return value
     if annotation is float and type(value) is float:
         return value

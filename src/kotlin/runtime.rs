@@ -2443,6 +2443,38 @@ public object CottRuntime {
         return true
     }
 
+    public fun readyOrderedBy(order: Iterable<*>, values: Iterable<*>, expectedOwner: String,
+        key: String, dependencies: String): Boolean {
+        val nodes = LinkedHashMap<String, Any?>()
+        for (value in values) {
+            val name = stringField(value, expectedOwner, key)
+            if (nodes.containsKey(name)) return false
+            nodes[name] = value
+        }
+        val incoming = nodes.keys.associateWith { 0 }.toMutableMap()
+        val dependents = nodes.keys.associateWith { HashSet<String>() }
+        for ((name, value) in nodes) {
+            for (dependency in stringDependencies(value, expectedOwner, dependencies)) {
+                val targets = dependents[dependency] ?: return false
+                if (targets.add(name)) incoming[name] = incoming.getValue(name) + 1
+            }
+        }
+        val ready = java.util.TreeSet<String>(::compareUnicode)
+        for ((name, count) in incoming) if (count == 0) ready.add(name)
+        var count = 0
+        for (raw in order) {
+            val name = raw as? String ?: violation("order item is not a Str", phase = "contract-expression")
+            if (ready.isEmpty() || ready.pollFirst() != name) return false
+            count++
+            for (target in dependents.getValue(name)) {
+                incoming[target] = incoming.getValue(target) - 1
+                if (incoming.getValue(target) == 0) ready.add(target)
+            }
+        }
+        return count == nodes.size
+    }
+
+
     public fun field(value: Any?, name: String): Any? {
         if (name.isEmpty()) violation("field name must be non-empty", phase = "contract-expression")
         val nominal = value as? CottFieldValue ?: violation(

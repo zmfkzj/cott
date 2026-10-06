@@ -13,8 +13,8 @@ import json
 import sys
 from pathlib import Path
 
-MODEL = "openai-codex/gpt-5.6-sol"
-THINKING = "high"
+# Model/provider and thinking are mandatory CLI inputs to ai_generation.py.
+# Historical result files retain their original model identities.
 CHECKER = (
     Path(__file__).resolve().parent.parent
     / "examples/complex/artifact-pipeline/check_semantics.py"
