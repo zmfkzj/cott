@@ -316,7 +316,7 @@
       "additionalProperties": false,
       "properties": {
         "symbol": {"$ref": "#/$defs/canonical_symbol"},
-        "adapter": {"enum": ["claude", "codex", "omp"]},
+        "adapter": {"enum": ["claude", "codex", "omp", "pi"]},
         "adapter_version": {"type": "string", "minLength": 1},
         "argv_template": {"type": "array", "minItems": 1, "items": {"type": "string"}},
         "executable": {"type": "string", "minLength": 1},

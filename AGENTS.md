@@ -125,7 +125,7 @@ cott init <path> [--target python|kotlin|dart|rust] [--name <name>] [--no-sync] 
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
 cott emit ir|python|kotlin|dart|rust [--project <dir>] [--format json]
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp|pi [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott requirements [--project <dir>] [--format json]
@@ -206,12 +206,71 @@ phantom associated wrappers. Free const generics require `_cott_const_*: CottCon
 Runtime evidence must not claim arbitrary erased `T` or abstract associated values were reified:
 unsupported bounded candidates remain unobserved/unknown.
 
-`generate` has three direct adapters: `codex`, direct `claude`, and `omp`; selecting a Claude
-model inside OMP is still `omp`, never the direct Claude adapter. Before generation, direct Claude's
-native-entrypoint check rejects npm `cli.js` entrypoints and Node shebangs, then runs exactly
-`claude --version` with no credentials (including `ANTHROPIC_API_KEY`) and network disabled. The
-probe must finish without a timeout at status `0`; stdout must be exactly one strict SemVer token
-`>=2.1.89`. Generation is separate: official native Claude Code runs exactly `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`. Send the exact UTF-8 prompt through stdin in the isolated workspace; use common Cott runtime variables plus an existing `ANTHROPIC_API_KEY` only, always set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, and `DISABLE_ERROR_REPORTING=1`, and never forward OAuth/auth-token/base-url/cloud/provider/customization variables. Accept stdout only as JSON `{type:"result", subtype:"success", is_error:false, result:<string>}`; otherwise fail closed. Generation provider egress may remain available, but no network-capable Claude tools are exposed; the normative environment and result contract is architecture §17.2.1.
+`generate` has four direct adapters: `codex`, direct `claude`, `omp`, and `pi`; selecting a Claude
+model inside OMP is still `omp`, never the direct Claude adapter, and `pi` is never an OMP alias.
+By the user's explicit policy every adapter runs with the caller's own local CLI setup: user
+configuration, login (API key, OAuth, subscription), providers and custom providers, extensions,
+plugins, hooks, MCP servers, skills, rules, context/memory files, the caller's own permission,
+sandbox and approval policy, and the configured default model (`--model` omitted) or the given
+selector verbatim in that CLI's syntax. Never reintroduce provider allowlists, credential
+selection, tool restrictions, permission/sandbox/approval overrides, `--bare`, `--no-*`/`--ignore-*`
+configuration flags, offline/telemetry overrides, or an opt-in mode. Generation argv adds only
+one-shot protocol options (`agent::{CODEX,CLAUDE,OMP,PI}.argv_template`): Codex `exec --ephemeral
+--skip-git-repo-check --color never --cd <workspace> -`; Claude `--print --input-format text
+--output-format json --no-session-persistence`; OMP `-p --cwd <workspace> --no-session --no-pty
+--no-title --max-time <seconds>s @<prompt-file>`; Pi `--mode json --no-session -- <prompt>`, where
+`<workspace>` is the run's working directory. A policy that leaves the target unwritten fails with
+`local_policy_note` (Claude: `permission_denials` tool names and paths only); never retry with a more
+permissive policy. Generation inherits the caller environment except `agent::AGENT_NOT_INHERITED`
+(cott-set `HOME`/`TMPDIR`/`PWD`, shell nesting markers, parent Pi/Claude/Codex session markers);
+`AgentRun.environment_names` records only `HOME`, `PATH`, `PWD`, `PYTHONDONTWRITEBYTECODE`,
+`TMPDIR`, never inherited names or values. Version and runtime probes stay credential-free,
+configuration-free, `PATH=/usr/bin:/bin`, network-disabled (Pi probes also `PI_OFFLINE=1` with an
+empty agent directory).
+
+`agent::user_environment` (via `run_agent_in_project`; every target passes the selected project
+root) presents the setup where each CLI looks for it, inside the common sandbox. The working
+directory is the canonical project root, where the sandbox presents the read-only isolated workspace
+with only the target writable, never the invocation directory. Read-only at their own paths: the
+project's `agent::PROJECT_RESOURCES` (plus Codex `project_doc_fallback_filenames`), every ancestor's
+`agent::ANCESTOR_RESOURCES`, and `repository_marker` (nearest `.git` `HEAD`, or a `.git` pointer with
+its git directory's `HEAD`/`commondir`/`gitdir`; never objects, refs, index, or config). The
+configuration root (`CODEX_HOME`|`~/.codex`, `CLAUDE_CONFIG_DIR`|`~/.claude`,
+`PI_CODING_AGENT_DIR`|`~/.omp/agent` or `~/.pi/agent`) is the CLI's own store, bound writable as the
+host directory itself (`sandbox::MappedMount::Shared`: same inodes, locks, SQLite `-wal`/`-shm`,
+not counted as scratch, per-file size limit kept) after `configuration_store` checks: caller-owned,
+not `/`/system tree/HOME or its ancestors/containing or inside the project, and login stores
+(Codex/Pi `auth.json`, Claude `.credentials.json`, OMP `agent.db` and `-journal`/`-wal`/`-shm`) absent or
+caller-owned single-link regular files. Read-only too: top-level link targets, Pi settings local
+paths, `~/.agents/skills`, `~/.aws`, `~/.config/gcloud`, `~/.claude.json`, `~/.omp/natives`,
+certificate/credential file variables, caller `PATH` directories plus the installations their
+entries link into. Never mount `/`, HOME, or its ancestors whole, never make HOME, the project, or
+host roots writable, and never copy, select, rewrite configuration files, or write trust entries.
+Extensions, plugins, hooks, and MCP servers are third-party code the user trusts (they can write
+the CLI's configuration directory like the CLI); no builtin tool list makes them safe, and Cott's
+guarantees (read-only workspace and sources, single-link target, frozen prompt bytes/hash, source
+audit, target acceptance, explicit verify) must not depend on them. Document remaining differences
+from a normal CLI run (hidden project files and repository history, read-only `~/.claude.json`,
+tools needing unpresented paths or sessions, per-file size limit, unattributed nested agents,
+real-CLI behaviour verified only with mocks) instead of hiding them.
+
+Direct Claude's native-entrypoint check rejects npm `cli.js` entrypoints and Node shebangs, then
+runs exactly `claude --version`; stdout must be exactly one strict SemVer token `>=2.1.89`. Accept
+generation stdout only as JSON `{type:"result", subtype:"success", is_error:false,
+result:<string>}` and report its `modelUsage` keys as resolved models. `pi` accepts only the
+official `@earendil-works/pi-coding-agent` Node package entrypoint
+`node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js` (`#!/usr/bin/env node`, package
+`bin.pi`), version `>=1.0.4,<2.0.0`, run by PATH `node` `>=22.19.0`; Cott hashes and re-verifies
+both and mounts the package's dependency closure and the Node installation read-only. The prompt is
+the single argv message after `--` (UTF-8, no NUL, not starting with `@` or `/`, at most one argv
+element: `agent::pi_max_prompt_bytes()`) so Pi delivers it unmodified. Success requires
+`validate_pi_json_stream`: LF-framed JSONL from a version 3 session header for the working
+directory to a final `agent_settled`, only documented event types, balanced agent runs, a final `agent_end`
+without retry, no failed automatic retry, a first user message equal to the exact prompt, every
+assistant message attributed to a nonempty provider/model with a valid `stopReason`, and a final
+assistant `stopReason: "stop"`; it returns the resolved models (`PiStreamSummary`) and accepts any
+tool and extension follow-up message. Exit `0` alone is never success. Dart and Rust closed
+`AgentRun.adapter` enums include `pi` without a schema version change.
 
 ## Code Conventions & Common Patterns
 

@@ -190,8 +190,9 @@ cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
 ```
 
-`generate --model <selector>` forwards an explicit model to the selected Codex, Claude, or OMP
-agent. Omitting it preserves that agent's default. The requested selector is retained in
+`generate --model <selector>` forwards an explicit model, verbatim in the agent's own syntax, to the
+selected Codex, Claude, OMP, or Pi agent. Omitting it uses the default model of the caller's own
+agent configuration, for every agent including Pi. The requested selector is retained in
 `AgentRun.argv_template`; it does not change the provider's credentials or sandbox permissions.
 The examples script forwards the same optional selector to every sequential `generate -j 3`:
 
@@ -481,16 +482,146 @@ conversion to preserve source and `AgentRun` evidence, clear verification, then 
 It is not a public migration command or normal old-record reader. Old certification never carries
 to a new schema or ABI, and editing source hashes cannot bless changed agent code.
 
-`generate --agent` accepts three direct adapters: `codex`, `claude`, and `omp`. `claude` directly
-invokes official native Claude Code `>=2.1.89`; an OMP run that selects a Claude model remains
-`omp`, not `claude`. Before generation, direct Claude's native-entrypoint check rejects npm
-`cli.js` entrypoints and Node shebangs, then runs the exact credential-free, network-disabled probe
-`claude --version`. The probe must finish without timeout at status `0`; its stdout must be exactly
-one strict SemVer token `>=2.1.89`. Generation is separate: it receives the exact UTF-8 prompt on
-stdin, is limited to `Read` and `Write`, and accepts only a successful JSON result. Only generation
-may receive an existing `ANTHROPIC_API_KEY` and retain provider network egress; no network-capable
-Claude tools are exposed. The normative argv, environment, native-entrypoint, and result contract
-is in architecture §17.2.1.
+`generate --agent` accepts four adapters: `codex`, `claude`, `omp`, and `pi`. Each runs **with the
+caller's own local setup, as that CLI would run in the caller's terminal**: its user configuration
+directory, login (API key, OAuth, or subscription), providers and custom providers, profiles,
+extensions or plugins, hooks, MCP servers, skills, rules, context/memory files, and default model.
+Without `--model` the CLI's configured default model is used; with `--model` the selector is passed
+verbatim in that CLI's own syntax (for example `cliproxyapi/gpt-6.1-sol` or `sonnet`). Cott adds no
+provider allowlist, credential selection, tool restriction, or configuration-isolation flag; the
+user's explicit setup is the trusted configuration.
+
+What Cott still adds is only what a one-shot, non-interactive, verifiable run needs:
+
+| Agent | Argv Cott adds (besides an optional `--model`) | Why |
+| --- | --- | --- |
+| `codex` | `exec --ephemeral --skip-git-repo-check --color never --cd <workspace> -` | prompt on stdin; no session rollout; the presented workspace is not a checkout |
+| `claude` | `--print --input-format text --output-format json --no-session-persistence` | one-shot JSON result (the completion protocol); no session file |
+| `omp` | `-p --cwd <workspace> --no-session --no-pty --no-title --max-time <seconds>s @<prompt-file>` | one-shot print run without terminal or session-title call; the prompt is a file attachment |
+| `pi` | `--mode json --no-session -- <prompt>` | JSON event stream for completion checks; in-memory session; the exact prompt as the single message |
+
+`<workspace>` is the run's working directory: the selected project's real root path (see below).
+`--bare`, `--tools`/`--allowedTools`/`--disallowedTools`, `--ignore-user-config`, `--ignore-rules`,
+`--strict-config`, `--no-extensions`, `--no-skills`, `--no-rules`, `--no-lsp`, `--no-mcp`,
+`--no-context-files`, `--no-prompt-templates`, `--no-themes`, `--no-approve`, `--offline`, an OMP
+config overlay, forced telemetry variables, and per-provider API-key forwarding are gone. Session
+options only keep each one-shot run out of the caller's session history; they do not change which
+settings load.
+
+**Permissions are the caller's.** Cott passes no permission, sandbox, or approval override: no Codex
+`--sandbox`/`--full-auto`/approval flag, no Claude Code `--permission-mode` or allow rule, no OMP
+`--approval-mode`/`--auto-approve`. Whether the CLI may write the target is decided by the caller's
+own policy exactly as in a normal non-interactive run in the project: Codex `sandbox_mode`,
+`permission_profile`, and its trust-dependent defaults; Claude Code `permissions.defaultMode` and
+allow/deny rules (print mode denies what nothing allows and lists it in `permission_denials`); OMP
+`tools.approvalMode`/`tools.approval` (OMP's default is `yolo`). A policy that does not let the CLI
+write fails the run with that reason (for Claude Code the denied tools and paths, never the rest of
+the tool input), and Cott never retries with a more permissive policy. To let `claude -p` write the
+target, allow edits in your Claude Code settings (for example `permissions.defaultMode: "acceptEdits"`
+or an `Edit`/`Write` allow rule); a Codex `read-only` sandbox cannot write it.
+
+**Environment.** Generation inherits the caller's environment unchanged (provider keys, base URLs,
+proxies, CLI configuration variables such as `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or
+`PI_CODING_AGENT_DIR`, and `PATH`), except what Cott sets itself (`HOME` = the caller's home,
+`TMPDIR` = the run's scratch, `PWD` = the working directory, `PYTHONDONTWRITEBYTECODE=1`), the
+shell's `OLDPWD`/`SHLVL`/`_`, and markers of a *parent* agent session that would mislead a nested CLI
+(`PI_SESSION_*`, `PI_PROVIDER`, `PI_MODEL`, `PI_REASONING_LEVEL`, `CLAUDECODE`,
+`CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX*`). Version and runtime probes stay credential-free,
+configuration-free, and network-disabled, so checking an installed CLI never spends a login or a
+paid call.
+
+**Working directory.** The CLI runs at the selected project's real (canonical) root path, the
+`--project` directory or the discovered project, never the directory `cott` was started from. There
+the sandbox presents Cott's isolated workspace read-only (the staged contracts and references Cott
+provides, not the project's own sources) with only the target file writable, so `--cd`/`--cwd`,
+`PWD`, Pi's session `cwd`, and every path-keyed setting see the real project path. On top of it,
+read-only at their own paths: the project's agent resources (`.pi/`, `.omp/`, `.codex/`, `.claude/`,
+`.agents/`, `.mcp.json`, OMP's discovery of other tools' project files, `AGENTS.md`,
+`AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, and Codex `project_doc_fallback_filenames`);
+the context and configuration of every ancestor directory (`AGENTS.md`, `CLAUDE.md` and friends,
+`.claude/`, `.codex/`, `.agents/`, `.omp/`; directories directly in the home directory are the user
+setup below); and the repository root marker, the nearest `.git` with only its `HEAD` (a worktree or
+submodule `.git` file with its git directory's `HEAD`, `commondir`, `gitdir`). Each CLI applies its
+own discovery rules to them, so ancestor context loads and Codex trust entries for the real project
+or repository path apply as configured; Cott never writes or fakes a trust entry. Objects, refs,
+index, and git config stay hidden.
+
+**Configuration and login stores.** Each CLI's configuration root (`CODEX_HOME` or `~/.codex`,
+`CLAUDE_CONFIG_DIR` or `~/.claude`, `PI_CODING_AGENT_DIR` or `~/.omp/agent` for OMP and `~/.pi/agent`
+for Pi) is bound writable at its own path as the host directory itself. Reads, login refreshes,
+settings and cache writes, logs, lock files and lock directories, `rename` temporaries, and SQLite
+`-wal`/`-shm`/`-journal` files act on the host directory exactly as in a normal run: the same
+device and inodes, the same advisory locks, and the same SQLite shared-memory index, so they
+coordinate with CLI sessions running on the host at the same time. The directory must be owned by
+the caller and must not be `/`, a system tree, the home directory or one of its ancestors, or
+contain or lie inside the project; its login stores (Codex and Pi `auth.json`, Claude Code
+`.credentials.json`, OMP `agent.db` and its `-journal`/`-wal`/`-shm`) must be absent or regular, single-link files owned by
+the caller, or generation stops before the CLI runs. Cott itself never writes there and never
+copies, selects, or rewrites a configuration file. Read-only: targets of top-level links in the
+configuration root, local paths named by Pi settings (`packages`, `extensions`, `skills`, `prompts`,
+`themes`), `~/.agents/skills`, `~/.aws`, `~/.config/gcloud`, Claude Code's `~/.claude.json`, OMP's
+`~/.omp/natives`, certificate and credential files named by environment variables, every caller
+`PATH` directory outside the system trees, and the installation a `PATH` entry links into
+(`<prefix>` of a `<prefix>/bin/<tool>` target, up to 256 mounts), so tools, hooks, and MCP servers
+started through `PATH` resolve. The rest of the home directory and the host stay invisible or
+read-only. Provider network egress is kept.
+
+**Remaining differences from running the CLI in the project** (Cott's common boundaries, not
+configuration choices): the project's own files outside the presented resources, other files of
+its ancestors, and the repository's history are not visible (`git` finds no usable repository);
+Claude Code's `~/.claude.json` is read-only, so its global-state updates are not saved; tools that
+need files outside the presented paths (another home directory, an SDK root not linked from
+`PATH`, a desktop or keyring session, an `ssh-agent` or daemon socket) fail inside the sandbox;
+store files are subject to the sandbox's per-file size limit (64 MiB, 512 MiB for OMP and Pi) and
+the run to its process, memory, and time limits; nested agents an extension starts are not
+attributed separately. The adapters' sandbox, cwd, permission, and store behaviour is covered by
+mock CLIs and temporary fixtures in the test suite; whether a real Codex release can start its own
+sandbox nested inside Cott's, and how real Codex, Claude Code, and OMP releases react to the
+read-only `~/.claude.json` or a denied write, is not verified there.
+
+**Trust boundary.** Extensions, plugins, hooks, and MCP servers in the caller's setup are
+third-party code that runs with the CLI's process permissions inside the sandbox, with the caller's
+credentials and network, and, like the CLI itself, with write access to that CLI's configuration
+directory. Using them is the caller's explicit choice; no built-in tool list makes them safe. Cott's
+guarantees do not depend on them: the workspace and every source outside the target stay read-only,
+the project's own files and the rest of the home directory are never writable, the target must be a
+regular single-link file, the prompt bytes and hash are frozen, and every candidate still passes
+source audit, target acceptance, and explicit `verify` before it is current.
+
+`claude` requires official native Claude Code `>=2.1.89`; an OMP run that selects a Claude model
+remains `omp`, not `claude`. The native-entrypoint check rejects npm `cli.js` entrypoints and Node
+shebangs, and the version probe `claude --version` must finish at status `0` with exactly one strict
+SemVer token. Success additionally needs a successful JSON result; the model ids in its
+`modelUsage` are printed as the run's resolved models. The normative contract is in architecture
+§17.2.1.
+
+`pi` runs the Pi coding agent (`@earendil-works/pi-coding-agent` `>=1.0.4,<2.0.0`, Node
+`>=22.19.0`) as an independent adapter, not an OMP alias. Install it with Pi's official package
+(`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` or `bun add -g
+@earendil-works/pi-coding-agent`) so that `pi` on `PATH` resolves to the package's
+`dist/bundle/cli.js`; compiled binaries, Bun launchers, wrappers, and checkouts are rejected. Cott
+runs that script with `node` from `PATH` (the Pi package with its dependency closure and the Node
+installation are mounted read-only, so extensions resolve Pi's own packages) after two
+credential-free, network-disabled probes (`node --version`, then `node <cli.js> --version`, which
+must equal the package version). The prompt is the single positional message after `--`, which Pi
+sends unmodified (stdin would be trimmed and `@file` wrapped in a `<file>` envelope). A prompt that
+is not UTF-8, contains NUL, starts with `@` or `/`, or exceeds one Linux argv element (32 pages minus
+the terminating NUL: 131071 bytes with 4 KiB pages) fails before any process runs. Exit status `0`
+alone is not success: stdout must be the documented Pi JSONL stream from a version 3 session header
+for the working directory to a final `agent_settled`, with only documented event types, balanced agent runs,
+no pending or failed retry, a first user message equal to the exact prompt, every assistant message
+attributed to some provider and model, and a final assistant `stopReason` of `stop`. Which provider
+and model answered is whatever the caller's Pi resolved (default model, pattern, or extension
+provider); Cott reports it (`pi answered with …`) instead of comparing it with a request, and
+accepts every tool and extension follow-up message of the caller's setup. `AgentRun` records
+`adapter: "pi"`, the probed version, the canonical `cli.js` and hash, the argv template (with
+`--model` only when given), the environment names `HOME`, `PATH`, `PWD`, `PYTHONDONTWRITEBYTECODE`,
+and `TMPDIR` (inherited names and values are never recorded), and the stream digests, which bind the
+reported provider and model.
+
+A CLI that is not installed fails with `<agent> executable was not found on PATH`, and an unsupported
+version fails after its probe; a login, provider, or extension failure is reported with the CLI's
+own stderr and, for Pi, the JSON event that failed.
 
 `generated/` and any agent-owned `python/_cott_impl/` or
 `<target.kotlin.source>/cott_impl/` files committed in an

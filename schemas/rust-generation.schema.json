@@ -662,7 +662,8 @@
           "enum": [
             "claude",
             "codex",
-            "omp"
+            "omp",
+            "pi"
           ]
         },
         "adapter_version": {

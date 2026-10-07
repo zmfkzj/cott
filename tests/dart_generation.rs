@@ -93,8 +93,20 @@ fn command(root: &Path, tools: &Path, arguments: &[&str]) -> Output {
         .args(["--project"])
         .arg(root)
         .env("PATH", path)
+        .env("HOME", fake_home(root))
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("run cott command")
+}
+
+/// Agents read the caller's own configuration under HOME; tests give them an
+/// empty home of their own so the developer's setup is never read.
+fn fake_home(root: &Path) -> std::path::PathBuf {
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("fake home");
+    home
 }
 
 fn prompt(root: &Path, tools: &Path, symbol: &str) -> serde_json::Value {
@@ -140,6 +152,11 @@ fn captured_prompt(source: &str) -> String {
     );
     serde_json::from_str(encoded).expect("JSON-encoded candidate prompt")
 }
+
+#[path = "support/mock_pi.rs"]
+mod mock_pi;
+#[path = "support/project_cwd.rs"]
+mod project_cwd;
 
 #[test]
 fn prompt_is_provider_free_exact_scoped_and_hashed() {
@@ -858,22 +875,126 @@ printf '%s\n' 'int _cott_sample_alpha(int value) {' '  return value + 1;' '}' > 
             "--cwd",
             "<workspace>",
             "--no-session",
-            "--no-rules",
-            "--no-skills",
-            "--no-extensions",
-            "--no-lsp",
             "--no-pty",
             "--no-title",
-            "--tools",
-            "read,grep,glob,edit,write",
-            "--approval-mode",
-            "yolo",
             "--max-time",
             "<seconds>s",
-            "--config",
-            "<overlay>",
             "@<prompt-file>",
         ]
         .map(str::to_owned)
     );
+}
+
+#[test]
+fn generate_with_mock_pi_records_a_closed_pi_agent_run() {
+    // MOCK Pi installation (tests/support/mock_pi.rs); not a provider run.
+    let project = project(
+        "module sample\n\nfn alpha(value: I32) -> I32\n\nfn beta(value: I32) -> I32\n",
+        None,
+    );
+    let mock = mock_pi::install(
+        &project.path.join("pi-root"),
+        "1.0.4",
+        "v22.19.0",
+        serde_json::json!({"scenario": "success", "target": "implementation.dart", "candidate": "int _cott_sample_alpha(int value) {\n  return value;\n}\n"}),
+    );
+    let initial = prompt(&project.path, &mock.bin, "sample.alpha");
+    let path = std::env::join_paths([mock.bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("fixture PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "sample.alpha",
+            "--agent",
+            "pi",
+            "--model",
+            "openai/gpt-test",
+            "--target",
+            "dart",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .env("HOME", fake_home(&project.path))
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env("OPENAI_API_KEY", "mock-openai-key")
+        .output()
+        .expect("run cott generate");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        project
+            .path
+            .join("dart/cott_impl/sample/alpha.dart")
+            .is_file()
+    );
+    let record = generation_record(&project.path);
+    assert_eq!(record.current.agent_runs.len(), 1);
+    let run = &record.current.agent_runs[0];
+    assert_eq!(run.adapter, "pi");
+    assert_eq!(run.adapter_version, "1.0.4");
+    assert_eq!(
+        run.prompt_hash,
+        initial["prompt_hash"].as_str().expect("prompt hash")
+    );
+    assert_eq!(
+        &run.argv_template[..4],
+        ["--model", "openai/gpt-test", "--mode", "json"]
+    );
+    assert_eq!(
+        run.argv_template.last().map(String::as_str),
+        Some("<prompt>")
+    );
+    // Only PATH and cott's own variables (including the logical working
+    // directory) are recorded; the inherited caller environment (here the
+    // provider key) never reaches provenance.
+    assert_eq!(
+        run.environment_names,
+        ["HOME", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE", "TMPDIR"]
+    );
+}
+
+/// `cott generate --project <dir>` from another directory: the agent works at
+/// the selected Dart project's real path with its context and the caller's
+/// own CLI configuration, never the invocation directory's.
+#[test]
+fn generate_runs_the_agent_in_the_selected_project_not_the_invocation_directory() {
+    // Two callables, one generated: the incomplete set is promoted without
+    // the (absent) Dart SDK, as in the mock Pi fixture.
+    let project = project(
+        "module sample\n\nfn alpha(value: I32) -> I32\n\nfn beta(value: I32) -> I32\n",
+        None,
+    );
+    let outside = TempDir::new();
+    let setup = project_cwd::install(
+        &outside.path,
+        &project.path,
+        "implementation.dart",
+        "int _cott_sample_alpha(int value) {\n  return value;\n}\n",
+    );
+    let output = setup.run(&[
+        "generate",
+        "sample.alpha",
+        "--agent",
+        "omp",
+        "--target",
+        "dart",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains(project_cwd::FAILED), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        project
+            .path
+            .join("dart/cott_impl/sample/alpha.dart")
+            .is_file()
+    );
+    let record = generation_record(&project.path);
+    assert_eq!(record.current.agent_runs.len(), 1);
+    assert_eq!(record.current.agent_runs[0].adapter, "omp");
+    assert_eq!(record.current.agent_runs[0].status.exit_code, Some(0));
+    setup.assert_untouched();
 }

@@ -713,3 +713,37 @@ fn rust_binding_records_accept_canonical_raw_keyword_functions_and_reject_invali
         assert!(current.compute_generation_id().is_err(), "{function}");
     }
 }
+
+#[test]
+fn agent_run_adapter_enum_is_closed_and_includes_pi() {
+    for adapter in ["claude", "codex", "omp", "pi"] {
+        let mut current = agent_snapshot();
+        current.agent_runs[0].adapter = adapter.to_owned();
+        current.compute_generation_id().expect(adapter);
+        let record = RustGenerationRecord {
+            schema_version: RUST_GENERATION_SCHEMA_VERSION,
+            current,
+            last_verified: None,
+        };
+        let bytes = record.canonical_bytes().expect(adapter);
+        assert_eq!(RustGenerationRecord::parse(&bytes).expect(adapter), record);
+    }
+    for adapter in ["pie", "PI", "pi-coding-agent", "oh-my-pi", ""] {
+        let mut current = agent_snapshot();
+        current.agent_runs[0].adapter = adapter.to_owned();
+        assert!(current.compute_generation_id().is_err(), "{adapter}");
+        let mut wire = snapshot_wire::expand(
+            serde_json::to_value(RustGenerationRecord {
+                schema_version: RUST_GENERATION_SCHEMA_VERSION,
+                current: agent_snapshot(),
+                last_verified: None,
+            })
+            .unwrap(),
+        );
+        wire["current"]["agent_runs"][0]["adapter"] = json!(adapter);
+        assert!(
+            RustGenerationRecord::parse(&serialized(&wire)).is_err(),
+            "{adapter}"
+        );
+    }
+}

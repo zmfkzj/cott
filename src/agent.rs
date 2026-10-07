@@ -10,7 +10,9 @@ use crate::diagnostics::{Diagnostic, Span, code};
 use crate::hash::sha256_hex;
 use crate::prompt_declarations;
 use crate::python::artifact_plan::{PythonCallable, PythonCallableKind};
-use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
+use crate::sandbox::{
+    BindMounts, MappedMount, NetworkAccess, ResourceLimits, SandboxSpec, run_with_mounts,
+};
 use crate::version::{is_at_least, parse_version};
 
 const MAX_RULE_BYTES: usize = 1024 * 1024;
@@ -21,6 +23,7 @@ pub enum AgentKind {
     Codex,
     Omp,
     Claude,
+    Pi,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,19 +51,25 @@ pub struct AdapterSpec {
     pub prompt_on_stdin: bool,
 }
 
+/// Codex CLI, run with the caller's own `CODEX_HOME` (`config.toml`,
+/// profiles, providers, MCP servers, rules, skills, `AGENTS.md`, login,
+/// project trust) and the caller's own sandbox and approval policy: Cott
+/// passes no `--sandbox`, `--full-auto` or approval flag, so `sandbox_mode`,
+/// `permission_profile` and the trust-dependent defaults of the user's
+/// configuration decide whether `codex exec` may write the target, exactly as
+/// in a normal run in the project. Cott keeps only what a one-shot
+/// non-interactive run needs: `exec` with the prompt on stdin (`-`),
+/// `--ephemeral` (no session rollout files), `--skip-git-repo-check` (the
+/// isolated workspace presented at the project path is not a checkout),
+/// `--color never` and `--cd` (the project path).
 pub const CODEX: AdapterSpec = AdapterSpec {
     executable_name: "codex",
     minimum_version: "0.147.0",
     version_argv: &["--version"],
     argv_template: &[
         "exec",
-        "--strict-config",
         "--ephemeral",
-        "--ignore-user-config",
-        "--ignore-rules",
         "--skip-git-repo-check",
-        "--sandbox",
-        "workspace-write",
         "--color",
         "never",
         "--cd",
@@ -69,6 +78,14 @@ pub const CODEX: AdapterSpec = AdapterSpec {
     ],
     prompt_on_stdin: true,
 };
+/// OMP, run with the caller's own agent directory (config, providers,
+/// credentials, rules, skills, extensions, LSP, MCP) and the caller's own
+/// tool approval policy (`tools.approvalMode`, `tools.approval`): Cott passes
+/// no `--approval-mode` or `--auto-approve`. Cott keeps the one-shot print
+/// mode, the working directory (`--cwd`, the project path), `--no-session`,
+/// `--no-pty` (no terminal in a print run), `--no-title` (no extra
+/// session-title model call for a session that is never stored), the
+/// wall-clock limit, and the prompt file attachment.
 pub const OMP: AdapterSpec = AdapterSpec {
     executable_name: "omp",
     minimum_version: "17.2.12",
@@ -78,54 +95,165 @@ pub const OMP: AdapterSpec = AdapterSpec {
         "--cwd",
         "<workspace>",
         "--no-session",
-        "--no-rules",
-        "--no-skills",
-        "--no-extensions",
-        "--no-lsp",
         "--no-pty",
         "--no-title",
-        "--tools",
-        "read,grep,glob,edit,write",
-        "--approval-mode",
-        "yolo",
         "--max-time",
         "<seconds>s",
-        "--config",
-        "<overlay>",
         "@<prompt-file>",
     ],
     prompt_on_stdin: false,
 };
 
+/// Claude Code, run without `--bare`, so the caller's settings, login
+/// (OAuth or API key), hooks, plugins, MCP servers, skills, agents and
+/// `CLAUDE.md` memory load as usual, with the tools those settings allow and
+/// the caller's own permission mode and rules: Cott passes no
+/// `--permission-mode`, `--allowedTools` or `--dangerously-skip-permissions`,
+/// so `permissions.defaultMode` and the allow/deny rules of the user and
+/// project settings decide every tool call. A request nothing allows is
+/// denied in print mode and reported in the result's `permission_denials`.
+/// Cott keeps print mode with text input and JSON output (the completion
+/// protocol) and `--no-session-persistence`.
 pub const CLAUDE: AdapterSpec = AdapterSpec {
     executable_name: "claude",
     minimum_version: "2.1.89",
     version_argv: &["--version"],
     argv_template: &[
-        "--bare",
         "--print",
         "--input-format",
         "text",
         "--output-format",
         "json",
-        "--permission-mode",
-        "dontAsk",
-        "--tools",
-        "Read,Write",
-        "--allowedTools",
-        "Read,Write",
-        "--disallowedTools",
-        "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*",
         "--no-session-persistence",
     ],
     prompt_on_stdin: true,
 };
+
+/// Pi coding agent (`@earendil-works/pi-coding-agent`), run with the caller's
+/// own Pi setup: the agent directory (settings, `auth.json`, `models.json`,
+/// packages and extensions, skills, prompt templates, themes, context files,
+/// MCP servers), Pi's default model resolution and default tools. Only the
+/// official Node package entrypoint `dist/bundle/cli.js` is accepted. Cott adds
+/// only what its one-shot protocol needs: JSON event output, an in-memory
+/// session, and the frozen prompt as the single positional message after `--`.
+/// `--model` is inserted only when the caller selects one, verbatim in Pi's own
+/// syntax (`provider/id`, a pattern, an optional `:<thinking>` suffix).
+pub const PI: AdapterSpec = AdapterSpec {
+    executable_name: "pi",
+    minimum_version: "1.0.4",
+    version_argv: &["--version"],
+    argv_template: &["--mode", "json", "--no-session", "--", "<prompt>"],
+    prompt_on_stdin: false,
+};
+
+/// Pi releases accepted by the adapter: `1.0.4 <= version < 2.0.0`, the 1.x
+/// JSON event contract (session header version 3 through `agent_settled`)
+/// that [`validate_pi_json_stream`] checks.
+pub const PI_UNSUPPORTED_MAJOR: u64 = 2;
+/// `engines.node` of the supported Pi package.
+pub const PI_MINIMUM_NODE_VERSION: &str = "22.19.0";
+/// Caller environment variables an agent generation run does not inherit;
+/// everything else (provider keys, proxies, CLI configuration variables,
+/// PATH) passes through unchanged. Cott sets `HOME` (the caller's home),
+/// `TMPDIR` (the run's writable scratch) and `PWD` (the run's logical working
+/// directory, the caller project's path) itself; the shell's previous
+/// directory and nesting markers do not describe the sandboxed process. The
+/// rest mark a *parent* agent session when cott itself runs inside one, never
+/// configuration: `PI_SESSION_*`, `PI_PROVIDER`, `PI_MODEL` and
+/// `PI_REASONING_LEVEL` describe a parent Pi session (Pi drops them before it
+/// launches tools so nested Pi processes never report stale session
+/// metadata), `CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` are set by Claude Code
+/// for its own tool processes (a nested `claude` refuses to start under
+/// `CLAUDECODE`), and `CODEX_SANDBOX*` are set by Codex for the commands it
+/// sandboxes.
+pub const AGENT_NOT_INHERITED: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "HOME",
+    "OLDPWD",
+    "PI_MODEL",
+    "PI_PROVIDER",
+    "PI_REASONING_LEVEL",
+    "PI_SESSION_FILE",
+    "PI_SESSION_ID",
+    "PWD",
+    "SHLVL",
+    "TMPDIR",
+    "_",
+];
+/// Inherited variables that name certificate or credential files read by the
+/// CLIs, Node, or built-in providers; existing absolute paths are mounted
+/// read-only.
+const AGENT_FILE_VARIABLES: &[&str] = &[
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "CODEX_CA_CERTIFICATE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+];
+const PI_EVENT_TYPES: &[&str] = &[
+    "agent_start",
+    "agent_end",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+    "agent_settled",
+    "queue_update",
+    "compaction_start",
+    "compaction_end",
+    "entry_appended",
+    "session_info_changed",
+    "thinking_level_changed",
+    "auto_retry_start",
+    "auto_retry_end",
+    "summarization_retry_scheduled",
+    "summarization_retry_attempt_start",
+    "summarization_retry_finished",
+];
+/// Terminal `stopReason` values of a completed assistant message.
+const PI_STOP_REASONS: &[&str] = &["stop", "length", "toolUse", "error", "aborted", "deferred"];
+
+/// Linux `MAX_ARG_STRLEN` is 32 pages including the terminating NUL: the
+/// largest prompt that one argv element can carry without modification on
+/// this host (131071 bytes with 4 KiB pages).
+pub fn pi_max_prompt_bytes() -> usize {
+    // SAFETY: sysconf has no preconditions.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let page = usize::try_from(page)
+        .ok()
+        .filter(|page| *page > 0)
+        .unwrap_or(4096);
+    32 * page - 1
+}
+
+/// What a validated Pi JSON event stream reports about the model that answered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PiStreamSummary {
+    /// Distinct `provider/model` attributions of the session's assistant
+    /// messages, in order of first use.
+    pub models: Vec<String>,
+    /// The `provider/model` of the final assistant message.
+    pub final_model: String,
+}
 
 pub fn adapter(kind: AgentKind) -> &'static AdapterSpec {
     match kind {
         AgentKind::Codex => &CODEX,
         AgentKind::Omp => &OMP,
         AgentKind::Claude => &CLAUDE,
+        AgentKind::Pi => &PI,
     }
 }
 
@@ -143,6 +271,9 @@ pub struct AgentRunCandidate {
     pub duration_ms: u64,
     pub environment_names: Vec<String>,
     pub argv_template: Vec<String>,
+    /// For Pi, the `provider/model` attributions its JSON event stream reported
+    /// (see [`PiStreamSummary::models`]); empty for the other adapters.
+    pub resolved_models: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -1222,14 +1353,48 @@ fn insert_model_argument(
     };
     let index = match kind {
         AgentKind::Codex => 1,
-        AgentKind::Omp | AgentKind::Claude => 0,
+        AgentKind::Omp | AgentKind::Claude | AgentKind::Pi => 0,
     };
     arguments.splice(index..index, [String::from("--model"), model.to_owned()]);
     arguments
 }
 
+/// [`run_agent_in_project`] without a caller project: only the caller's user
+/// configuration is presented to the CLI, whose working directory is the
+/// isolated workspace's own path.
 pub fn run_agent(
     selection: AgentSelection,
+    executable: PathBuf,
+    workspace: &Path,
+    scratch: &Path,
+    target: &Path,
+    prompt: Vec<u8>,
+    timeout_seconds: u16,
+) -> Result<AgentRunCandidate, String> {
+    run_agent_in_project(
+        selection,
+        None,
+        executable,
+        workspace,
+        scratch,
+        target,
+        prompt,
+        timeout_seconds,
+    )
+}
+
+/// Run the selected CLI once in the isolated `workspace` with the caller's
+/// own configuration ([`user_environment`]) and, when `project` names the
+/// caller's Cott project, inside the sandbox at that project's own path: the
+/// read-only workspace (with the writable target) is presented at the project
+/// root path, which is the CLI's working directory, with the project's
+/// [`PROJECT_RESOURCES`], the context and configuration of its ancestors
+/// ([`ANCESTOR_RESOURCES`]) and its repository root marker read-only. The
+/// project's own files are never visible or writable.
+#[allow(clippy::too_many_arguments)]
+pub fn run_agent_in_project(
+    selection: AgentSelection,
+    project: Option<&Path>,
     executable: PathBuf,
     workspace: &Path,
     scratch: &Path,
@@ -1243,6 +1408,13 @@ pub fn run_agent(
         }
     }
     let kind = selection.kind;
+    // The Pi prompt must fit one argv element unmodified; this is checked
+    // before any external command runs.
+    let pi_prompt = if kind == AgentKind::Pi {
+        Some(pi_prompt_argument(&prompt)?)
+    } else {
+        None
+    };
     let scratch = fs::canonicalize(scratch)
         .map_err(|error| format!("resolve agent scratch {}: {error}", scratch.display()))?;
     let spec = adapter(kind);
@@ -1261,7 +1433,13 @@ pub fn run_agent(
     if kind == AgentKind::Claude && !native_claude_entrypoint(&executable, &executable_bytes) {
         return Err("claude executable must use the official native entrypoint".to_owned());
     }
-    let runtime = omp_bun_runtime(kind, &executable, &executable_bytes)?;
+    let (runtime, pi_package_version) = if kind == AgentKind::Pi {
+        let (runtime, version) = pi_node_runtime(&executable, &executable_bytes)?;
+        probe_pi_node(&runtime, workspace, &scratch, timeout_seconds)?;
+        (Some(runtime), Some(version))
+    } else {
+        (omp_bun_runtime(kind, &executable, &executable_bytes)?, None)
+    };
     let target_relative = target
         .strip_prefix(workspace)
         .map_err(|_| "agent target escaped workspace")?
@@ -1272,6 +1450,17 @@ pub fn run_agent(
         .create_new(true)
         .open(target)
         .map_err(|error| format!("create isolated agent target {}: {error}", target.display()))?;
+    // The caller's own CLI setup, resolved before the workspace snapshot
+    // because everything mounted below the project path needs a mount point
+    // in the workspace the sandbox presents there. Only the generation run
+    // uses it; the probes stay offline and isolated.
+    let environment = user_environment(kind, &scratch, workspace, project)?;
+    let mut runtime_paths = vec![executable.clone(), scratch.clone()];
+    if let Some(runtime) = &runtime {
+        runtime_paths.push(runtime.executable.clone());
+        runtime_paths.extend(runtime.read_only.iter().cloned());
+    }
+    environment.prepare_mount_points(workspace, &target_relative, &runtime_paths)?;
     let workspace_before = workspace_snapshot(workspace, Some(&target_relative))?;
     let version = run_process(
         &executable,
@@ -1280,8 +1469,7 @@ pub fn run_agent(
         workspace,
         &scratch,
         Vec::new(),
-        false,
-        (kind != AgentKind::Claude).then_some(kind),
+        Launch::Probe(kind),
         None,
         timeout_seconds,
     )?;
@@ -1297,10 +1485,20 @@ pub fn run_agent(
             .strip_prefix("omp/")
             .filter(|version| is_at_least(version, minimum_version)),
         AgentKind::Claude if !version.timed_out && version.status == Some(0) => {
-            closed_claude_version(&version.stdout)
+            closed_version_token(&version.stdout)
                 .filter(|version| is_at_least(version, minimum_version))
         }
         AgentKind::Claude => None,
+        // The probe must agree with the package metadata of the mounted entrypoint.
+        AgentKind::Pi if !version.timed_out && version.status == Some(0) => {
+            closed_version_token(&version.stdout)
+                .filter(|version| Some(*version) == pi_package_version.as_deref())
+                .filter(|version| is_at_least(version, minimum_version))
+                .filter(|version| {
+                    parse_version(version).is_some_and(|(major, _, _)| major < PI_UNSUPPORTED_MAJOR)
+                })
+        }
+        AgentKind::Pi => None,
     };
     let Some(adapter_version) = adapter_version else {
         return Err(format!(
@@ -1310,29 +1508,27 @@ pub fn run_agent(
             String::from_utf8_lossy(&version.stderr).trim()
         ));
     };
+    // The CLI's working directory: the caller project's path (where the
+    // sandbox presents the workspace), else the workspace itself.
+    let cwd = environment
+        .cwd
+        .to_str()
+        .ok_or("agent working directory is not UTF-8")?;
     let arguments = match kind {
         AgentKind::Codex => vec![
             "exec",
-            "--strict-config",
             "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
             "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
             "--color",
             "never",
             "--cd",
-            workspace.to_str().ok_or("workspace is not UTF-8")?,
+            cwd,
             "-",
         ]
         .into_iter()
         .map(str::to_owned)
         .collect(),
         AgentKind::Omp => {
-            let overlay = scratch.join("omp.yaml");
-            fs::write(&overlay, "startup:\n  checkUpdate: false\n")
-                .map_err(|error| format!("write OMP overlay: {error}"))?;
             let mut attempt = 0u64;
             let prompt_file = loop {
                 let prompt_file = scratch.join(format!("omp-prompt-{attempt}"));
@@ -1355,22 +1551,12 @@ pub fn run_agent(
             vec![
                 "-p".to_owned(),
                 "--cwd".to_owned(),
-                workspace.display().to_string(),
+                cwd.to_owned(),
                 "--no-session".to_owned(),
-                "--no-rules".to_owned(),
-                "--no-skills".to_owned(),
-                "--no-extensions".to_owned(),
-                "--no-lsp".to_owned(),
                 "--no-pty".to_owned(),
                 "--no-title".to_owned(),
-                "--tools".to_owned(),
-                "read,grep,glob,edit,write".to_owned(),
-                "--approval-mode".to_owned(),
-                "yolo".to_owned(),
                 "--max-time".to_owned(),
                 format!("{timeout_seconds}s"),
-                "--config".to_owned(),
-                overlay.display().to_string(),
                 format!(
                     "@{}",
                     prompt_file.to_str().ok_or("OMP prompt path is not UTF-8")?
@@ -1382,6 +1568,15 @@ pub fn run_agent(
             .iter()
             .map(ToString::to_string)
             .collect(),
+        AgentKind::Pi => {
+            let prompt_text = pi_prompt.expect("the Pi prompt was validated");
+            let mut arguments = PI.argv_template[..PI.argv_template.len() - 1]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            arguments.push(prompt_text.to_owned());
+            arguments
+        }
     };
     let arguments = insert_model_argument(kind, arguments, selection.model);
     let stdin = if spec.prompt_on_stdin {
@@ -1397,8 +1592,7 @@ pub fn run_agent(
         workspace,
         &scratch,
         stdin,
-        true,
-        Some(kind),
+        Launch::Generation(kind, &environment),
         Some(target),
         timeout_seconds,
     )?;
@@ -1430,6 +1624,28 @@ pub fn run_agent(
     if kind == AgentKind::Claude && !claude_success(&completed.stdout) {
         return Err("claude returned an invalid result".to_owned());
     }
+    let pi_summary = match pi_prompt {
+        Some(prompt_text) => {
+            // Pi reports its working directory: the project path the sandbox
+            // presents, or the workspace path (possibly canonicalized).
+            let canonical_workspace = fs::canonicalize(workspace).unwrap_or_default();
+            let cwds: Vec<&Path> = if environment.cwd == workspace {
+                vec![workspace, &canonical_workspace]
+            } else {
+                vec![&environment.cwd]
+            };
+            let summary = validate_pi_json_stream(&completed.stdout, &cwds, prompt_text).map_err(
+                |reason| {
+                    format!(
+                        "pi JSON event stream rejected: {reason}{}",
+                        stderr_excerpt(&completed.stderr)
+                    )
+                },
+            )?;
+            Some(summary)
+        }
+        None => None,
+    };
     let metadata = target_file
         .metadata()
         .map_err(|error| format!("stat agent target: {error}"))?;
@@ -1447,10 +1663,16 @@ pub fn run_agent(
         .read_to_end(&mut implementation)
         .map_err(|error| format!("read agent target: {error}"))?;
     if implementation.is_empty() {
+        let stdout = if kind == AgentKind::Pi {
+            format!("<{} bytes of Pi JSON events>", completed.stdout.len())
+        } else {
+            String::from_utf8_lossy(&completed.stdout).trim().to_owned()
+        };
         return Err(format!(
-            "agent did not write target {}\nprovider stdout:\n{}\nprovider stderr:\n{}",
+            "agent did not write target {}{}\nprovider stdout:\n{}\nprovider stderr:\n{}",
             target.display(),
-            String::from_utf8_lossy(&completed.stdout).trim(),
+            local_policy_note(kind, &completed.stdout),
+            stdout,
             String::from_utf8_lossy(&completed.stderr).trim(),
         ));
     }
@@ -1463,6 +1685,24 @@ pub fn run_agent(
         spec.argv_template.iter().map(ToString::to_string).collect(),
         selection.model,
     );
+    let resolved_models = match (kind, pi_summary) {
+        (AgentKind::Pi, Some(summary)) => summary.models,
+        (AgentKind::Claude, _) => claude_models(&completed.stdout),
+        _ => Vec::new(),
+    };
+    if !resolved_models.is_empty() {
+        // AgentRun has no model field; the attribution the CLI reported is
+        // shown here and bound to the record through the stdout digest.
+        eprintln!(
+            "{} answered with {}",
+            spec.executable_name,
+            resolved_models
+                .iter()
+                .map(|model| format!("`{model}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     Ok(AgentRunCandidate {
         implementation,
         executable: executable.clone(),
@@ -1474,42 +1714,60 @@ pub fn run_agent(
         exit_code: completed.status,
         timed_out: completed.timed_out,
         duration_ms,
-        environment_names: agent_environment_names(kind),
+        environment_names: agent_environment_names(),
         argv_template,
+        resolved_models,
     })
 }
 
-struct OmpBunRuntime {
+/// The tail of a failed run's stderr, appended to a rejection so the cause
+/// (provider, authentication, network, extension) is visible.
+fn stderr_excerpt(stderr: &[u8]) -> String {
+    const LIMIT: usize = 4000;
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut start = text.len().saturating_sub(LIMIT);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("\npi stderr:\n{}", &text[start..])
+}
+
+/// An interpreter-hosted agent entrypoint: OMP under Bun or Pi under Node.
+struct ScriptRuntime {
+    label: &'static str,
     executable: PathBuf,
     digest: [u8; 32],
     read_only: Vec<PathBuf>,
 }
 
-impl OmpBunRuntime {
+impl ScriptRuntime {
     fn verify(&self) -> Result<(), String> {
-        if bun_digest(&self.executable)? != self.digest {
-            return Err("OMP Bun runtime changed during generation".to_owned());
+        if runtime_digest(&self.executable, self.label)? != self.digest {
+            return Err(format!("{} changed during generation", self.label));
         }
         Ok(())
     }
 }
 
-fn bun_digest(executable: &Path) -> Result<[u8; 32], String> {
+fn runtime_digest(executable: &Path, label: &str) -> Result<[u8; 32], String> {
     use sha2::{Digest, Sha256};
 
-    let metadata = fs::symlink_metadata(executable)
-        .map_err(|error| format!("stat OMP Bun runtime: {error}"))?;
+    let metadata =
+        fs::symlink_metadata(executable).map_err(|error| format!("stat {label}: {error}"))?;
     if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
-        return Err("OMP Bun runtime must be a regular executable file".to_owned());
+        return Err(format!("{label} must be a regular executable file"));
     }
-    let mut file =
-        fs::File::open(executable).map_err(|error| format!("open OMP Bun runtime: {error}"))?;
+    let mut file = fs::File::open(executable).map_err(|error| format!("open {label}: {error}"))?;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
-            .map_err(|error| format!("read OMP Bun runtime: {error}"))?;
+            .map_err(|error| format!("read {label}: {error}"))?;
         if count == 0 {
             break;
         }
@@ -1518,11 +1776,389 @@ fn bun_digest(executable: &Path) -> Result<[u8; 32], String> {
     Ok(digest.finalize().into())
 }
 
+/// First `name` entry on the caller's PATH, canonicalized.
+fn path_runtime(name: &str, label: &str) -> Result<PathBuf, String> {
+    let path =
+        std::env::var_os("PATH").ok_or_else(|| format!("missing PATH while locating {label}"))?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(name);
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {
+                return fs::canonicalize(&candidate)
+                    .map_err(|error| format!("resolve {label}: {error}"));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("locate {label}: {error}")),
+        }
+    }
+    Err(format!("missing {label} on PATH"))
+}
+
+/// Resolve the official Pi Node package around its canonical entrypoint and
+/// the Node runtime from PATH. Returns the runtime and the package version.
+/// The runtime mounts the installed Pi package with its dependency closure
+/// (extensions resolve and load Pi's own packages, such as `pi-ai`, from it)
+/// and the Node installation the caller's PATH selects.
+fn pi_node_runtime(executable: &Path, bytes: &[u8]) -> Result<(ScriptRuntime, String), String> {
+    let shebang = bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    if shebang != b"#!/usr/bin/env node" {
+        return Err(
+            "pi executable must be the official Node package entrypoint dist/bundle/cli.js (`#!/usr/bin/env node`); compiled, Bun, or wrapper launchers are unsupported"
+                .to_owned(),
+        );
+    }
+    let root = executable
+        .ancestors()
+        .nth(3)
+        .filter(|root| {
+            executable.ends_with("dist/bundle/cli.js")
+                && root.ends_with("node_modules/@earendil-works/pi-coding-agent")
+        })
+        .ok_or(
+            "pi entrypoint must be node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js of an installed package",
+        )?;
+    let metadata = package_metadata(root, "Pi package")?;
+    if metadata["name"].as_str() != Some("@earendil-works/pi-coding-agent")
+        || metadata["bin"]["pi"].as_str() != Some("dist/bundle/cli.js")
+    {
+        return Err("pi script does not match the official package entrypoint".to_owned());
+    }
+    let version = metadata["version"]
+        .as_str()
+        .filter(|version| closed_semver(version))
+        .ok_or("Pi package must declare a release version")?
+        .to_owned();
+    let modules = root
+        .ancestors()
+        .filter(|path| path.file_name().is_some_and(|name| name == "node_modules"))
+        .last()
+        .ok_or("pi entrypoint must belong to an installed node_modules package")?;
+    let mut read_only =
+        package_closure_mounts(root, modules, "@earendil-works/pi-coding-agent", "Pi")?;
+    let label = "Pi Node runtime";
+    let node = path_runtime("node", label)?;
+    let digest = runtime_digest(&node, label)?;
+    read_only.extend(node_installation(&node));
+    Ok((
+        ScriptRuntime {
+            label,
+            executable: node,
+            digest,
+            read_only,
+        },
+        version,
+    ))
+}
+
+/// The installation prefix of a canonical `<prefix>/bin/node` from a Node
+/// distribution (nvm, official tarballs, version managers), so that `node`,
+/// `npm` and `npx` run by Pi, its extensions and its tools resolve exactly as
+/// on the caller's PATH. System prefixes are already mounted; anything that
+/// does not look like a Node distribution keeps only the binary itself.
+fn node_installation(node: &Path) -> Option<PathBuf> {
+    let bin = node.parent()?;
+    let prefix = bin.parent()?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    (bin.file_name()? == "bin"
+        && !matches!(prefix.to_str(), Some("/" | "/usr" | "/usr/local"))
+        && home.as_deref().is_none_or(|home| !home.starts_with(prefix))
+        && (prefix.join("include/node").is_dir() || prefix.join("lib/node_modules").is_dir()))
+    .then(|| prefix.to_path_buf())
+}
+
+/// `node --version` without network or credentials must report a release at
+/// or above the Pi package's `engines.node`.
+fn probe_pi_node(
+    runtime: &ScriptRuntime,
+    workspace: &Path,
+    scratch: &Path,
+    timeout_seconds: u16,
+) -> Result<(), String> {
+    let probe = run_process(
+        &runtime.executable,
+        None,
+        vec!["--version".to_owned()],
+        workspace,
+        scratch,
+        Vec::new(),
+        Launch::Probe(AgentKind::Pi),
+        None,
+        timeout_seconds,
+    )?;
+    runtime.verify()?;
+    let minimum =
+        parse_version(PI_MINIMUM_NODE_VERSION).expect("the Node minimum is a complete version");
+    let reported = std::str::from_utf8(&probe.stdout)
+        .ok()
+        .filter(|stdout| stdout.split_ascii_whitespace().count() == 1)
+        .map(str::trim)
+        .unwrap_or_default();
+    if probe.timed_out
+        || probe.status != Some(0)
+        || !reported
+            .strip_prefix('v')
+            .is_some_and(|version| closed_semver(version) && is_at_least(version, minimum))
+    {
+        return Err(format!(
+            "pi requires Node >= {PI_MINIMUM_NODE_VERSION}; `node --version` reported `{}` (exit {:?})",
+            String::from_utf8_lossy(&probe.stdout).trim(),
+            probe.status
+        ));
+    }
+    Ok(())
+}
+
+/// The prompt is Pi's single positional message after `--`. Pi passes such a
+/// message to the model unmodified, so anything an argv element cannot carry
+/// exactly, or that Pi would parse as a file argument (`@`) or command (`/`),
+/// fails instead of being altered.
+fn pi_prompt_argument(prompt: &[u8]) -> Result<&str, String> {
+    let limit = pi_max_prompt_bytes();
+    if prompt.len() > limit {
+        return Err(format!(
+            "pi prompt is {} bytes; one Linux argv element (MAX_ARG_STRLEN, 32 pages) carries at most {limit} bytes on this host, so `--agent pi` cannot deliver it unmodified",
+            prompt.len()
+        ));
+    }
+    if prompt.contains(&0) {
+        return Err("pi prompt contains a NUL byte, which an argv element cannot carry".to_owned());
+    }
+    let text = std::str::from_utf8(prompt).map_err(|_| "pi prompt is not valid UTF-8")?;
+    if text.is_empty() || text.starts_with('@') || text.starts_with('/') {
+        return Err(
+            "pi prompt must be nonempty and must not start with `@` or `/`, which Pi parses as a file argument or command"
+                .to_owned(),
+        );
+    }
+    Ok(text)
+}
+
+/// Validate Pi 1.x `--mode json` stdout: strict LF-framed JSONL whose first
+/// record is the version 3 session header for the isolated workspace and
+/// whose last record is `agent_settled`, with only documented event types,
+/// balanced agent runs, a final `agent_end` that schedules no retry, no failed
+/// automatic retry, a first user message equal to the exact prompt, every
+/// assistant message attributed to a provider and model with a terminal
+/// `stopReason`, and a final assistant message stopped normally. The
+/// attribution is whatever the caller's Pi resolved (its default model, a
+/// pattern, an extension provider) and is returned rather than compared with
+/// a requested name. Tools are not restricted: the caller's Pi setup decides
+/// which tools exist. Event order inside a run is not constrained beyond
+/// that, so multi-turn tool use and extension follow-up messages are accepted.
+pub fn validate_pi_json_stream(
+    stdout: &[u8],
+    workspaces: &[&Path],
+    prompt: &str,
+) -> Result<PiStreamSummary, String> {
+    use serde_json::Value;
+
+    let text = std::str::from_utf8(stdout).map_err(|_| "stdout is not UTF-8")?;
+    let Some(body) = text.strip_suffix('\n') else {
+        return Err("stdout does not end with a complete JSONL record".to_owned());
+    };
+    let mut records = Vec::new();
+    for (index, line) in body.split('\n').enumerate() {
+        let line_number = index + 1;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Ok(Value::Object(record)) = serde_json::from_str::<Value>(line) else {
+            return Err(format!("line {line_number} is not a JSON object"));
+        };
+        if !record.get("type").is_some_and(Value::is_string) {
+            return Err(format!("line {line_number} has no string `type`"));
+        }
+        records.push((line_number, record));
+    }
+    let kind = |record: &serde_json::Map<String, Value>| {
+        record
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (_, header) = &records[0];
+    if kind(header) != "session"
+        || header.get("version").and_then(Value::as_u64) != Some(3)
+        || !header.get("id").is_some_and(Value::is_string)
+    {
+        return Err("first record is not a version 3 session header".to_owned());
+    }
+    if !header
+        .get("cwd")
+        .and_then(Value::as_str)
+        .is_some_and(|cwd| {
+            workspaces
+                .iter()
+                .any(|workspace| Path::new(cwd) == *workspace)
+        })
+    {
+        return Err("session header cwd is not the isolated workspace".to_owned());
+    }
+    if kind(&records[records.len() - 1].1) != "agent_settled" {
+        return Err("stream does not end with `agent_settled`".to_owned());
+    }
+    let mut agent_runs = 0usize;
+    let mut open_runs = 0usize;
+    let mut final_will_retry = None;
+    let mut user_messages = 0usize;
+    let mut models = Vec::<String>::new();
+    let mut final_assistant = None::<(String, Option<String>, String)>;
+    for (line_number, record) in &records[1..] {
+        let event = kind(record);
+        match event.as_str() {
+            "session" => return Err(format!("line {line_number} repeats the session header")),
+            "agent_start" => {
+                agent_runs += 1;
+                open_runs += 1;
+            }
+            "agent_end" => {
+                open_runs = open_runs
+                    .checked_sub(1)
+                    .ok_or_else(|| format!("line {line_number} ends an agent run never started"))?;
+                final_will_retry = Some(
+                    record
+                        .get("willRetry")
+                        .and_then(Value::as_bool)
+                        .ok_or_else(|| format!("line {line_number} agent_end lacks `willRetry`"))?,
+                );
+            }
+            "agent_settled" if *line_number != records[records.len() - 1].0 => {
+                return Err(format!("line {line_number} settles before the stream ends"));
+            }
+            "auto_retry_end" if record.get("success").and_then(Value::as_bool) == Some(false) => {
+                return Err(format!(
+                    "line {line_number} reports a failed automatic retry{}",
+                    pi_error_suffix(record.get("finalError"))
+                ));
+            }
+            "message_end" => {
+                let message = record
+                    .get("message")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("line {line_number} message_end lacks a message"))?;
+                match message.get("role").and_then(Value::as_str) {
+                    Some("user") => {
+                        user_messages += 1;
+                        // Only the first user message is cott's prompt; later
+                        // ones are follow-ups sent by the caller's extensions.
+                        let exact = match message.get("content") {
+                            Some(Value::String(content)) => content == prompt,
+                            Some(Value::Array(blocks)) => {
+                                blocks.len() == 1
+                                    && blocks[0].get("type").and_then(Value::as_str) == Some("text")
+                                    && blocks[0].get("text").and_then(Value::as_str) == Some(prompt)
+                            }
+                            _ => false,
+                        };
+                        if user_messages == 1 && !exact {
+                            return Err(format!(
+                                "line {line_number} first user message differs from the exact prompt (an input transform or file expansion changed it)"
+                            ));
+                        }
+                    }
+                    Some("assistant") => {
+                        let attribution = |field: &str| {
+                            message
+                                .get(field)
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.trim().is_empty())
+                                .ok_or_else(|| {
+                                    format!("line {line_number} assistant message has no `{field}`")
+                                })
+                        };
+                        let model =
+                            format!("{}/{}", attribution("provider")?, attribution("model")?);
+                        let stop_reason = message
+                            .get("stopReason")
+                            .and_then(Value::as_str)
+                            .filter(|reason| PI_STOP_REASONS.contains(reason))
+                            .ok_or_else(|| {
+                                format!(
+                                    "line {line_number} assistant message has no valid `stopReason`"
+                                )
+                            })?;
+                        if !models.contains(&model) {
+                            models.push(model.clone());
+                        }
+                        final_assistant = Some((
+                            stop_reason.to_owned(),
+                            message
+                                .get("errorMessage")
+                                .map(|error| pi_error_suffix(Some(error))),
+                            model,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            "tool_execution_start" | "tool_execution_update" | "tool_execution_end" => {
+                if !record.get("toolName").is_some_and(Value::is_string) {
+                    return Err(format!("line {line_number} tool event lacks `toolName`"));
+                }
+            }
+            other if PI_EVENT_TYPES.contains(&other) => {}
+            other => {
+                return Err(format!(
+                    "line {line_number} has unsupported event `{other}`"
+                ));
+            }
+        }
+    }
+    if agent_runs == 0 || open_runs != 0 {
+        return Err("agent runs are missing or unbalanced".to_owned());
+    }
+    if final_will_retry != Some(false) {
+        return Err("final agent_end still schedules a retry".to_owned());
+    }
+    if user_messages == 0 {
+        return Err("no user message carries the prompt".to_owned());
+    }
+    match final_assistant {
+        Some((reason, _, final_model)) if reason == "stop" => Ok(PiStreamSummary {
+            models,
+            final_model,
+        }),
+        Some((reason, error, model)) => Err(format!(
+            "final assistant message from `{model}` stopped with `{reason}`{}",
+            error.unwrap_or_default()
+        )),
+        None => Err("no assistant message".to_owned()),
+    }
+}
+
+/// `: <message>` for a Pi error string, flattened to one line and capped at
+/// 300 characters; empty when there is none.
+fn pi_error_suffix(error: Option<&serde_json::Value>) -> String {
+    let Some(error) = error.and_then(serde_json::Value::as_str) else {
+        return String::new();
+    };
+    let flat = error
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let flat = flat.trim();
+    if flat.is_empty() {
+        return String::new();
+    }
+    match flat.char_indices().nth(300) {
+        Some((index, _)) => format!(": {}…", &flat[..index]),
+        None => format!(": {flat}"),
+    }
+}
+
 fn omp_bun_runtime(
     kind: AgentKind,
     executable: &Path,
     bytes: &[u8],
-) -> Result<Option<OmpBunRuntime>, String> {
+) -> Result<Option<ScriptRuntime>, String> {
     if kind != AgentKind::Omp {
         return Ok(None);
     }
@@ -1544,47 +2180,29 @@ fn omp_bun_runtime(
         }
         return Ok(None);
     }
-    let path = std::env::var_os("PATH").ok_or("missing PATH while locating OMP Bun runtime")?;
-    let mut bun = None;
-    for directory in std::env::split_paths(&path) {
-        let candidate = directory.join("bun");
-        match fs::symlink_metadata(&candidate) {
-            Ok(_) => {
-                bun = Some(
-                    fs::canonicalize(&candidate)
-                        .map_err(|error| format!("resolve OMP Bun runtime: {error}"))?,
-                );
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("locate OMP Bun runtime: {error}")),
-        }
-    }
-    let bun = bun.ok_or("missing OMP Bun runtime on PATH")?;
-    let digest = bun_digest(&bun)?;
+    let label = "OMP Bun runtime";
+    let bun = path_runtime("bun", label)?;
+    let digest = runtime_digest(&bun, label)?;
     let read_only = omp_package_mounts(executable)?;
-    Ok(Some(OmpBunRuntime {
+    Ok(Some(ScriptRuntime {
+        label,
         executable: bun,
         digest,
         read_only,
     }))
 }
 
-fn package_metadata(root: &Path) -> Result<serde_json::Value, String> {
+fn package_metadata(root: &Path, label: &str) -> Result<serde_json::Value, String> {
     let path = root.join("package.json");
     let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| format!("inspect OMP runtime package {}: {error}", path.display()))?;
+        .map_err(|error| format!("inspect {label} {}: {error}", path.display()))?;
     if !metadata.is_file() || metadata.len() > 1024 * 1024 {
-        return Err(format!(
-            "unsafe OMP runtime package metadata {}",
-            path.display()
-        ));
+        return Err(format!("unsafe {label} metadata {}", path.display()));
     }
     serde_json::from_slice(
-        &fs::read(&path)
-            .map_err(|error| format!("read OMP runtime package {}: {error}", path.display()))?,
+        &fs::read(&path).map_err(|error| format!("read {label} {}: {error}", path.display()))?,
     )
-    .map_err(|error| format!("parse OMP runtime package {}: {error}", path.display()))
+    .map_err(|error| format!("parse {label} {}: {error}", path.display()))
 }
 
 fn package_name(name: &str) -> bool {
@@ -1615,7 +2233,7 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
         .take_while(|path| *path != modules)
         .find(|path| path.join("package.json").exists())
         .ok_or("missing OMP entrypoint package metadata")?;
-    let metadata = package_metadata(root)?;
+    let metadata = package_metadata(root, "OMP runtime package")?;
     let bin = metadata["bin"]["omp"]
         .as_str()
         .ok_or("OMP package must declare its omp entrypoint")?;
@@ -1627,13 +2245,26 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
     {
         return Err("OMP script does not match the official package entrypoint".to_owned());
     }
+    package_closure_mounts(root, modules, "@oh-my-pi/pi-coding-agent", "OMP")
+}
 
-    let mut pending = vec![(root.to_path_buf(), "@oh-my-pi/pi-coding-agent".to_owned())];
+/// Read-only mounts for an installed package and its runtime dependency
+/// closure, resolved like Node from each package location upwards but never
+/// above `modules`, the outermost `node_modules` that holds `root`. Package
+/// contents are mounted, not `node_modules` containers: hoisted and symlinked
+/// dependencies are exposed individually, at every location that names them.
+fn package_closure_mounts(
+    root: &Path,
+    modules: &Path,
+    name: &str,
+    label: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let mut pending = vec![(root.to_path_buf(), name.to_owned())];
     let mut packages = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     while let Some((location, expected_name)) = pending.pop() {
         let canonical = fs::canonicalize(&location).map_err(|error| {
             format!(
-                "resolve OMP runtime package {}: {error}",
+                "resolve {label} runtime package {}: {error}",
                 location.display()
             )
         })?;
@@ -1642,7 +2273,7 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
             || !canonical.is_dir()
         {
             return Err(format!(
-                "unsafe OMP runtime package location {}",
+                "unsafe {label} runtime package location {}",
                 location.display()
             ));
         }
@@ -1650,10 +2281,10 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
             locations.insert(location);
             continue;
         }
-        let metadata = package_metadata(&canonical)?;
+        let metadata = package_metadata(&canonical, &format!("{label} runtime package"))?;
         if metadata["name"].as_str() != Some(expected_name.as_str()) {
             return Err(format!(
-                "OMP runtime package identity mismatch at {}",
+                "{label} runtime package identity mismatch at {}",
                 location.display()
             ));
         }
@@ -1668,10 +2299,10 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
             };
             let values = values
                 .as_object()
-                .ok_or("invalid OMP package dependency metadata")?;
+                .ok_or_else(|| format!("invalid {label} package dependency metadata"))?;
             for name in values.keys() {
                 if !package_name(name) {
-                    return Err(format!("unsafe OMP runtime dependency name `{name}`"));
+                    return Err(format!("unsafe {label} runtime dependency name `{name}`"));
                 }
                 let optional = field == "optionalDependencies"
                     || (field == "peerDependencies"
@@ -1700,30 +2331,30 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => {
-                        return Err(format!("locate OMP runtime dependency `{name}`: {error}"));
+                        return Err(format!(
+                            "locate {label} runtime dependency `{name}`: {error}"
+                        ));
                     }
                 }
             }
             if let Some(dependency) = found {
                 pending.push((dependency, name));
             } else if !optional {
-                return Err(format!("missing OMP runtime dependency `{name}`"));
+                return Err(format!("missing {label} runtime dependency `{name}`"));
             }
         }
     }
 
     let mut mounts = BTreeSet::new();
     for (package, locations) in packages {
-        // Mount package contents, not node_modules containers: hoisted and
-        // symlinked dependencies are exposed individually from the closure.
-        for entry in
-            fs::read_dir(&package).map_err(|error| format!("list OMP runtime package: {error}"))?
+        for entry in fs::read_dir(&package)
+            .map_err(|error| format!("list {label} runtime package: {error}"))?
         {
-            let entry = entry.map_err(|error| format!("list OMP runtime package: {error}"))?;
+            let entry = entry.map_err(|error| format!("list {label} runtime package: {error}"))?;
             if entry.file_name() == "node_modules" {
                 continue;
             }
-            validate_package_content(&entry.path(), &package)?;
+            validate_package_content(&entry.path(), &package, &format!("{label} package"))?;
             for location in &locations {
                 mounts.insert(location.join(entry.file_name()));
             }
@@ -1732,27 +2363,27 @@ fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(mounts.into_iter().collect())
 }
 
-fn validate_package_content(path: &Path, package: &Path) -> Result<(), String> {
+fn validate_package_content(path: &Path, package: &Path, label: &str) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("inspect OMP package content {}: {error}", path.display()))?;
+        .map_err(|error| format!("inspect {label} content {}: {error}", path.display()))?;
     if metadata.file_type().is_symlink() {
         let target = fs::canonicalize(path)
-            .map_err(|error| format!("resolve OMP package content {}: {error}", path.display()))?;
+            .map_err(|error| format!("resolve {label} content {}: {error}", path.display()))?;
         if !target.starts_with(package) || target.starts_with(package.join("node_modules")) {
             return Err(format!(
-                "OMP package content escapes its package: {}",
+                "{label} content escapes its package: {}",
                 path.display()
             ));
         }
     } else if metadata.is_dir() {
         for entry in fs::read_dir(path)
-            .map_err(|error| format!("list OMP package content {}: {error}", path.display()))?
+            .map_err(|error| format!("list {label} content {}: {error}", path.display()))?
         {
-            let entry = entry.map_err(|error| format!("list OMP package content: {error}"))?;
-            validate_package_content(&entry.path(), package)?;
+            let entry = entry.map_err(|error| format!("list {label} content: {error}"))?;
+            validate_package_content(&entry.path(), package, label)?;
         }
     } else if !metadata.is_file() {
-        return Err(format!("unsafe OMP package content {}", path.display()));
+        return Err(format!("unsafe {label} content {}", path.display()));
     }
     Ok(())
 }
@@ -1771,7 +2402,7 @@ fn native_claude_entrypoint(executable: &Path, bytes: &[u8]) -> bool {
             .any(|word| word == b"node" || word.ends_with(b"/node"))
 }
 
-fn closed_claude_version(stdout: &[u8]) -> Option<&str> {
+fn closed_version_token(stdout: &[u8]) -> Option<&str> {
     let stdout = std::str::from_utf8(stdout).ok()?;
     let mut tokens = stdout.split_ascii_whitespace();
     let version = tokens.next()?;
@@ -1793,6 +2424,20 @@ fn closed_semver(version: &str) -> bool {
         && parts.next().is_none()
 }
 
+/// Model ids a successful Claude Code JSON result lists in `modelUsage`: the
+/// models that actually answered, whatever alias or default selected them.
+fn claude_models(stdout: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|result| {
+            result
+                .get("modelUsage")
+                .and_then(serde_json::Value::as_object)
+                .map(|usage| usage.keys().cloned().collect())
+        })
+        .unwrap_or_default()
+}
+
 fn claude_success(stdout: &[u8]) -> bool {
     let Ok(serde_json::Value::Object(result)) = serde_json::from_slice(stdout) else {
         return false;
@@ -1803,6 +2448,67 @@ fn claude_success(stdout: &[u8]) -> bool {
         && result
             .get("result")
             .is_some_and(serde_json::Value::is_string)
+}
+
+/// Tool requests a Claude Code JSON result lists in `permission_denials`
+/// (requests the caller's permission mode and rules did not allow, denied
+/// because nobody can answer a prompt in print mode): the tool name and, for
+/// file tools, the path; never the rest of the tool input.
+fn claude_permission_denials(stdout: &[u8]) -> Vec<String> {
+    let Ok(serde_json::Value::Object(result)) = serde_json::from_slice(stdout) else {
+        return Vec::new();
+    };
+    let Some(denials) = result
+        .get("permission_denials")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    denials
+        .iter()
+        .map(|denial| {
+            let tool = denial
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|tool| !tool.is_empty() && !tool.chars().any(char::is_control))
+                .unwrap_or("tool");
+            let path = denial.get("tool_input").and_then(|input| {
+                ["file_path", "notebook_path", "path"]
+                    .iter()
+                    .find_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
+            });
+            match path {
+                Some(path) if !path.chars().any(char::is_control) => format!("{tool} `{path}`"),
+                _ => tool.to_owned(),
+            }
+        })
+        .collect()
+}
+
+/// Why a CLI that exited successfully may have left the target empty: Cott
+/// passes no permission, sandbox or approval override, so the caller's own
+/// policy decides whether the CLI may write it, and a denial is final (no run
+/// is retried with a more permissive policy).
+fn local_policy_note(kind: AgentKind, stdout: &[u8]) -> String {
+    match kind {
+        AgentKind::Claude => {
+            let denials = claude_permission_denials(stdout);
+            if denials.is_empty() {
+                "; Cott passes no --permission-mode: the caller's Claude Code permission mode and rules decide whether print mode may edit files".to_owned()
+            } else {
+                let shown = denials.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+                let more = denials.len().saturating_sub(8);
+                format!(
+                    ": the caller's Claude Code permission settings denied {} tool request(s) ({shown}{}); Cott passes no --permission-mode or allow rule, so file edits must be allowed there (for example `permissions.defaultMode` `acceptEdits` or an `Edit`/`Write` allow rule)",
+                    denials.len(),
+                    if more > 0 { format!(", {more} more") } else { String::new() },
+                )
+            }
+        }
+        AgentKind::Codex => "; Cott passes no --sandbox or approval flag: the caller's Codex `sandbox_mode`/`permission_profile` and project trust decide whether `codex exec` may write the project path, and a read-only policy cannot write the target".to_owned(),
+        AgentKind::Omp => "; Cott passes no --approval-mode: the caller's OMP `tools.approvalMode` and `tools.approval` settings decide whether print mode may write files".to_owned(),
+        AgentKind::Pi => String::new(),
+    }
 }
 
 fn workspace_snapshot(
@@ -1855,75 +2561,843 @@ fn workspace_snapshot(
     Ok(snapshot)
 }
 
-fn agent_environment_names(kind: AgentKind) -> Vec<String> {
-    let mut names = vec![
-        "HOME".to_owned(),
-        "PATH".to_owned(),
-        "PYTHONDONTWRITEBYTECODE".to_owned(),
-        "TMPDIR".to_owned(),
-    ];
-    for name in [
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "NO_PROXY",
-    ] {
-        if std::env::var_os(name).is_some() {
-            names.push(name.to_owned());
-        }
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match kind {
-        AgentKind::Codex => {
-            for name in ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
-                if std::env::var_os(name).is_some() {
-                    names.push(name.to_owned());
-                }
-            }
-            if std::env::var_os("CODEX_HOME")
-                .map(PathBuf::from)
-                .or_else(|| home.map(|home| home.join(".codex")))
-                .is_some_and(|path| path.is_dir())
-            {
-                names.push("CODEX_HOME".to_owned());
-            }
-        }
-        AgentKind::Omp => {
-            if std::env::var_os("PI_CODING_AGENT_DIR")
-                .map(PathBuf::from)
-                .or_else(|| home.map(|home| home.join(".omp/agent")))
-                .is_some_and(|path| path.is_dir())
-            {
-                names.push("PI_CODING_AGENT_DIR".to_owned());
-            }
-        }
-        AgentKind::Claude => {
-            if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
-                names.push("ANTHROPIC_API_KEY".to_owned());
-            }
-            names.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned());
-            names.push("DISABLE_ERROR_REPORTING".to_owned());
-            names.push("DISABLE_TELEMETRY".to_owned());
-        }
-    }
-    names.sort();
-    names
+/// Environment names recorded in AgentRun for a generation run: `PATH` and
+/// the variables cott itself sets. Every adapter otherwise inherits the
+/// caller's environment (see [`AGENT_NOT_INHERITED`]) without recording its
+/// names or values, so credentials and private configuration never reach
+/// provenance.
+fn agent_environment_names() -> Vec<String> {
+    ["HOME", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE", "TMPDIR"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
+/// Pi version and Node probes only: no startup network, no `pi.dev` version
+/// request, no telemetry. Generation runs never get these overrides.
+const PI_FIXED_ENVIRONMENT: [(&str, &str); 3] = [
+    ("PI_OFFLINE", "1"),
+    ("PI_SKIP_VERSION_CHECK", "1"),
+    ("PI_TELEMETRY", "0"),
+];
+
+/// Where each CLI keeps its user configuration and login: the variable that
+/// relocates it, the home-relative default, and the credential stores inside
+/// it that the CLI rewrites when a login is refreshed (Codex `auth.json`,
+/// Claude Code `.credentials.json`, OMP's SQLite `agent.db` and its
+/// `-journal`/`-wal`/`-shm` companions, Pi `auth.json`). The directory is the
+/// CLI's store: it is shared with the host as a whole ([`MappedMount::Shared`])
+/// so the CLI's lock files, `rename` temporaries and SQLite companion files are
+/// created next to the host's and coordinate with concurrent host sessions.
+fn configuration_root(kind: AgentKind) -> (&'static str, &'static str, &'static [&'static str]) {
+    match kind {
+        AgentKind::Codex => ("CODEX_HOME", ".codex", &["auth.json"]),
+        AgentKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude", &[".credentials.json"]),
+        AgentKind::Omp => (
+            "PI_CODING_AGENT_DIR",
+            ".omp/agent",
+            &[
+                "agent.db",
+                "agent.db-journal",
+                "agent.db-shm",
+                "agent.db-wal",
+            ],
+        ),
+        AgentKind::Pi => ("PI_CODING_AGENT_DIR", ".pi/agent", &["auth.json"]),
+    }
+}
+
+/// Agent configuration and context the supported CLIs read from the project
+/// root, their working directory: Pi `.pi/`; Codex `.codex/` (project config
+/// layers, rules, hooks); Claude Code `.claude/`, `.mcp.json` and
+/// `CLAUDE.local.md`; OMP `.omp/` and the other tools' project locations its
+/// discovery reads (`.agent`, `.clinerules`, `.cursor`, `.cursorrules`,
+/// `.gemini`, `.github` Copilot instructions, `.opencode`, `opencode.json(c)`,
+/// `.vscode/mcp.json`, `.windsurf`, `.windsurfrules`, `mcp.json`); the shared
+/// `.agents/` skills; and the context files (`AGENTS.md`,
+/// `AGENTS.override.md`, `CLAUDE.md`, and Pi's `AGENTS.MD`/`CLAUDE.MD`).
+/// Present entries are mounted read-only at their own names under the project
+/// root path, where the sandbox presents the isolated workspace.
+pub const PROJECT_RESOURCES: &[&str] = &[
+    ".agent",
+    ".agents",
+    ".claude",
+    ".clinerules",
+    ".codex",
+    ".cursor",
+    ".cursorrules",
+    ".gemini",
+    ".github/copilot-instructions.md",
+    ".github/instructions",
+    ".mcp.json",
+    ".omp",
+    ".opencode",
+    ".pi",
+    ".vscode/mcp.json",
+    ".windsurf",
+    ".windsurfrules",
+    "AGENTS.MD",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "CLAUDE.MD",
+    "CLAUDE.local.md",
+    "CLAUDE.md",
+    "mcp.json",
+    "opencode.json",
+    "opencode.jsonc",
+];
+
+/// Context and configuration the supported CLIs read from the project root's
+/// ancestors: the context files (Pi and Claude Code up to `/`, Codex from the
+/// repository root down), Claude Code `.claude/` memory and rules, Codex
+/// `.codex/` project config layers between the repository root and the
+/// working directory, `.agents/` skills (Pi and Codex, up to the repository
+/// root), and OMP's `.omp/` and `.clinerules`. Present entries are mounted
+/// read-only at their own paths; each CLI applies its own discovery rules to
+/// them. Directories directly in the home directory are the user-level setup
+/// ([`user_environment`]), not project ancestors, and are not mounted again.
+pub const ANCESTOR_RESOURCES: &[&str] = &[
+    ".agents",
+    ".claude",
+    ".clinerules",
+    ".codex",
+    ".omp",
+    "AGENTS.MD",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "CLAUDE.MD",
+    "CLAUDE.local.md",
+    "CLAUDE.md",
+];
+
+/// Largest repository metadata file (`.git` pointer, `HEAD`, `commondir`,
+/// `gitdir`) mounted as a repository root marker.
+const MAX_GIT_METADATA_BYTES: u64 = 64 * 1024;
+
+/// The caller's own CLI setup for a generation run: inherited environment,
+/// extra read-only paths, the configuration mounts, and the working directory
+/// at which the sandbox presents the isolated workspace.
+#[derive(Clone, Debug)]
+pub struct UserEnvironment {
+    variables: BTreeMap<String, String>,
+    read_only: Vec<PathBuf>,
+    mounts: Vec<MappedMount>,
+    /// The caller project's root path, or the workspace path without one.
+    cwd: PathBuf,
+}
+
+impl UserEnvironment {
+    /// Create, in `workspace`, a mount point for every destination below
+    /// [`Self::cwd`] (and for `runtime_paths` there): the sandbox presents the
+    /// workspace read-only at the working directory, and a read-only bind
+    /// cannot receive new mount points. Missing parents become empty
+    /// directories and missing leaves empty files or directories of the
+    /// source's kind; existing entries of the same kind are reused (the mount
+    /// covers them). The agent target (`target`, workspace-relative) is never
+    /// a mount point. This runs before the workspace snapshot, so the mount
+    /// points are part of the audited workspace.
+    fn prepare_mount_points(
+        &self,
+        workspace: &Path,
+        target: &Path,
+        runtime_paths: &[PathBuf],
+    ) -> Result<(), String> {
+        let destinations = self
+            .mounts
+            .iter()
+            .map(|mount| (mount.destination(), mount.source()))
+            .chain(
+                self.read_only
+                    .iter()
+                    .map(|path| (path.as_path(), path.as_path())),
+            )
+            .chain(
+                runtime_paths
+                    .iter()
+                    .map(|path| (path.as_path(), path.as_path())),
+            );
+        for (destination, source) in destinations {
+            let Ok(relative) = destination.strip_prefix(&self.cwd) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            let prepared = if relative == target {
+                Err("it is the agent target".to_owned())
+            } else {
+                mount_point(workspace, relative, source.is_dir())
+            };
+            prepared.map_err(|reason| {
+                format!(
+                    "prepare the mount point for {} in the agent workspace: {reason}",
+                    destination.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Ensure `workspace/relative` exists as a directory (`directory`) or a
+/// regular file, creating missing components; symlinks and entries of the
+/// other kind are refused.
+fn mount_point(workspace: &Path, relative: &Path, directory: bool) -> Result<(), String> {
+    let mut path = workspace.to_path_buf();
+    let components = relative.components().collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(format!(
+                "`{}` is not a plain relative path",
+                relative.display()
+            ));
+        };
+        path.push(name);
+        let leaf = index + 1 == components.len();
+        let want_directory = !leaf || directory;
+        match fs::symlink_metadata(&path) {
+            Ok(existing) if want_directory && existing.is_dir() => {}
+            Ok(existing) if !want_directory && existing.is_file() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "`{}` already exists as another kind of entry",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if want_directory {
+                    fs::create_dir(&path)
+                } else {
+                    OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map(drop)
+                }
+                .map_err(|error| format!("create `{}`: {error}", path.display()))?;
+            }
+            Err(error) => return Err(format!("inspect `{}`: {error}", path.display())),
+        }
+    }
+    Ok(())
+}
+
+/// `/` and the home directory or its ancestors are never mounted whole.
+fn too_broad(path: &Path, home: &Path) -> bool {
+    path == Path::new("/") || home.starts_with(path)
+}
+
+/// Trees the sandbox already provides read-only.
+fn system_tree(path: &Path) -> bool {
+    [
+        "/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/dev", "/sys",
+    ]
+    .iter()
+    .any(|root| path.starts_with(root))
+}
+
+/// The absolute path a symlink names, resolved lexically against the
+/// directory it lies in (as the kernel resolves it in the sandbox, where the
+/// directories leading to a presented path are plain directories).
+fn link_destination(link: &Path) -> Option<PathBuf> {
+    let named = link.parent()?.join(fs::read_link(link).ok()?);
+    let mut destination = PathBuf::new();
+    for component in named.components() {
+        match component {
+            std::path::Component::RootDir => destination.push("/"),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                destination.pop();
+            }
+            std::path::Component::Normal(name) => destination.push(name),
+            std::path::Component::Prefix(_) => return None,
+        }
+    }
+    destination.is_absolute().then_some(destination)
+}
+
+/// Resolve the caller's setup for `kind` where the CLI itself looks for it,
+/// without copying, selecting or rewriting anything:
+///
+/// - the caller's environment minus [`AGENT_NOT_INHERITED`], with the real
+///   `HOME`, the run's scratch as `TMPDIR` and the working directory as `PWD`;
+/// - the working directory: the canonical caller project root, where the
+///   sandbox presents the isolated workspace, else the workspace itself;
+/// - the configuration root ([`configuration_root`]) shared with the host at
+///   its own path ([`configuration_store`]): reads, login refreshes, lock
+///   files, `rename` temporaries, caches and SQLite companion files act on
+///   the host directory as in a normal run and coordinate with concurrent
+///   host sessions; Cott itself never writes there;
+/// - read-only: targets of top-level links out of the configuration root (at
+///   their own path and, for a chain of links or a link through a linked
+///   directory, also at the path the link names, so the caller's link
+///   resolves; [`link_destination`]),
+///   local paths named by Pi settings, `~/.agents/skills`, `~/.aws`,
+///   `~/.config/gcloud`, Claude Code's `~/.claude.json`, OMP's
+///   `~/.omp/natives`, certificate and credential files named by
+///   [`AGENT_FILE_VARIABLES`], the caller project's [`PROJECT_RESOURCES`]
+///   (with Codex's configured `project_doc_fallback_filenames`), the
+///   [`ANCESTOR_RESOURCES`] of the project's ancestors, its repository root
+///   marker ([`repository_marker`]), and the PATH installations
+///   ([`path_mounts`]). Read-only paths inside the shared configuration root
+///   are already visible there and are not mounted over it.
+fn user_environment(
+    kind: AgentKind,
+    scratch: &Path,
+    workspace: &Path,
+    project: Option<&Path>,
+) -> Result<UserEnvironment, String> {
+    let mut variables = BTreeMap::new();
+    for (name, value) in std::env::vars_os() {
+        let (Ok(name), Ok(value)) = (name.into_string(), value.into_string()) else {
+            continue;
+        };
+        if !AGENT_NOT_INHERITED.contains(&name.as_str()) {
+            variables.insert(name, value);
+        }
+    }
+    let home = std::env::var("HOME")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute() && home.is_dir())
+        .ok_or("agent generation needs HOME to name the caller's home directory")?;
+    let project = project
+        .map(|project| {
+            fs::canonicalize(project)
+                .ok()
+                .filter(|project| project.is_dir())
+                .ok_or_else(|| format!("resolve project {}", project.display()))
+        })
+        .transpose()?;
+    let cwd = project.clone().unwrap_or_else(|| workspace.to_path_buf());
+    variables.insert("HOME".to_owned(), home.display().to_string());
+    variables.insert("TMPDIR".to_owned(), scratch.display().to_string());
+    variables.insert("PWD".to_owned(), cwd.display().to_string());
+    variables.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
+    variables
+        .entry("PATH".to_owned())
+        .or_insert_with(|| "/usr/bin:/bin".to_owned());
+    let mut read_only = Vec::new();
+    let mut mounts = Vec::new();
+    let mut context_files = Vec::new();
+    let mut link_hops = Vec::new();
+    let (variable, default, credentials) = configuration_root(kind);
+    let root = match variables.get(variable).map(String::as_str) {
+        Some("~") => home.clone(),
+        Some(value) if value.starts_with("~/") => home.join(&value[2..]),
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => home.join(default),
+    };
+    if !root.is_absolute() {
+        return Err(format!(
+            "{variable} `{}` must be an absolute path",
+            root.display()
+        ));
+    }
+    if let Some(source) = fs::canonicalize(&root)
+        .ok()
+        .filter(|source| source.is_dir())
+    {
+        configuration_store(&root, &source, credentials, &home, project.as_deref())?;
+        let list_error = |error: std::io::Error| format!("list {}: {error}", root.display());
+        for entry in fs::read_dir(&source).map_err(list_error)? {
+            let entry = entry.map_err(list_error)?;
+            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                if let Ok(target) = fs::canonicalize(entry.path()) {
+                    if !target.starts_with(&source) {
+                        // The link names its first hop, not the final file:
+                        // a chain of links (a dotfile manager's generated
+                        // tree) or a linked directory on the way only
+                        // resolves in the sandbox if that path is presented.
+                        for directory in [&root, &source] {
+                            if let Some(hop) = link_destination(&directory.join(entry.file_name()))
+                            {
+                                if hop != target
+                                    && !link_hops.contains(&(target.clone(), hop.clone()))
+                                {
+                                    link_hops.push((target.clone(), hop));
+                                }
+                            }
+                        }
+                        read_only.push(target);
+                    }
+                }
+            }
+        }
+        match kind {
+            AgentKind::Pi => mounts.extend(pi_settings_paths(
+                &source.join("settings.json"),
+                &source,
+                &home,
+            )),
+            AgentKind::Codex => {
+                context_files = codex_fallback_filenames(&source.join("config.toml"));
+            }
+            AgentKind::Claude | AgentKind::Omp => {}
+        }
+        if source != root {
+            mounts.push(MappedMount::Shared {
+                source: source.clone(),
+                destination: source.clone(),
+            });
+        }
+        mounts.push(MappedMount::Shared {
+            source,
+            destination: root.clone(),
+        });
+    }
+    let mut home_resources = vec![".agents/skills", ".aws", ".config/gcloud"];
+    match kind {
+        AgentKind::Claude if !variables.contains_key("CLAUDE_CONFIG_DIR") => {
+            home_resources.push(".claude.json");
+        }
+        AgentKind::Omp => home_resources.push(".omp/natives"),
+        _ => {}
+    }
+    for relative in home_resources {
+        let logical = home.join(relative);
+        if let Ok(source) = fs::canonicalize(&logical) {
+            mounts.push(MappedMount::ReadOnly {
+                source,
+                destination: logical,
+            });
+        }
+    }
+    for name in AGENT_FILE_VARIABLES {
+        if let Some(path) = variables
+            .get(*name)
+            .map(Path::new)
+            .filter(|path| path.is_absolute())
+        {
+            if let Ok(source) = fs::canonicalize(path) {
+                read_only.push(source);
+            }
+        }
+    }
+    if let Some(project) = &project {
+        mounts.extend(project_resources(project, &context_files, &home));
+        mounts.extend(ancestor_resources(project, &context_files, &home));
+        mounts.extend(repository_marker(project));
+    }
+    mounts.extend(path_mounts(&variables["PATH"], &home));
+    // Present a link's first hop as the final file or directory, unless the
+    // hop lies in a system tree or a tree presented already (there it is the
+    // host's own entry and a bind onto it would follow it).
+    for (source, hop) in link_hops {
+        let presented = mounts
+            .iter()
+            .map(MappedMount::destination)
+            .chain(read_only.iter().map(PathBuf::as_path))
+            .any(|presented| hop.starts_with(presented));
+        if !presented && !system_tree(&hop) {
+            mounts.push(MappedMount::ReadOnly {
+                source,
+                destination: hop,
+            });
+        }
+    }
+    let stores = mounts
+        .iter()
+        .filter(|mount| matches!(mount, MappedMount::Shared { .. }))
+        .map(|mount| mount.destination().to_path_buf())
+        .collect::<Vec<_>>();
+    let in_store = |path: &Path| stores.iter().any(|store| path.starts_with(store));
+    read_only.retain(|path| !too_broad(path, &home) && !in_store(path));
+    mounts.retain(|mount| {
+        !too_broad(mount.destination(), &home)
+            && (matches!(mount, MappedMount::Shared { .. }) || !in_store(mount.destination()))
+    });
+    Ok(UserEnvironment {
+        variables,
+        read_only,
+        mounts,
+        cwd,
+    })
+}
+
+/// Check a CLI configuration directory before it is shared writable with the
+/// host: a directory owned by the caller that is neither `/`, a system tree,
+/// the home directory or one of its ancestors, nor the caller project, one of
+/// its ancestors or inside it (the project's own files are never writable), whose login
+/// stores ([`configuration_root`]) are absent or regular single-link files
+/// owned by the caller directly inside it. A login store must not be a link:
+/// a symlink would send the CLI's writes out of the shared directory, and a
+/// second hard link would let them change another path.
+fn configuration_store(
+    root: &Path,
+    source: &Path,
+    credentials: &[&str],
+    home: &Path,
+    project: Option<&Path>,
+) -> Result<(), String> {
+    // SAFETY: geteuid has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    let metadata =
+        fs::metadata(source).map_err(|error| format!("inspect {}: {error}", root.display()))?;
+    if !metadata.is_dir() || metadata.uid() != euid {
+        return Err(format!(
+            "configuration directory {} must be a directory owned by the caller",
+            root.display()
+        ));
+    }
+    if too_broad(source, home) || system_tree(source) {
+        return Err(format!(
+            "configuration directory {} must not be `/`, a system tree, or the home directory or one of its ancestors: the agent shares it writable",
+            root.display()
+        ));
+    }
+    if project.is_some_and(|project| project.starts_with(source)) {
+        return Err(format!(
+            "configuration directory {} contains the caller project; the project is never writable to an agent",
+            root.display()
+        ));
+    }
+    if project.is_some_and(|project| source.starts_with(project)) {
+        return Err(format!(
+            "configuration directory {} is inside the caller project; the project is never writable to an agent",
+            root.display()
+        ));
+    }
+    for name in credentials {
+        let path = source.join(name);
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("inspect {}: {error}", root.join(name).display())),
+            Ok(metadata)
+                if metadata.file_type().is_file()
+                    && metadata.uid() == euid
+                    && metadata.nlink() == 1 => {}
+            Ok(_) => {
+                return Err(format!(
+                    "credential store {} must be a regular single-link file owned by the caller, not a symlink or hard link",
+                    root.join(name).display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `project_doc_fallback_filenames` of the caller's Codex `config.toml`: the
+/// extra context file names Codex looks for next to `AGENTS.md` from the
+/// repository root down to the working directory. Only plain file names are
+/// kept, as Codex does.
+fn codex_fallback_filenames(config: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(config) else {
+        return Vec::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    table
+        .get("project_doc_fallback_filenames")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .filter(|name| {
+            !name.is_empty() && !matches!(*name, "." | "..") && !name.contains(['/', '\0'])
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Read-only mounts for the caller project's [`PROJECT_RESOURCES`] and
+/// `context_files` at their own paths under the canonical `project` root,
+/// where the sandbox presents the isolated workspace
+/// ([`UserEnvironment::prepare_mount_points`] creates their mount points).
+/// Links are resolved: a resource linking elsewhere is presented with its
+/// target's content.
+fn project_resources(project: &Path, context_files: &[String], home: &Path) -> Vec<MappedMount> {
+    let names = PROJECT_RESOURCES
+        .iter()
+        .copied()
+        .chain(context_files.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut mounts = Vec::new();
+    for name in names {
+        let destination = project.join(name);
+        let Ok(source) = fs::canonicalize(&destination) else {
+            continue;
+        };
+        if too_broad(&source, home) || !(source.is_dir() || source.is_file()) {
+            continue;
+        }
+        if name == ".pi" {
+            mounts.extend(pi_settings_paths(
+                &source.join("settings.json"),
+                &source,
+                home,
+            ));
+        }
+        mounts.push(MappedMount::ReadOnly {
+            source,
+            destination,
+        });
+    }
+    mounts
+}
+
+/// Read-only mounts for the [`ANCESTOR_RESOURCES`] and `context_files` of
+/// every ancestor of the canonical `project` root, at their own paths.
+/// Directories directly in the home directory or in `/` are skipped: the
+/// former are the user-level setup, the latter system state.
+fn ancestor_resources(project: &Path, context_files: &[String], home: &Path) -> Vec<MappedMount> {
+    let names = ANCESTOR_RESOURCES
+        .iter()
+        .copied()
+        .chain(context_files.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut mounts = Vec::new();
+    for ancestor in project.ancestors().skip(1) {
+        for name in &names {
+            let destination = ancestor.join(name);
+            let Ok(metadata) = fs::metadata(&destination) else {
+                continue;
+            };
+            if metadata.is_dir() && (ancestor == home || ancestor == Path::new("/")) {
+                continue;
+            }
+            if !(metadata.is_dir() || metadata.is_file()) {
+                continue;
+            }
+            let Ok(source) = fs::canonicalize(&destination) else {
+                continue;
+            };
+            if too_broad(&source, home) {
+                continue;
+            }
+            mounts.push(MappedMount::ReadOnly {
+                source,
+                destination,
+            });
+        }
+    }
+    mounts
+}
+
+/// The repository root marker of the canonical `project`: the nearest `.git`
+/// at or above the project root, presented read-only with only the metadata
+/// the CLIs read to find the repository root, which bounds their context and
+/// skill discovery and keys Codex project trust. A `.git` directory
+/// contributes its `HEAD`; a `.git` pointer file (worktree, submodule) is
+/// mounted itself with its git directory's `HEAD`, `commondir` and `gitdir`
+/// and the common directory's `HEAD`. Objects, refs, index and config stay
+/// hidden, so the project's history and files remain outside the sandbox and
+/// `git` there finds no repository. Links are not followed.
+fn repository_marker(project: &Path) -> Vec<MappedMount> {
+    fn metadata_file(mounts: &mut Vec<MappedMount>, path: &Path) {
+        if fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAX_GIT_METADATA_BYTES)
+        {
+            mounts.push(MappedMount::ReadOnly {
+                source: path.to_path_buf(),
+                destination: path.to_path_buf(),
+            });
+        }
+    }
+    let mut mounts = Vec::new();
+    let Some((root, metadata)) = project.ancestors().find_map(|ancestor| {
+        fs::symlink_metadata(ancestor.join(".git"))
+            .ok()
+            .map(|metadata| (ancestor, metadata))
+    }) else {
+        return mounts;
+    };
+    let dot_git = root.join(".git");
+    if metadata.is_dir() {
+        metadata_file(&mut mounts, &dot_git.join("HEAD"));
+        return mounts;
+    }
+    metadata_file(&mut mounts, &dot_git);
+    if mounts.is_empty() {
+        return mounts;
+    }
+    let Some(git_dir) = fs::read_to_string(&dot_git)
+        .ok()
+        .and_then(|text| {
+            text.trim()
+                .strip_prefix("gitdir:")
+                .map(|target| root.join(target.trim()))
+        })
+        .and_then(|git_dir| fs::canonicalize(git_dir).ok())
+        .filter(|git_dir| git_dir.is_dir())
+    else {
+        return mounts;
+    };
+    for name in ["HEAD", "commondir", "gitdir"] {
+        metadata_file(&mut mounts, &git_dir.join(name));
+    }
+    if let Some(common) = fs::read_to_string(git_dir.join("commondir"))
+        .ok()
+        .and_then(|text| fs::canonicalize(git_dir.join(text.trim())).ok())
+        .filter(|common| common.is_dir())
+    {
+        metadata_file(&mut mounts, &common.join("HEAD"));
+    }
+    mounts
+}
+
+/// Read-only mounts for local paths a Pi settings file names in `packages`,
+/// `extensions`, `skills`, `prompts` and `themes`: `~/` paths, absolute
+/// paths, and paths relative to the settings directory `base` that leave it.
+/// Package-manager sources (`npm:`, `git:`, URLs) live inside the agent
+/// directory already; patterns that name no existing path are skipped.
+fn pi_settings_paths(settings: &Path, base: &Path, home: &Path) -> Vec<MappedMount> {
+    let Ok(text) = fs::read_to_string(settings) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut mounts = Vec::new();
+    for key in ["packages", "extensions", "skills", "prompts", "themes"] {
+        let Some(entries) = value.get(key).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            let Some(spec) = entry
+                .as_str()
+                .or_else(|| entry.get("source").and_then(serde_json::Value::as_str))
+            else {
+                continue;
+            };
+            let spec = spec.trim_start_matches(['!', '+', '-']);
+            if [
+                "npm:", "git:", "git+", "git@", "http://", "https://", "ssh://",
+            ]
+            .iter()
+            .any(|prefix| spec.starts_with(prefix))
+            {
+                continue;
+            }
+            let logical = match spec.strip_prefix("~/") {
+                Some(rest) => home.join(rest),
+                None if spec == "~" => home.to_path_buf(),
+                None => base.join(spec),
+            };
+            let Ok(source) = fs::canonicalize(&logical) else {
+                continue;
+            };
+            if source.starts_with(base) || too_broad(&source, home) {
+                continue;
+            }
+            let plain = logical.components().all(|component| {
+                matches!(
+                    component,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            });
+            if plain && logical != source {
+                mounts.push(MappedMount::ReadOnly {
+                    source: source.clone(),
+                    destination: logical,
+                });
+            }
+            mounts.push(MappedMount::ReadOnly {
+                source: source.clone(),
+                destination: source,
+            });
+        }
+    }
+    mounts
+}
+
+/// Read-only mounts that keep the caller's PATH usable in the sandbox: each
+/// absolute PATH directory outside the system trees (at its own path), and
+/// for every entry linking out of its directory the installation it belongs
+/// to: `<prefix>` of a `<prefix>/bin/<tool>` target (followed through that
+/// prefix's own `bin`), else the target itself. At most 256 mounts.
+fn path_mounts(path: &str, home: &Path) -> Vec<MappedMount> {
+    const LIMIT: usize = 256;
+    let mut mounts = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut pending = Vec::new();
+    for directory in std::env::split_paths(path) {
+        if !directory.is_absolute() {
+            continue;
+        }
+        let Ok(source) = fs::canonicalize(&directory) else {
+            continue;
+        };
+        if !source.is_dir() || system_tree(&source) || too_broad(&source, home) {
+            continue;
+        }
+        if seen.insert(directory.clone()) {
+            mounts.push(MappedMount::ReadOnly {
+                source: source.clone(),
+                destination: directory,
+            });
+        }
+        pending.push(source);
+    }
+    let mut visited = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        if mounts.len() >= LIMIT || !visited.insert(directory.clone()) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                continue;
+            }
+            let Ok(target) = fs::canonicalize(entry.path()) else {
+                continue;
+            };
+            if target.starts_with(&directory) || system_tree(&target) {
+                continue;
+            }
+            let prefix = target
+                .parent()
+                .filter(|parent| parent.file_name().is_some_and(|name| name == "bin"))
+                .and_then(Path::parent)
+                .filter(|prefix| !system_tree(prefix) && !too_broad(prefix, home))
+                .map(Path::to_path_buf);
+            let source = prefix.clone().unwrap_or(target);
+            if too_broad(&source, home) || mounts.len() >= LIMIT {
+                continue;
+            }
+            if seen.insert(source.clone()) {
+                mounts.push(MappedMount::ReadOnly {
+                    source: source.clone(),
+                    destination: source,
+                });
+            }
+            if let Some(prefix) = prefix {
+                pending.push(prefix.join("bin"));
+            }
+        }
+    }
+    mounts
+}
+
+/// How a sandboxed adapter process is launched.
+#[derive(Clone, Copy)]
+enum Launch<'a> {
+    /// Version and runtime probes: no network, no credentials, no caller
+    /// configuration (Pi additionally runs offline with an empty agent
+    /// directory).
+    Probe(AgentKind),
+    /// Generation: the caller's own CLI setup with the network enabled.
+    Generation(AgentKind, &'a UserEnvironment),
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_process(
     executable: &Path,
-    runtime: Option<&OmpBunRuntime>,
+    runtime: Option<&ScriptRuntime>,
     mut arguments: Vec<String>,
     workspace: &Path,
     scratch: &Path,
     stdin: Vec<u8>,
-    network: bool,
-    credential_kind: Option<AgentKind>,
+    launch: Launch<'_>,
     writable_target: Option<&Path>,
     timeout_seconds: u16,
 ) -> Result<crate::sandbox::CompletedProcess, String> {
     let mut read_only = vec![executable.to_path_buf()];
+    let mut mapped = Vec::new();
     let program = if let Some(runtime) = runtime {
         runtime.verify()?;
         read_only.push(runtime.executable.clone());
@@ -1932,162 +3406,118 @@ fn run_process(
             0,
             executable
                 .to_str()
-                .ok_or("OMP entrypoint path is not UTF-8")?
+                .ok_or("agent script entrypoint path is not UTF-8")?
                 .to_owned(),
         );
         &runtime.executable
     } else {
         executable
     };
-    let mut environment = BTreeMap::from([
-        ("HOME".to_owned(), scratch.display().to_string()),
-        ("TMPDIR".to_owned(), scratch.display().to_string()),
-        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
-        ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
-    ]);
-    for name in [
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "NO_PROXY",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            let value = value
-                .into_string()
-                .map_err(|_| format!("{name} is not valid UTF-8"))?;
-            if matches!(name, "SSL_CERT_FILE" | "SSL_CERT_DIR") {
-                let path = fs::canonicalize(&value)
-                    .map_err(|error| format!("resolve {name} `{value}`: {error}"))?;
-                read_only.push(path);
-            }
-            environment.insert(name.to_owned(), value);
+    let (kind, network) = match launch {
+        Launch::Probe(kind) => (kind, false),
+        Launch::Generation(kind, _) => (kind, true),
+    };
+    let environment = match launch {
+        Launch::Generation(_, user) => {
+            read_only.extend(user.read_only.iter().cloned());
+            mapped.extend(user.mounts.iter().cloned());
+            user.variables.clone()
         }
-    }
-    if let Some(kind) = credential_kind {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        match kind {
-            AgentKind::Codex => {
-                for name in ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
-                    if let Some(value) = std::env::var_os(name) {
-                        environment.insert(
-                            name.to_owned(),
-                            value
-                                .into_string()
-                                .map_err(|_| format!("{name} is not valid UTF-8"))?,
-                        );
-                    }
-                }
-                let credential_root = std::env::var_os("CODEX_HOME")
-                    .map(PathBuf::from)
-                    .or_else(|| home.map(|home| home.join(".codex")));
-                if let Some(root) = credential_root.filter(|root| root.is_dir()) {
-                    let root = fs::canonicalize(root)
-                        .map_err(|error| format!("resolve CODEX_HOME: {error}"))?;
-                    read_only.push(root.clone());
-                    environment.insert("CODEX_HOME".to_owned(), root.display().to_string());
-                }
-            }
-            AgentKind::Omp => {
-                let credential_root = std::env::var_os("PI_CODING_AGENT_DIR")
-                    .map(PathBuf::from)
-                    .or_else(|| home.as_ref().map(|home| home.join(".omp/agent")));
-                if network {
-                    if let Some(root) = credential_root.filter(|root| root.is_dir()) {
-                        let isolated = scratch.join("omp-agent");
-                        fs::create_dir_all(&isolated)
-                            .map_err(|error| format!("create isolated OMP state: {error}"))?;
-                        // `models.db` is the provider model catalog; without it OMP silently
-                        // resolves an explicit `--model` against its stale built-in list.
-                        for name in ["config.yml", "agent.db", "models.db"] {
-                            let source = root.join(name);
-                            if source.is_file() {
-                                fs::copy(&source, isolated.join(name)).map_err(|error| {
-                                    format!("copy isolated OMP state `{name}`: {error}")
-                                })?;
-                            }
-                        }
-                        environment.insert(
-                            "PI_CODING_AGENT_DIR".to_owned(),
-                            isolated.display().to_string(),
-                        );
-                    }
-                    if let Some(home) = home {
-                        let natives = home.join(".omp/natives");
-                        if natives.is_dir() {
-                            read_only.push(
-                                fs::canonicalize(&natives).map_err(|error| {
-                                    format!("resolve OMP native addons: {error}")
-                                })?,
-                            );
-                            environment.insert("HOME".to_owned(), home.display().to_string());
-                        }
-                    }
-                }
-            }
-            AgentKind::Claude => {
-                if let Some(value) = std::env::var_os("ANTHROPIC_API_KEY") {
-                    environment.insert(
-                        "ANTHROPIC_API_KEY".to_owned(),
-                        value
-                            .into_string()
-                            .map_err(|_| "ANTHROPIC_API_KEY is not valid UTF-8")?,
-                    );
-                }
+        Launch::Probe(kind) => {
+            let mut environment = BTreeMap::from([
+                ("HOME".to_owned(), scratch.display().to_string()),
+                ("TMPDIR".to_owned(), scratch.display().to_string()),
+                ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+                ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+            ]);
+            if kind == AgentKind::Pi {
+                let agent_dir = scratch.join("pi-agent");
+                fs::create_dir_all(&agent_dir)
+                    .map_err(|error| format!("create Pi probe agent directory: {error}"))?;
                 environment.insert(
-                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
-                    "1".to_owned(),
+                    "PI_CODING_AGENT_DIR".to_owned(),
+                    agent_dir.display().to_string(),
                 );
-                environment.insert("DISABLE_TELEMETRY".to_owned(), "1".to_owned());
-                environment.insert("DISABLE_ERROR_REPORTING".to_owned(), "1".to_owned());
+                for (name, value) in PI_FIXED_ENVIRONMENT {
+                    environment.insert(name.to_owned(), value.to_owned());
+                }
             }
+            environment
         }
-    }
+    };
     if network {
         if let Ok(resolver) = fs::canonicalize("/etc/resolv.conf") {
             read_only.push(resolver);
         }
     }
-    read_only.push(workspace.to_path_buf());
+    // The working directory: a generation run with a caller project sees the
+    // read-only workspace (and its writable target) at the project root path;
+    // probes and project-less runs see the workspace at its own path.
+    let cwd = match launch {
+        Launch::Generation(_, user) => user.cwd.clone(),
+        Launch::Probe(_) => workspace.to_path_buf(),
+    };
     let mut writable = vec![scratch.to_path_buf()];
-    if let Some(target) = writable_target {
-        writable.push(target.to_path_buf());
+    if cwd == workspace {
+        read_only.push(workspace.to_path_buf());
+        if let Some(target) = writable_target {
+            writable.push(target.to_path_buf());
+        }
+    } else {
+        mapped.push(MappedMount::ReadOnly {
+            source: workspace.to_path_buf(),
+            destination: cwd.clone(),
+        });
+        if let Some(target) = writable_target {
+            let relative = target
+                .strip_prefix(workspace)
+                .map_err(|_| "agent target escaped workspace")?;
+            mapped.push(MappedMount::Writable {
+                source: target.to_path_buf(),
+                destination: cwd.join(relative),
+            });
+        }
     }
-    let address_space_bytes = if credential_kind == Some(AgentKind::Omp) {
+    // JavaScript runtimes reserve large virtual address ranges.
+    let javascript_runtime = matches!(kind, AgentKind::Omp | AgentKind::Pi);
+    let address_space_bytes = if javascript_runtime {
         128 * 1024 * 1024 * 1024
     } else {
         4 * 1024 * 1024 * 1024
     };
-    let writable_bytes = if credential_kind == Some(AgentKind::Omp) {
+    let writable_bytes = if javascript_runtime {
         512 * 1024 * 1024
     } else {
         64 * 1024 * 1024
     };
-    run(&SandboxSpec {
-        program: program.to_path_buf(),
-        arguments,
-        cwd: workspace.to_path_buf(),
-        environment,
-        stdin,
-        binds: BindMounts {
-            read_only,
-            writable,
+    run_with_mounts(
+        &SandboxSpec {
+            program: program.to_path_buf(),
+            arguments,
+            cwd,
+            environment,
+            stdin,
+            binds: BindMounts {
+                read_only,
+                writable,
+            },
+            network: if network {
+                NetworkAccess::Enabled
+            } else {
+                NetworkAccess::Disabled
+            },
+            limits: ResourceLimits {
+                cpu_time: Duration::from_secs(timeout_seconds.into()),
+                address_space_bytes,
+                process_count: 64,
+                open_files: 256,
+                file_size_bytes: writable_bytes,
+                wall_time: Duration::from_secs(timeout_seconds.into()),
+                stream_limit_bytes: 16 * 1024 * 1024,
+                writable_bytes,
+            },
         },
-        network: if network {
-            NetworkAccess::Enabled
-        } else {
-            NetworkAccess::Disabled
-        },
-        limits: ResourceLimits {
-            cpu_time: Duration::from_secs(timeout_seconds.into()),
-            address_space_bytes,
-            process_count: 64,
-            open_files: 256,
-            file_size_bytes: writable_bytes,
-            wall_time: Duration::from_secs(timeout_seconds.into()),
-            stream_limit_bytes: 16 * 1024 * 1024,
-            writable_bytes,
-        },
-    })
+        &mapped,
+    )
     .map_err(|error| error.to_string())
 }

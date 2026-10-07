@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "support/mock_pi.rs"]
+mod mock_pi;
+#[path = "support/project_cwd.rs"]
+mod project_cwd;
 #[path = "support/snapshot.rs"]
 mod snapshot;
 
@@ -1392,7 +1396,7 @@ fn generate_requires_an_agent_only_for_unresolved_callables() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("requires `--agent codex|claude|omp`")
+        String::from_utf8_lossy(&output.stderr).contains("requires `--agent codex|claude|omp|pi`")
     );
 }
 
@@ -1508,6 +1512,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -1521,6 +1529,111 @@ esac
         "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n"
     );
     assert!(project.path.join("generated/python/app.py").is_file());
+}
+
+#[test]
+fn generate_promotes_a_mock_pi_function_candidate_with_pi_provenance() {
+    // MOCK Pi installation (tests/support/mock_pi.rs); not a provider run.
+    // No `--model`: the mock resolves the caller's default model from the
+    // fake home's Pi settings, like Pi, and reads the project's AGENTS.md
+    // through the workspace.
+    let project = project();
+    make_unresolved(&project);
+    fs::write(project.path.join("AGENTS.md"), "project rules for agents").expect("project context");
+    // The caller's home lies outside the project: a CLI configuration
+    // directory inside the project is refused (it is shared writable).
+    let outside = TempDir::new();
+    let home = outside.path.join("home");
+    fs::create_dir_all(home.join(".pi/agent")).expect("fake Pi agent directory");
+    fs::write(
+        home.join(".pi/agent/settings.json"),
+        r#"{"defaultProvider":"cliproxyapi","defaultModel":"gpt-6.1-sol"}"#,
+    )
+    .expect("default model settings");
+    let mock = mock_pi::install(
+        &project.path.join("pi-root"),
+        "1.0.4",
+        "v22.19.0",
+        serde_json::json!({
+            "scenario": "success",
+            "candidate_python": "'from cott_runtime import I32\\n\\n\\n# ' + project_context + '\\ndef run() -> I32:\\n    return 7\\n'",
+        }),
+    );
+    let prompt = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert!(
+        prompt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prompt.stderr)
+    );
+    let prompt: serde_json::Value = serde_json::from_slice(&prompt.stdout).expect("prompt JSON");
+    let path = std::env::join_paths([mock.bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .env_clear()
+        .args([
+            "generate",
+            "--agent",
+            "pi",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", &path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("HOME", &home)
+        .env("OPENAI_API_KEY", "mock-openai-key")
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("pi answered with `cliproxyapi/gpt-6.1-sol`"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("durable candidate"),
+        "from cott_runtime import I32\n\n\n# project rules for agents\ndef run() -> I32:\n    return 7\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("AGENTS.md")).expect("project context"),
+        "project rules for agents"
+    );
+    let record: serde_json::Value = snapshot::read(
+        &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
+    );
+    let agent_run = &record["current"]["agent_runs"][0];
+    assert_eq!(agent_run["symbol"], "app.run");
+    assert_eq!(agent_run["adapter"], "pi");
+    assert_eq!(agent_run["adapter_version"], "1.0.4");
+    assert_eq!(agent_run["executable"], mock.cli.display().to_string());
+    assert_eq!(agent_run["prompt_hash"], prompt["prompt_hash"]);
+    assert_eq!(
+        agent_run["argv_template"],
+        serde_json::json!(cott::agent::PI.argv_template)
+    );
+    assert_eq!(
+        agent_run["environment_names"],
+        serde_json::json!(["HOME", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE", "TMPDIR"])
+    );
+    assert_eq!(agent_run["status"]["exit_code"], 0);
+    let record_bytes = fs::read(project.path.join("generated/generation.json")).expect("record");
+    for secret in [b"mock-openai-key".as_slice(), b"OPENAI_API_KEY".as_slice()] {
+        assert!(
+            !record_bytes
+                .windows(secret.len())
+                .any(|window| window == secret)
+        );
+    }
 }
 
 #[test]
@@ -1539,14 +1652,14 @@ if [ "$1" = "--version" ]; then
   printf '%s\n' '2.1.89'
   exit 0
 fi
-expected='--model anthropic/claude-opus-5-5 --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence'
+expected='--model anthropic/claude-opus-5-5 --print --input-format text --output-format json --no-session-persistence'
 [ "$*" = "$expected" ] || { printf '%s\n' "unexpected Claude argv: $*" >&2; exit 64; }
 [ "${ANTHROPIC_API_KEY-}" = 'test-api-key' ] || { printf '%s\n' 'missing API key' >&2; exit 64; }
-[ "${ANTHROPIC_AUTH_TOKEN+x}" = x ] && { printf '%s\n' 'forwarded auth token' >&2; exit 64; }
-[ "${ANTHROPIC_BASE_URL+x}" = x ] && { printf '%s\n' 'forwarded base URL' >&2; exit 64; }
-[ "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC-}" = 1 ] || exit 64
-[ "${DISABLE_TELEMETRY-}" = 1 ] || exit 64
-[ "${DISABLE_ERROR_REPORTING-}" = 1 ] || exit 64
+[ "${ANTHROPIC_AUTH_TOKEN-}" = 'caller-auth-token' ] || { printf '%s\n' 'caller auth token not inherited' >&2; exit 64; }
+[ "${ANTHROPIC_BASE_URL-}" = 'https://gateway.example' ] || { printf '%s\n' 'caller base URL not inherited' >&2; exit 64; }
+[ "$(cat "$HOME/.claude/settings.json")" = '{"model":"opus"}' ] || { printf '%s\n' 'caller settings not visible' >&2; exit 64; }
+[ "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC+x}" = x ] && exit 64
+[ "${DISABLE_TELEMETRY+x}" = x ] && exit 64
 prompt=$(cat) || exit 64
 case "$prompt" in
   *'Symbol: app.run'*) ;;
@@ -1558,7 +1671,7 @@ printf '%s' 'from cott_runtime import I32
 def run() -> I32:
     return 7
 ' > implementation.py
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","modelUsage":{"claude-opus-5-5":{}}}'
 "#,
     )
     .expect("write fake Claude");
@@ -1570,6 +1683,13 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
     }
     let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
         .expect("PATH");
+    // The caller's home lies outside the project: a CLI configuration
+    // directory inside the project is refused (it is shared writable).
+    let outside = TempDir::new();
+    let home = outside.path.join("home");
+    fs::create_dir_all(home.join(".claude")).expect("fake Claude configuration");
+    fs::write(home.join(".claude/settings.json"), r#"{"model":"opus"}"#)
+        .expect("caller Claude settings");
     let output = Command::new(env!("CARGO_BIN_EXE_cott"))
         .env_clear()
         .args([
@@ -1584,9 +1704,14 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("HOME", &home)
         .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_AUTH_TOKEN", "must-not-forward")
-        .env("ANTHROPIC_BASE_URL", "https://must-not-forward.example")
+        .env("ANTHROPIC_AUTH_TOKEN", "caller-auth-token")
+        .env("ANTHROPIC_BASE_URL", "https://gateway.example")
         .output()
         .expect("cott should run");
     assert!(
@@ -1611,35 +1736,20 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         serde_json::json!([
             "--model",
             "anthropic/claude-opus-5-5",
-            "--bare",
             "--print",
             "--input-format",
             "text",
             "--output-format",
             "json",
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            "Read,Write",
-            "--allowedTools",
-            "Read,Write",
-            "--disallowedTools",
-            "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*",
             "--no-session-persistence"
         ])
     );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("claude answered with `claude-opus-5-5`")
+    );
     assert_eq!(
         run["environment_names"],
-        serde_json::json!([
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-            "DISABLE_ERROR_REPORTING",
-            "DISABLE_TELEMETRY",
-            "HOME",
-            "PATH",
-            "PYTHONDONTWRITEBYTECODE",
-            "TMPDIR"
-        ])
+        serde_json::json!(["HOME", "PATH", "PWD", "PYTHONDONTWRITEBYTECODE", "TMPDIR"])
     );
     for field in ["executable_hash", "prompt_hash", "implementation_hash"] {
         assert!(
@@ -1703,6 +1813,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -1757,6 +1871,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -1846,6 +1964,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -1905,6 +2027,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -2048,6 +2174,10 @@ printf '%s\n' 'class ReaderState:' '    def read(self, amount: int) -> int:' '  
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert_eq!(output.status.code(), Some(5));
@@ -2330,6 +2460,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", &path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("partial generate should run");
     assert_eq!(partial.status.code(), Some(5));
@@ -2382,6 +2516,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", &path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("unscoped generate should run");
     assert!(
@@ -2630,6 +2768,10 @@ esac
         ])
         .arg(&project.path)
         .env("PATH", &path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("selected verified implementation should regenerate");
     assert!(
@@ -2880,6 +3022,10 @@ fn generate_promotes_a_sandboxed_codex_candidate_with_artifacts() {
         ])
         .arg(&project.path)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -2943,6 +3089,10 @@ esac
         .args(["init"])
         .arg(&target)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott should run");
     assert!(
@@ -3279,6 +3429,10 @@ fn generate_with_omp(root: &Path, tools: &Path, extra: &[&str]) -> Output {
         .args(["--agent", "omp", "--target", "python", "--project"])
         .arg(root)
         .env("PATH", path)
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott generate should run")
 }
@@ -4387,6 +4541,10 @@ fn prompt_works_without_python_checker_or_agent_and_leaves_state() {
         .args(["prompt", "app.run", "--project"])
         .arg(&project.path)
         .env("PATH", "/usr/bin:/bin")
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott prompt should run");
     assert!(
@@ -4401,6 +4559,10 @@ fn prompt_works_without_python_checker_or_agent_and_leaves_state() {
         .arg(&project.path)
         .args(["app.run", "--format", "json"])
         .env("PATH", "/usr/bin:/bin")
+        .env("HOME", agent_home())
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .output()
         .expect("cott prompt json should run");
     assert!(
@@ -4883,4 +5045,40 @@ fn prompt_json_reports_unavailable_current_directory() {
             .contains("failed to determine current directory")
     );
     assert!(report.get("prompt").is_none());
+}
+
+/// An empty caller home for agent runs: adapters read the caller's own
+/// configuration under HOME, and tests must never read the developer's.
+fn agent_home() -> PathBuf {
+    let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-agent-home");
+    fs::create_dir_all(&home).expect("test agent home");
+    home
+}
+
+/// `cott generate --project <dir>` from another directory: the agent works at
+/// the selected project's real path with the selected project's context and
+/// the caller's own CLI configuration; the invocation directory's context,
+/// configuration and manifest are neither used nor visible.
+#[test]
+fn generate_runs_the_agent_in_the_selected_project_not_the_invocation_directory() {
+    let project = project();
+    make_unresolved(&project);
+    let outside = TempDir::new();
+    let setup = project_cwd::install(&outside.path, &project.path, "implementation.py", BINDING);
+    let output = setup.run(&["generate", "--agent", "omp", "--target", "python"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains(project_cwd::FAILED), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("durable candidate"),
+        BINDING
+    );
+    let record: serde_json::Value = snapshot::read(
+        &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
+    );
+    let run = &record["current"]["agent_runs"][0];
+    assert_eq!(run["adapter"], "omp");
+    assert_eq!(run["status"]["exit_code"], 0);
+    setup.assert_untouched();
 }

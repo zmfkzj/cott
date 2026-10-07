@@ -6,8 +6,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cott::sandbox::{
-    BindMounts, NetworkAccess, OutputStream, ResourceLimits, SandboxError, SandboxOutcome,
-    SandboxSpec, run,
+    BindMounts, MappedMount, NetworkAccess, OutputStream, ResourceLimits, SandboxError,
+    SandboxOutcome, SandboxSpec, run, run_with_mounts,
 };
 
 const PYTHON3: &str = "/usr/bin/python3";
@@ -652,5 +652,73 @@ fn disabled_network_has_no_external_route() {
         Err(SandboxError::Unavailable(_)) => {}
         Ok(completed) => assert_eq!(completed.status, Some(0), "{completed:?}"),
         other => panic!("disabled network must not retain a host route: {other:?}"),
+    }
+}
+
+#[test]
+fn ephemeral_overlay_discards_writes_while_a_nested_writable_bind_persists() {
+    let cwd = scratch();
+    let host = scratch();
+    let state = host.join("state");
+    fs::create_dir_all(state.join("nested")).expect("overlay source");
+    fs::write(state.join("settings.json"), "host settings").expect("settings");
+    fs::write(state.join("auth.json"), "host auth").expect("auth");
+    // The overlay is presented at a different path than its host source.
+    let presented = host.join("presented/agent");
+    let script = format!(
+        "set -eu\n\
+         [ \"$(cat {p}/settings.json)\" = 'host settings' ]\n\
+         printf changed > {p}/settings.json\n\
+         mkdir {p}/auth.json.lock\n\
+         printf new > {p}/nested/new-file\n\
+         printf refreshed > {p}/auth.json\n\
+         [ \"$(cat {p}/settings.json)\" = changed ]\n\
+         if (printf x > {s}/direct) 2>/dev/null; then exit 9; fi\n",
+        p = presented.display(),
+        s = state.display(),
+    );
+    let spec = sandbox(
+        "/bin/sh",
+        &["-c", &script],
+        cwd.clone(),
+        NetworkAccess::Disabled,
+        limits(Duration::from_secs(10), 4096),
+    );
+    let result = run_with_mounts(
+        &spec,
+        &[
+            MappedMount::Writable {
+                source: state.join("auth.json"),
+                destination: presented.join("auth.json"),
+            },
+            MappedMount::EphemeralOverlay {
+                source: state.clone(),
+                destination: presented.clone(),
+            },
+        ],
+    );
+    let settings = fs::read_to_string(state.join("settings.json")).expect("host settings");
+    let auth = fs::read_to_string(state.join("auth.json")).expect("host auth");
+    let leaked = [
+        state.join("auth.json.lock"),
+        state.join("nested/new-file"),
+        state.join("direct"),
+        presented.clone(),
+    ]
+    .iter()
+    .any(|path| path.exists());
+    fs::remove_dir_all(&cwd).expect("remove scratch");
+    fs::remove_dir_all(&host).expect("remove host state");
+    match result {
+        Err(SandboxError::Unavailable(reason)) => {
+            eprintln!("skipping overlay test: {reason}");
+        }
+        result => {
+            let completed = result.expect("overlay sandbox");
+            assert_eq!(completed.status, Some(0), "{completed:?}");
+            assert_eq!(settings, "host settings");
+            assert_eq!(auth, "refreshed");
+            assert!(!leaked, "overlay writes must stay in the sandbox");
+        }
     }
 }

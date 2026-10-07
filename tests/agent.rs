@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cott::agent::{
-    AgentKind, CLAUDE, CODEX, OMP, ShadowFacet, adapter, has_normative_modal, parse_domain_rules,
-    render_prompt, scan_doc_candidates, sentence_has_facet, valid_model,
+    AGENT_NOT_INHERITED, AgentKind, CLAUDE, CODEX, OMP, PI, PI_MINIMUM_NODE_VERSION,
+    PI_UNSUPPORTED_MAJOR, PROJECT_RESOURCES, PiStreamSummary, ShadowFacet, adapter,
+    has_normative_modal, parse_domain_rules, pi_max_prompt_bytes, render_prompt,
+    scan_doc_candidates, sentence_has_facet, valid_model, validate_pi_json_stream,
 };
 use cott::binding::{BindingOwner, ResolvedBinding};
 use cott::compiler::{SourceFile, parse_project};
@@ -25,13 +27,8 @@ fn adapter_contracts_have_minimum_versions_and_exact_argv() {
         CODEX.argv_template,
         &[
             "exec",
-            "--strict-config",
             "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
             "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
             "--color",
             "never",
             "--cd",
@@ -46,23 +43,28 @@ fn adapter_contracts_have_minimum_versions_and_exact_argv() {
     assert_eq!(
         CLAUDE.argv_template,
         &[
-            "--bare",
             "--print",
             "--input-format",
             "text",
             "--output-format",
             "json",
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            "Read,Write",
-            "--allowedTools",
-            "Read,Write",
-            "--disallowedTools",
-            "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*",
             "--no-session-persistence",
         ]
     );
+    // The caller's Claude Code settings, login, hooks, plugins, MCP servers
+    // and tools apply: no minimal mode and no tool restriction.
+    for removed in [
+        "--bare",
+        "--tools",
+        "--allowedTools",
+        "--disallowedTools",
+        "dontAsk",
+        // The caller's own permission mode and rules apply.
+        "--permission-mode",
+        "--dangerously-skip-permissions",
+    ] {
+        assert!(!CLAUDE.argv_template.contains(&removed), "{removed}");
+    }
     assert!(CLAUDE.prompt_on_stdin);
     assert_eq!(OMP.executable_name, "omp");
     assert_eq!(OMP.minimum_version, "17.2.12");
@@ -74,23 +76,37 @@ fn adapter_contracts_have_minimum_versions_and_exact_argv() {
             "--cwd",
             "<workspace>",
             "--no-session",
-            "--no-rules",
-            "--no-skills",
-            "--no-extensions",
-            "--no-lsp",
             "--no-pty",
             "--no-title",
-            "--tools",
-            "read,grep,glob,edit,write",
-            "--approval-mode",
-            "yolo",
             "--max-time",
             "<seconds>s",
-            "--config",
-            "<overlay>",
             "@<prompt-file>",
         ]
     );
+    for removed in [
+        "--no-rules",
+        "--no-skills",
+        "--no-extensions",
+        "--no-lsp",
+        "--tools",
+        "--config",
+        // The caller's own tool approval policy applies.
+        "--approval-mode",
+        "--auto-approve",
+    ] {
+        assert!(!OMP.argv_template.contains(&removed), "{removed}");
+    }
+    for removed in [
+        "--strict-config",
+        "--ignore-user-config",
+        "--ignore-rules",
+        // The caller's own sandbox and approval policy apply.
+        "--sandbox",
+        "--full-auto",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ] {
+        assert!(!CODEX.argv_template.contains(&removed), "{removed}");
+    }
     assert!(!OMP.prompt_on_stdin);
 }
 
@@ -1458,4 +1474,379 @@ fn valid_model_accepts_ordinary_names_and_rejects_malformed_ones() {
     ] {
         assert!(!valid_model(model), "{model:?} should be rejected");
     }
+}
+
+#[test]
+fn pi_adapter_contract_is_an_independent_json_mode_cli() {
+    assert_eq!(adapter(AgentKind::Pi), &PI);
+    assert_eq!(PI.executable_name, "pi");
+    assert_eq!(PI.minimum_version, "1.0.4");
+    assert_eq!(PI_UNSUPPORTED_MAJOR, 2);
+    assert_eq!(PI_MINIMUM_NODE_VERSION, "22.19.0");
+    assert_eq!(PI.version_argv, &["--version"]);
+    assert_eq!(
+        PI.argv_template,
+        &["--mode", "json", "--no-session", "--", "<prompt>"]
+    );
+    assert!(!PI.prompt_on_stdin);
+    // One argv element carries at most MAX_ARG_STRLEN - 1 bytes (32 pages).
+    let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).expect("page size");
+    assert_eq!(pi_max_prompt_bytes(), 32 * page - 1);
+    assert_ne!(adapter(AgentKind::Pi), adapter(AgentKind::Omp));
+}
+
+#[test]
+fn agents_inherit_the_caller_environment_except_cott_and_parent_session_markers() {
+    // Configuration and credential variables are inherited unchanged; only
+    // the variables cott sets and markers of a parent agent session are not.
+    assert_eq!(
+        AGENT_NOT_INHERITED,
+        [
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CODEX_SANDBOX",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "HOME",
+            "OLDPWD",
+            "PI_MODEL",
+            "PI_PROVIDER",
+            "PI_REASONING_LEVEL",
+            "PI_SESSION_FILE",
+            "PI_SESSION_ID",
+            "PWD",
+            "SHLVL",
+            "TMPDIR",
+            "_",
+        ]
+    );
+    for configuration in [
+        "PI_CODING_AGENT_DIR",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CLIPROXYAPI_API_KEY",
+        "PATH",
+        "HTTPS_PROXY",
+    ] {
+        assert!(
+            !AGENT_NOT_INHERITED.contains(&configuration),
+            "{configuration}"
+        );
+    }
+    assert_eq!(
+        PROJECT_RESOURCES,
+        [
+            ".agent",
+            ".agents",
+            ".claude",
+            ".clinerules",
+            ".codex",
+            ".cursor",
+            ".cursorrules",
+            ".gemini",
+            ".github/copilot-instructions.md",
+            ".github/instructions",
+            ".mcp.json",
+            ".omp",
+            ".opencode",
+            ".pi",
+            ".vscode/mcp.json",
+            ".windsurf",
+            ".windsurfrules",
+            "AGENTS.MD",
+            "AGENTS.md",
+            "AGENTS.override.md",
+            "CLAUDE.MD",
+            "CLAUDE.local.md",
+            "CLAUDE.md",
+            "mcp.json",
+            "opencode.json",
+            "opencode.jsonc",
+        ]
+    );
+}
+
+// Real Pi 1.0.4 `--mode json` stdout captured from the installed CLI against a
+// local mock OpenAI-compatible endpoint (no real provider, no credential);
+// absolute paths were replaced with `/workspace` and `/pi`.
+const REAL_PI_SUCCESS: &str = include_str!("fixtures/pi/real-1.0.4-success.jsonl");
+const REAL_PI_PROVIDER_ERROR: &str = include_str!("fixtures/pi/real-1.0.4-provider-error.jsonl");
+const REAL_PI_PROMPT: &str = include_str!("fixtures/pi/real-1.0.4-prompt.txt");
+fn validate_real(stream: &str) -> Result<PiStreamSummary, String> {
+    validate_pi_json_stream(
+        stream.as_bytes(),
+        &[Path::new("/workspace")],
+        REAL_PI_PROMPT,
+    )
+}
+
+#[test]
+fn pi_stream_reports_the_models_that_answered_without_a_requested_provider() {
+    let probe = "cott-probe/probe-model".to_owned();
+    assert_eq!(
+        validate_real(REAL_PI_SUCCESS).expect("real Pi success transcript"),
+        PiStreamSummary {
+            models: vec![probe.clone()],
+            final_model: probe.clone(),
+        }
+    );
+    // The caller's default model, a pattern or an extension provider decide
+    // the attribution; it is reported, never compared with a request.
+    let routed = edit_stream(REAL_PI_SUCCESS, |records| {
+        let at = position(records, "message_end");
+        records[at]["message"]["provider"] = serde_json::json!("cliproxyapi");
+        records[at]["message"]["model"] = serde_json::json!("gpt-6.1-sol");
+    });
+    let summary = validate_real(&routed).expect("extension provider answer");
+    assert_eq!(summary.final_model, "cliproxyapi/gpt-6.1-sol");
+    assert_eq!(
+        summary.models,
+        [probe, "cliproxyapi/gpt-6.1-sol".to_owned()]
+    );
+}
+
+#[test]
+fn pi_stream_accepts_user_tools_and_extension_follow_up_messages() {
+    let user_tool = edit_stream(REAL_PI_SUCCESS, |records| {
+        let at = position(records, "turn_end");
+        records.insert(
+            at,
+            serde_json::json!({"type": "tool_execution_end", "toolCallId": "x", "toolName": "codegraph_search", "result": {}, "isError": false}),
+        );
+        records.insert(
+            at,
+            serde_json::json!({"type": "tool_execution_start", "toolCallId": "x", "toolName": "codegraph_search", "args": {}}),
+        );
+    });
+    validate_real(&user_tool).expect("tools of the caller's setup are not restricted");
+    let bash = edit_stream(REAL_PI_SUCCESS, |records| {
+        let at = position(records, "turn_end");
+        records.insert(
+            at,
+            serde_json::json!({"type": "tool_execution_end", "toolCallId": "y", "toolName": "bash", "result": {}, "isError": false}),
+        );
+    });
+    validate_real(&bash).expect("executed bash is the caller's own tool choice");
+    let follow_up = edit_stream(REAL_PI_SUCCESS, |records| {
+        let at = position(records, "turn_end");
+        records.insert(
+            at,
+            serde_json::json!({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "extension follow-up"}]}}),
+        );
+    });
+    validate_real(&follow_up).expect("a later user message comes from an extension");
+}
+
+fn edit_stream(stream: &str, edit: impl FnOnce(&mut Vec<serde_json::Value>)) -> String {
+    let mut records = stream
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("fixture record"))
+        .collect::<Vec<serde_json::Value>>();
+    edit(&mut records);
+    records.iter().map(|record| format!("{record}\n")).collect()
+}
+
+fn position(records: &[serde_json::Value], kind: &str) -> usize {
+    records
+        .iter()
+        .rposition(|record| record["type"] == kind)
+        .unwrap_or_else(|| panic!("fixture lacks {kind}"))
+}
+
+#[test]
+fn pi_stream_accepts_real_multi_turn_tool_use_and_exact_prompt() {
+    assert_eq!(
+        REAL_PI_PROMPT,
+        "  \n\tLeading/trailing whitespace, 'single' \"double\" `tick` $(touch x) \\ 한글 ✓ — write implementation.py\n\n  "
+    );
+    validate_real(REAL_PI_SUCCESS).expect("real Pi success transcript");
+    validate_real(&REAL_PI_SUCCESS.replace('\n', "\r\n")).expect("CRLF framing is documented");
+    validate_real(&edit_stream(REAL_PI_SUCCESS, |_| {})).expect("re-serialized transcript");
+    let refused_tool = edit_stream(REAL_PI_SUCCESS, |records| {
+        let at = position(records, "turn_end");
+        records.insert(
+            at,
+            serde_json::json!({"type": "tool_execution_end", "toolCallId": "x", "toolName": "bash", "result": {}, "isError": true}),
+        );
+    });
+    validate_real(&refused_tool).expect("a refused unknown tool was not executed");
+}
+
+#[test]
+fn pi_stream_rejects_real_exit_zero_provider_error() {
+    let error = validate_real(REAL_PI_PROVIDER_ERROR).expect_err("real Pi provider error");
+    assert!(
+        error
+            .contains("final assistant message from `cott-probe/probe-model` stopped with `error`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn pi_stream_rejects_contaminated_incomplete_conflicting_and_mismatched_records() {
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("empty", String::new(), "complete JSONL record"),
+        (
+            "unterminated",
+            REAL_PI_SUCCESS.trim_end().to_owned(),
+            "complete JSONL record",
+        ),
+        (
+            "prefix",
+            format!("Warning: noise\n{REAL_PI_SUCCESS}"),
+            "line 1 is not a JSON object",
+        ),
+        (
+            "blank",
+            REAL_PI_SUCCESS.replacen('\n', "\n\n", 1),
+            "line 2 is not a JSON object",
+        ),
+        (
+            "array",
+            format!("[]\n{REAL_PI_SUCCESS}"),
+            "line 1 is not a JSON object",
+        ),
+        (
+            "untyped",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.insert(1, serde_json::json!({"kind": "x"}))
+            }),
+            "line 2 has no string `type`",
+        ),
+        (
+            "unsettled",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.pop();
+            }),
+            "does not end with `agent_settled`",
+        ),
+        (
+            "early-settled",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.insert(2, serde_json::json!({"type": "agent_settled"}))
+            }),
+            "settles before the stream ends",
+        ),
+        (
+            "second-header",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let header = records[0].clone();
+                records.insert(1, header);
+            }),
+            "repeats the session header",
+        ),
+        (
+            "header-version",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records[0]["version"] = serde_json::json!(2)
+            }),
+            "version 3 session header",
+        ),
+        (
+            "header-cwd",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records[0]["cwd"] = serde_json::json!("/elsewhere")
+            }),
+            "session header cwd is not the isolated workspace",
+        ),
+        (
+            "no-agent-end",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "agent_end");
+                records.remove(at);
+            }),
+            "unbalanced",
+        ),
+        (
+            "retrying",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "agent_end");
+                records[at]["willRetry"] = serde_json::json!(true);
+            }),
+            "still schedules a retry",
+        ),
+        (
+            "aborted",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "message_end");
+                records[at]["message"]["stopReason"] = serde_json::json!("aborted");
+            }),
+            "stopped with `aborted`",
+        ),
+        (
+            "unknown-stop",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "message_end");
+                records[at]["message"]["stopReason"] = serde_json::json!("done");
+            }),
+            "no valid `stopReason`",
+        ),
+        (
+            "unattributed",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "message_end");
+                records[at]["message"]["provider"] = serde_json::json!("");
+            }),
+            "assistant message has no `provider`",
+        ),
+        (
+            "altered-prompt",
+            REAL_PI_SUCCESS.replace("Leading/trailing", "Leading trailing"),
+            "user message differs from the exact prompt",
+        ),
+        (
+            "no-user",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.retain(|record| record["message"]["role"] != "user");
+            }),
+            "no user message carries the prompt",
+        ),
+        (
+            "unknown-event",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.insert(2, serde_json::json!({"type": "extension_error"}))
+            }),
+            "unsupported event `extension_error`",
+        ),
+        (
+            "bash-output",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.insert(2, serde_json::json!({"type": "bash_execution_update"}))
+            }),
+            "unsupported event `bash_execution_update`",
+        ),
+        (
+            "unnamed-tool",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                let at = position(records, "turn_end");
+                records.insert(
+                    at,
+                    serde_json::json!({"type": "tool_execution_start", "toolCallId": "x"}),
+                );
+            }),
+            "tool event lacks `toolName`",
+        ),
+        (
+            "failed-retry",
+            edit_stream(REAL_PI_SUCCESS, |records| {
+                records.insert(
+                    2,
+                    serde_json::json!({"type": "auto_retry_end", "success": false, "attempt": 3}),
+                );
+            }),
+            "failed automatic retry",
+        ),
+    ];
+    for (case, stream, expected) in cases {
+        let error = validate_real(&stream).expect_err(case);
+        assert!(error.contains(expected), "{case}: {error}");
+    }
+    let error = validate_pi_json_stream(
+        REAL_PI_SUCCESS.as_bytes(),
+        &[Path::new("/workspace")],
+        REAL_PI_PROMPT.trim(),
+    )
+    .expect_err("trimmed prompt");
+    assert!(error.contains("differs from the exact prompt"), "{error}");
 }

@@ -411,7 +411,79 @@ fn rejects_duplicate_or_invalid_options() {
     }
     assert_eq!(
         parse_command(&["generate", "--agent", "unknown"].map(OsString::from)),
-        Err("`--agent` requires `codex`, `claude`, or `omp`")
+        Err("`--agent` requires `codex`, `claude`, `omp`, or `pi`")
+    );
+}
+
+#[test]
+fn parses_pi_agent_with_or_without_a_model_in_pis_own_syntax() {
+    assert_eq!(
+        parse(&[
+            "generate",
+            "--target",
+            "dart",
+            "--agent",
+            "pi",
+            "--model",
+            "openai/gpt-5.1",
+        ]),
+        Command::Generate {
+            symbol: None,
+            target: TargetLanguage::Dart,
+            agent: Some(AgentKind::Pi),
+            model: Some("openai/gpt-5.1".to_owned()),
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        },
+    );
+    // Without `--model`, Pi resolves the caller's configured default model.
+    assert_eq!(
+        parse(&["generate", "--target", "rust", "--agent", "pi"]),
+        Command::Generate {
+            symbol: None,
+            target: TargetLanguage::Rust,
+            agent: Some(AgentKind::Pi),
+            model: None,
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        },
+    );
+    // Extension providers, model patterns and thinking suffixes reach Pi
+    // verbatim; cott does not reinterpret Pi's model syntax.
+    for model in [
+        "gpt-5.1",
+        "cliproxyapi/gpt-6.1-sol",
+        "OpenAI/gpt-5.1",
+        "openai/gpt-5.1:high",
+        "sonnet",
+    ] {
+        assert_eq!(
+            parse(&[
+                "generate", "--target", "kotlin", "--agent", "pi", "--model", model,
+            ]),
+            Command::Generate {
+                symbol: None,
+                target: TargetLanguage::Kotlin,
+                agent: Some(AgentKind::Pi),
+                model: Some(model.to_owned()),
+                jobs: 1,
+                project: None,
+                format: OutputFormat::Human,
+            },
+            "{model}"
+        );
+    }
+    // The generic flag-safety rule still applies to every agent.
+    assert!(
+        parse_command(
+            &[
+                "generate", "--target", "rust", "--agent", "pi", "--model", "-x"
+            ]
+            .map(OsString::from)
+        )
+        .is_err()
     );
 }
 

@@ -13,7 +13,7 @@
 `>=0.12.3`를 사용한다. Kotlin은 kotlinc-jvm `>=2.2.10`, JDK `>=17`, 고정 JVM target
 `17`, compiler distribution과 일치하는 Kotlin stdlib 및
 `kotlinx-coroutines-core-jvm` `1.8.0`을 사용한다. Codex CLI `>=0.147.0`, Claude Code CLI
-`>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 실제 tool/runtime dependency의 full version과
+`>=2.1.89`, OMP `>=17.2.12`, Pi `>=1.0.4,<2.0.0`(Node `>=22.19.0`)을 지원한다. 각 실제 tool/runtime dependency의 full version과
 content hash는 target provenance에 기록한다.
 Dart target은 SDK `>=3.13.3,<4.0.0`을 사용하고 portable package를 Flutter가 직접 소비한다.
 Dart runtime 검증 host에는 Linux bubblewrap, 아래의 systemd user scope/cgroup v2 task 격리, Landlock ABI `>=3`이 필요하다.
@@ -2635,7 +2635,7 @@ Macro는 `vec!`/`format!`/`matches!`의 audit allowlist만 허용하며 imported
 nested macro 및 qualified token-tree path는 거부한다. Attribute는 doc attribute만 허용하고
 compilation/visibility 조건을 source에서 바꾸지 않는다. Read-only field observation은
 generated `get_<field>()`를 사용하며 `set_`/`update_` receiver write는 선언된 modifies/transition
-경계를 따른다. Provider는 기존 codex/direct claude/omp 세 adapter와 wave를 유지하고 모든
+경계를 따른다. Provider는 기존 codex/direct claude/omp/pi 네 adapter와 wave를 유지하고 모든
 초기 prompt hash는 같은 frozen reference snapshot에서 확정한다.
 Authored source는 top-level import와 private helper function만 확장하며 scoped/nested import,
 type/impl/static declaration, intrinsic namespace alias shadowing 및 imported-type generic shadowing은
@@ -2928,13 +2928,14 @@ Python/Kotlin/Dart/Rust는 이 projection을 공통 renderer의 minified JSON으
 
 `cott generate`는 미구현 callable을 생성할 때 사용자가 `--agent`로 지정한 에이전트를 사용한다. cott는 모델 제공자 API를 직접 호출하거나 에이전트를 자동 선택하지 않는다.
 
-MVP는 다음 세 가지 direct agent adapter와 각 adapter가 제공하는 CLI 인터페이스만 지원한다. `claude`는 Claude Code를 직접 호출하는 adapter다. OMP 안에서 Claude model을 선택해도 그 실행은 여전히 `omp`이며 `claude` adapter가 아니다.
+다음 네 가지 direct agent adapter와 각 adapter가 제공하는 CLI 인터페이스만 지원한다. `claude`는 Claude Code를 직접 호출하는 adapter다. OMP 안에서 Claude model을 선택해도 그 실행은 여전히 `omp`이며 `claude` adapter가 아니다. `pi`는 Pi coding agent(`@earendil-works/pi-coding-agent`)의 독립 adapter이며 OMP alias가 아니다.
 
 | `--agent` 값 | 호출 인터페이스 |
 | ------------- | --------------- |
 | `codex`       | `codex exec`    |
 | `claude`      | direct `claude` (Claude Code) |
 | `omp`         | `omp -p`        |
+| `pi`          | `node <pi package dist/bundle/cli.js> --mode json` |
 
 cott는 17.1의 target-specific 입력을 하나의 callable별 구현 지시로 구성해 선택 interface에
 전달한다. Binding된 symbol은 다시 구현하지 않는다. Python composition은 exact generated facade,
@@ -2943,7 +2944,7 @@ import하지 않는다. Impl method는 supplied canonical helper만 작성하고
 class/init/wrapper/state declaration을 만들지 않는다. Same-file private helper는 canonical function의
 hashed implementation detail이고 public behavior가 되면 Cott declaration으로 승격한다.
 
-`codex`, `claude`, `omp` 밖의 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
+`codex`, `claude`, `omp`, `pi` 밖의 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
 
 #### 17.2.1 에이전트 실행 계약
 
@@ -2953,32 +2954,43 @@ Python에서 모든 selected candidate가 source audit를 통과하면 staged co
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
-compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v1.0은 Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve한다. version preflight는 main generation과 별개다. Claude는 probe를 실행하기 전에 canonical regular-file executable이 `cli.js`이거나 Node shebang을 가지면 거부한다. npm `cli.js` entrypoint는 허용하지 않으며 official native Claude Code installation이 필요하다. Claude probe의 exact argv는 `claude --version`이고 shell 없이 별도 argv로 실행한다. 이 probe는 credential(기존 `ANTHROPIC_API_KEY`를 포함)을 전혀 받지 않고 network가 disabled된 containment에서 실행하며 timeout 없이 status `0`으로 끝나야 한다. stdout 전체는 valid UTF-8의 정확히 하나인 strict SemVer token이어야 하고 그 값은 `>=2.1.89`여야 한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
+compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v1.0은 Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`, Pi `>=1.0.4,<2.0.0`(Node `>=22.19.0`)을 허용한다. executable은 `PATH`에서 한 번 resolve한다. version preflight는 main generation과 별개다. Claude는 probe를 실행하기 전에 canonical regular-file executable이 `cli.js`이거나 Node shebang을 가지면 거부한다. npm `cli.js` entrypoint는 허용하지 않으며 official native Claude Code installation이 필요하다. Claude probe의 exact argv는 `claude --version`이고 shell 없이 별도 argv로 실행한다. 이 probe는 credential(기존 `ANTHROPIC_API_KEY`를 포함)을 전혀 받지 않고 network가 disabled된 containment에서 실행하며 timeout 없이 status `0`으로 끝나야 한다. stdout 전체는 valid UTF-8의 정확히 하나인 strict SemVer token이어야 하고 그 값은 `>=2.1.89`여야 한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
 
-`--model`을 생략한 v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`·`<absolute-prompt-file>`만 run별 값으로 치환한다.
+네 adapter는 모두 **사용자의 로컬 CLI 설정 그대로** 실행한다(사용자 명시 승인 정책). 사용자 설정 디렉터리, 로그인(API key·OAuth·구독), provider·custom provider, profile, extension·plugin, hook, MCP server, skill, rule, context·memory 파일, 기본 model, 그리고 permission·sandbox·approval 정책을 그 CLI의 정상 로딩 경로로 사용하며 Cott는 provider allowlist, credential 선별, tool 제한, 설정 격리 flag, telemetry 강제 변수, permission·sandbox·approval override를 추가하지 않는다. Cott가 추가하는 argv는 일회성·비대화형 실행, 출력 protocol, 완료 판정, exact 초기 prompt 전달에 필요한 것뿐이다. `--model`을 생략한 v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<seconds>`·`<absolute-prompt-file>`·`<prompt>`만 run별 값으로 치환하며 `<workspace>`는 실행 작업 디렉터리(caller project의 실제 canonical root 경로, project가 없으면 isolated workspace 경로)다.
 
-* Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
-* Claude: `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`; exact UTF-8 prompt bytes는 stdin으로 전달하고 child cwd는 isolated workspace다.
-* OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml @<absolute-prompt-file>`; compiler는 OMP 본 실행 전에 exact prompt bytes를 workspace 밖 scratch의 create-new regular file에 쓰고, 그 absolute path 앞에 `@`를 붙인 마지막 단일 argv로 전달한다.
+* Codex: `codex exec --ephemeral --skip-git-repo-check --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다. `--ephemeral`은 session rollout을 남기지 않고, 제시된 workspace는 git checkout이 아니다. `--sandbox`·`--full-auto`·approval flag를 넘기지 않으므로 사용자 `sandbox_mode`·`permission_profile`과 project trust에 따른 기본값이 일반 `codex exec`처럼 target 쓰기 가능 여부를 정한다.
+* Claude: `claude --print --input-format text --output-format json --no-session-persistence`; prompt bytes는 stdin으로 전달한다. `--bare`가 없으므로 사용자 settings·login·hook·plugin·MCP·skill·agent·`CLAUDE.md`가 적용되고, `--permission-mode`·allow rule을 넘기지 않으므로 사용자·project settings의 `permissions.defaultMode`와 allow/deny rule이 모든 tool 호출을 정한다. print mode에서 아무것도 허용하지 않은 요청은 거부되어 result의 `permission_denials`에 남는다.
+* Pi: `node <canonical cli.js> --mode json --no-session -- <prompt>`; exact prompt는 `--` 뒤의 단일 마지막 argv이며 stdin은 비운다. 계약은 아래 Pi 항목이다.
+* OMP: `omp -p --cwd <workspace> --no-session --no-pty --no-title --max-time <seconds>s @<absolute-prompt-file>`; terminal 없는 print 실행, 저장하지 않는 session의 title model 호출 없음, wall-clock 제한, prompt file attachment다. `--approval-mode`·`--auto-approve`를 넘기지 않으므로 사용자 `tools.approvalMode`·`tools.approval`(schema 기본값 `yolo`)이 tool 승인을 정한다.
 
-`generate --model <selector>`는 선택한 adapter의 본 실행에만 두 argv `--model`, `<selector>`를
-추가한다. Codex는 `exec` 바로 뒤, OMP/Claude는 기존 flag 앞에 추가하며 version probe는
-변하지 않는다. Selector는 nonempty UTF-8이며 앞뒤 whitespace, control character, 선행 `-`를
-거부한다. 내부 space는 하나의 인자 값으로 보존한다. `--model`은 명시적 `--agent`를 요구하며
-중복·누락·잘못된 값은 project mutation 전에 거부한다. 생략 시 provider 기본 모델을 유지한다.
-Source retry와 parallel wave에도 동일한 선택을 사용하고 실제 selector를 기존
-`AgentRun.argv_template`에 저장한다. Record schema나 credential/environment allowlist는 바꾸지 않는다.
+사용자 정책이 target 쓰기를 허용하지 않아 CLI가 exit `0`으로 끝나고 target이 비어 있으면 그 정책을 가리키는 사유(Claude는 거부된 tool 이름과 file path만, tool 입력의 나머지는 제외)를 붙여 실패한다. 더 허용적인 정책으로 다시 실행하지 않으며 사용자 설정을 고치지 않는다.
 
-공식 OMP 설치가 `#!/usr/bin/env bun` package launcher이면 inherited PATH에서 Bun을 한 번 resolve하고 canonical regular executable과 content hash를 고정한다. 에이전트 entrypoint와 Bun runtime은 package-manager 설치의 hardlink를 허용하며 link count를 제한하지 않는다. version probe와 본 실행은 shell 없이 `bun <canonical launcher> <기존 adapter argv>`로 호출한다. selected launcher의 provenance는 유지하고 Bun hash는 각 실행 전과 generation 후에 다시 확인한다. package metadata에서 필요한 dependency/optional dependency/peer closure를 구해 개별 package 내용을 read-only로 mount하며 전체 `node_modules`나 HOME을 열지 않는다. 설치 경계 밖으로 나가는 package/symlink, 누락된 필수 dependency, unsafe Bun은 거부한다. sandbox PATH는 `/usr/bin:/bin`으로 유지하고 version probe의 network/credential 정책도 바꾸지 않는다. package 내용은 read-only mount이며 동시 host package-manager 변경에 대한 별도 snapshot은 아니다.
+session 옵션(`--ephemeral`, `--no-session-persistence`, `--no-session`)은 일회성 실행을 사용자 session 기록에 남기지 않기 위한 것이며 어떤 설정을 읽는지는 바꾸지 않는다.
 
-다음 environment allowlist는 main generation process에만 적용하며 version preflight에는 적용하지 않는다. 공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, Claude는 존재하는 `ANTHROPIC_API_KEY`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. Claude에는 항상 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`도 설정한다. Claude에는 OAuth, auth-token, base-url, cloud, provider, customization 관련 environment name을 전달하지 않는다. 그 밖의 host environment는 전달하지 않는다.
+`generate --model <selector>`는 선택한 adapter의 본 실행에만 두 argv `--model`, `<selector>`를 추가한다. Codex는 `exec` 바로 뒤, 나머지는 argv 맨 앞이다. selector는 각 CLI의 공식 문법 그대로(provider/model, alias, pattern, thinking suffix 포함) 전달하며 Cott는 해석하지 않는다. 비어 있거나 trim과 다르거나 control character를 포함하거나 `-`로 시작하는 값만 flag 혼동 방지를 위해 거부하고 내부 space는 하나의 인자 값으로 보존한다. `--model`은 명시적 `--agent`를 요구하며 생략하면 네 agent 모두 사용자 설정의 기본 model을 쓴다. 요청한 selector는 `AgentRun.argv_template`에 저장한다. Record schema는 바꾸지 않는다.
+
+공식 OMP 설치가 `#!/usr/bin/env bun` package launcher이면 inherited PATH에서 Bun을 한 번 resolve하고 canonical regular executable과 content hash를 고정한다. 에이전트 entrypoint와 Bun runtime은 package-manager 설치의 hardlink를 허용하며 link count를 제한하지 않는다. version probe와 본 실행은 shell 없이 `bun <canonical launcher> <기존 adapter argv>`로 호출한다. selected launcher의 provenance는 유지하고 Bun hash는 각 실행 전과 generation 후에 다시 확인한다. package metadata에서 필요한 dependency/optional dependency/peer closure를 구해 개별 package 내용을 read-only로 mount하며 전체 `node_modules`나 HOME을 열지 않는다. 설치 경계 밖으로 나가는 package/symlink, 누락된 필수 dependency, unsafe Bun은 거부한다. version probe는 sandbox PATH `/usr/bin:/bin`, credential·network 없음을 유지한다. package 내용은 read-only mount이며 동시 host package-manager 변경에 대한 별도 snapshot은 아니다.
+
+Pi adapter는 공식 Node package entrypoint만 받는다. `PATH`의 `pi`를 canonicalize한 결과가 regular file `node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js`이고 첫 줄이 정확히 `#!/usr/bin/env node`이며 package root `package.json`의 `name`이 `@earendil-works/pi-coding-agent`, `bin.pi`가 정확히 `dist/bundle/cli.js`, `version`이 strict SemVer여야 한다. compiled `pi` binary, Bun launcher, nix/shell wrapper, linked checkout은 거부한다. Claude native-entrypoint gate는 Pi에 적용하지 않는다. Node는 inherited `PATH`에서 한 번 resolve해 canonical regular executable과 content hash를 고정하고 모든 실행 전후에 다시 확인한다. 사용자 extension이 Pi 자체 package(`@earendil-works/pi-ai` 등)를 resolve할 수 있도록 Pi package의 dependency/peer/optional closure를 OMP와 같은 방식으로 개별 read-only mount하고, Node가 Node distribution(`<prefix>/bin/node`, system prefix·HOME 제외)이면 그 설치 prefix도 read-only로 연다. 두 probe는 credential·사용자 설정·network 없이(빈 `PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`) 실행한다: `node --version`은 strict `v<SemVer>` 하나이고 `>=22.19.0`, `node <cli.js> --version`은 strict SemVer 하나이고 package `version`과 같으며 `>=1.0.4`, major `<2`여야 한다. JSON event protocol(session header version 3부터 `agent_settled`)은 1.x 문서 계약이다.
+
+Pi 본 실행 전에는 prompt만 검사한다. prompt는 valid UTF-8, nonempty, NUL 없음, 첫 문자가 `@`(Pi file argument)나 `/`(command·template 구문)가 아님, Linux argv 원소 하나(`MAX_ARG_STRLEN` 32 page에서 종료 NUL 제외, 4 KiB page에서 131071 bytes) 이하여야 하며 어기면 어떤 process도 실행하지 않는다. Pi는 piped stdin을 trim하고 `@file`을 `<file name=...>` envelope로 감싸므로 둘 다 쓰지 않는다. `--` 뒤 단일 positional message는 user message text로 변형 없이 전달되며 real Pi 1.0.4 transcript(`tests/fixtures/pi/`)에서 앞뒤 whitespace·따옴표·backslash·비ASCII가 provider request까지 보존됨을 확인했다. 사용자 extension이 `input` hook으로 첫 user message를 바꾸면 아래 stream 검사에서 실패한다. `cott prompt`의 `prompt`와 `prompt_hash`가 광고한 bytes가 그대로 첫 provider user message가 된다. model은 `--model`이 있으면 그 selector, 없으면 사용자 Pi 설정의 기본 model로 Pi가 resolve하며 extension이 등록한 provider(예: `cliproxyapi`)도 정상 경로로 쓴다.
+
+Pi 본 실행의 성공은 exit `0`, timeout 없음, executable·Node hash 불변, workspace mutation 없음, candidate file 검사에 더해 stdout이 Pi `--mode json` 계약을 만족해야 한다. stdout은 UTF-8이고 마지막 byte가 LF인 JSONL이며(각 줄의 선택적 CR은 허용) 모든 줄은 string `type`을 가진 JSON object다. 첫 record는 `version: 3`, string `id`, 실행 작업 디렉터리(caller project의 실제 root 경로, project가 없으면 isolated workspace 경로)와 같은 `cwd`의 `session` header이고 다른 `session` record는 없다. 마지막 record만 `agent_settled`다. 나머지는 Pi 1.0.4 `AgentSessionEvent` type(`agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `queue_update`, `compaction_start`, `compaction_end`, `entry_appended`, `session_info_changed`, `thinking_level_changed`, `auto_retry_start`, `auto_retry_end`, `summarization_retry_scheduled`, `summarization_retry_attempt_start`, `summarization_retry_finished`)이어야 하며 `bash_execution_update`나 미지 type은 거부한다. `agent_start`/`agent_end`는 1회 이상 균형을 이루고 마지막 `agent_end.willRetry`는 `false`, `auto_retry_end.success: false`는 실패다. 첫 user `message_end` content는 exact prompt(string 또는 text block 하나)와 같아야 하며 이후 user message는 사용자 extension의 follow-up으로 허용한다. 모든 assistant `message_end`는 비어 있지 않은 `provider`와 `model`, `stop|length|toolUse|error|aborted|deferred` 중 하나의 `stopReason`을 가져야 하고 마지막 assistant는 `stop`이어야 한다. provider/model은 요청값과 비교하지 않고 실제 응답한 순서대로 수집해 `pi answered with ...`로 보고한다. tool event는 string `toolName`만 요구하며 사용자 설정의 tool·extension tool을 제한하지 않는다. JSON mode에서 Pi는 provider 오류에도 exit `0`을 낼 수 있으므로 exit status만으로 성공을 판정하지 않으며, 거부 사유에는 Pi의 `errorMessage`(최대 300자)와 stderr 끝부분을 붙인다. candidate 내용은 이후 기존 source audit와 target validation이 판정한다. `AgentRun`은 schema 변경 없이 `adapter: "pi"`, probed Pi version, canonical `cli.js` path·hash, argv template(`--model`은 지정한 경우만, prompt는 `<prompt>`), environment name, stdout·stderr digest를 기록하며 stdout digest가 provider/model attribution을 포함한 event stream을 고정한다. Claude는 JSON result의 `modelUsage` key를 같은 방식으로 보고한다.
+
+main generation process는 caller environment를 그대로 상속한다. 예외는 Cott가 정하는 `HOME`(caller home)·`TMPDIR`(run scratch)·`PWD`(실행 작업 디렉터리)·`PYTHONDONTWRITEBYTECODE=1`, shell의 `OLDPWD`·`SHLVL`·`_`, 그리고 설정이 아니라 *부모* agent session 표식인 `PI_SESSION_ID`·`PI_SESSION_FILE`·`PI_PROVIDER`·`PI_MODEL`·`PI_REASONING_LEVEL`(Pi도 tool 실행 전에 제거), `CLAUDECODE`·`CLAUDE_CODE_ENTRYPOINT`(Claude Code가 자기 tool process에 설정, 중첩 `claude`는 `CLAUDECODE`에서 시작을 거부), `CODEX_SANDBOX`·`CODEX_SANDBOX_NETWORK_DISABLED`(Codex가 sandbox 명령에 설정)뿐이다. `AgentRun.environment_names`에는 `HOME`, `PATH`, `PWD`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`만 기록하며 상속한 이름과 값은 provenance·log에 남기지 않는다. version·runtime probe는 이 상속을 받지 않고 `HOME`·`TMPDIR`=scratch, `PATH=/usr/bin:/bin`, credential·사용자 설정·network 없이 실행한다.
+
+실행 작업 디렉터리는 `cott`를 시작한 디렉터리가 아니라 선택한 caller project(`--project` 또는 찾은 project)의 실제 canonical root 경로다. sandbox는 그 경로에 17.4의 isolated staging workspace를 read-only로 제시하고 target 파일만 같은 상대 위치에 writable로 연다. 따라서 `--cd`/`--cwd`, `PWD`, Pi session `cwd`, 경로를 key로 쓰는 설정(Codex project trust 등)이 실제 project 경로를 본다. 그 위에 각자의 경로로 read-only mount하는 것은 (1) project의 `agent::PROJECT_RESOURCES`(`.pi/`, `.omp/`, `.codex/`, `.claude/`, `.agents/`, `.mcp.json`, OMP가 탐색하는 다른 도구의 project 파일, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, Pi의 `AGENTS.MD`/`CLAUDE.MD`)와 사용자 Codex `project_doc_fallback_filenames`, (2) 모든 상위 디렉터리의 `agent::ANCESTOR_RESOURCES`(context 파일, `.claude/`, `.codex/`, `.agents/`, `.omp/`, `.clinerules`; HOME 또는 `/` 바로 아래 디렉터리는 사용자 설정·system 상태라 제외), (3) 저장소 root 표식(`agent::repository_marker`: 가장 가까운 `.git` 디렉터리의 `HEAD`, 또는 worktree·submodule `.git` 파일과 그 git 디렉터리의 `HEAD`·`commondir`·`gitdir`, common 디렉터리 `HEAD`; link는 따르지 않음)이다. object·ref·index·git config는 숨기므로 sandbox 안의 `git`은 쓸 수 있는 저장소를 찾지 못한다. 각 CLI는 자기 탐색 규칙을 그대로 적용하며 Cott는 trust 항목을 쓰거나 꾸며내지 않는다. mount 대상이 workspace 안이면 read-only workspace에 mount point가 필요하므로 snapshot 전에 빈 placeholder를 만들고(target은 mount point가 될 수 없음) 그 placeholder는 workspace audit 범위에 포함된다.
+
+사용자 설정 root(Codex `CODEX_HOME` 또는 `~/.codex`, Claude `CLAUDE_CONFIG_DIR` 또는 `~/.claude`, OMP `PI_CODING_AGENT_DIR` 또는 `~/.omp/agent`, Pi `PI_CODING_AGENT_DIR`(`~` 확장) 또는 `~/.pi/agent`)는 그 CLI의 저장소이므로 host 디렉터리 자체를 원래 경로에 writable bind(`sandbox::MappedMount::Shared`)로 연결한다. 읽기, 로그인 갱신, settings·cache·log 쓰기, lock 파일·lock 디렉터리, `rename` 임시 파일, SQLite `-wal`·`-shm`·`-journal`이 일반 실행처럼 host 디렉터리에서 일어나며 같은 device·inode, 같은 advisory lock, 같은 SQLite shared-memory index를 쓰므로 host에서 동시에 실행 중인 CLI session과 조율된다. 공유 전 검사(`agent::configuration_store`): caller euid 소유 디렉터리이고 `/`, system tree, HOME 자체나 그 상위, caller project·그 상위·그 내부가 아니어야 하며, 로그인 저장소(Codex·Pi `auth.json`, Claude `.credentials.json`, OMP `agent.db`와 `agent.db-journal`·`-wal`·`-shm`)는 없거나 caller euid 소유, link 1개인 regular file이어야 한다(symlink는 쓰기를 공유 디렉터리 밖으로 보내고 hard link는 다른 경로를 바꾸므로 거부). 위반하면 CLI 실행 전에 실패한다. 공유 디렉터리는 sandbox scratch가 아니라 사용자 데이터이므로 writable-byte 합계에서 제외하지만 파일당 크기 제한(64 MiB, OMP·Pi JS runtime은 512 MiB)은 적용된다. 공유 디렉터리 안에 read-only mount를 겹치지 않으며 Cott 자신은 거기에 쓰지 않고 설정 파일을 복사·선별·재작성하지 않는다. 읽기 전용으로는 설정 root 최상위 link의 외부 대상, Pi global/project settings의 local path(`packages`, `extensions`, `skills`, `prompts`, `themes`), `~/.agents/skills`, `~/.aws`, `~/.config/gcloud`, Claude의 `~/.claude.json`(`CLAUDE_CONFIG_DIR`가 없을 때; Claude의 global state 갱신은 저장되지 않음), OMP `~/.omp/natives`, 인증서·credential file 변수(`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CODEX_CA_CERTIFICATE`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `GOOGLE_APPLICATION_CREDENTIALS`, `ANTHROPIC_IDENTITY_TOKEN_FILE`)의 대상, system tree 밖 caller `PATH` 디렉터리와 그 항목이 link하는 설치본(`<prefix>/bin/<tool>` 대상의 `<prefix>`를 그 `bin`까지 따라감, 최대 256 mount)을 연다. `/`, HOME 자체와 그 상위는 통째로 열지 않고 HOME의 나머지와 host는 보이지 않거나 read-only다. generation은 provider egress를 위해 host network를 유지한다.
+
+이 경계 때문에 남는 일반 CLI 실행과의 차이는 다음과 같으며 숨기지 않는다. 제시된 resource 밖의 project 파일, 상위 디렉터리의 다른 파일, 저장소 history는 보이지 않는다. Claude `~/.claude.json`은 read-only라 global state 갱신이 저장되지 않는다. 제시된 경로 밖 파일이 필요한 tool(다른 home, `PATH`에서 link되지 않은 SDK root, desktop·keyring·IPC session, `ssh-agent`·daemon socket 등)은 실패한다. 공유 저장소 파일에도 파일당 크기 제한이, 실행에는 process·memory·시간 제한이 적용된다. extension이 띄운 중첩 agent·worker는 따로 attribution되지 않는다. sandbox·cwd·permission·저장소 동작은 mock CLI와 임시 fixture(정책 행렬, 상위·`.git` 표식·trust key, 다른 cwd에서의 `--project`, JSON 원자 교체와 host lock, SQLite WAL·SHM 동시 접근·중단 후 `integrity_check`)로 검증하며, 실제 Codex의 중첩 sandbox 시작 가능 여부와 실제 Codex·Claude Code·OMP release가 read-only `~/.claude.json`이나 거부된 쓰기에 보이는 반응은 그 범위 밖이다. 사용자 설정의 extension·plugin·hook·MCP server는 CLI process 권한·사용자 credential·network로 실행되고 CLI처럼 그 설정 디렉터리에 쓸 수 있는 제3자 코드이며 사용자의 명시적 신뢰 대상이다. builtin tool 목록은 이를 안전하게 만들지 않으며 Cott 보장(read-only workspace·source, project 파일과 HOME 나머지 쓰기 불가, 단일 link target, 고정 prompt bytes·hash, source audit, target acceptance, explicit verify)은 이에 의존하지 않는다.
 
 * 에이전트 executable과 각 인자는 별도 argv로 전달하며 shell 문자열로 조합하거나 재해석하지 않는다. Compiler-owned 고정 `/bin/sh` startup gate만 scope 확인을 기다린 뒤 `exec "$@"`로 bubblewrap을 실행한다.
 * main process 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다. Claude native-entrypoint rejection은 위와 같이 `claude --version` probe 전에 수행한다.
-* 작업 디렉터리는 17.4의 격리된 staging workspace다.
-* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path, OMP native-addon cache와 위에서 검증한 OMP runtime/package closure만 project 밖에서 read-only로 열며, OMP의 `config.yml`, `agent.db`와 model catalog `models.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
-* prompt는 shell 문자열로 조합하지 않는다. Codex와 Claude만 stdin을 사용하며, OMP의 prompt file은 workspace mutation audit 범위 밖의 scratch에만 둔다.
-* 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
+* 작업 디렉터리는 17.4의 격리된 staging workspace이며 caller project가 있으면 그 project의 실제 canonical root 경로에 제시한다.
+* 실제 project root의 내용은 agent sandbox namespace에서 보이지 않는다(그 경로에는 staging workspace가 보인다). 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. project·상위 디렉터리의 agent resource, 저장소 표식, 사용자 설정·runtime은 위 목록대로만 연결하며(설정 root는 host와 공유하는 CLI 저장소, 나머지는 read-only) 설정 파일을 복사·선별·재작성하지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
+* prompt는 shell 문자열로 조합하지 않는다. Codex와 Claude만 stdin을 사용하며, OMP의 prompt file은 workspace mutation audit 범위 밖의 scratch에만 둔다. Pi는 prompt를 `--` 뒤 단일 argv로만 받는다.
+* generation 환경 변수는 위 예외를 뺀 caller environment 전체다. secret value와 상속한 이름은 기록하지 않고 Cott가 정하는 이름과 `PATH`만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
 * `[generator].timeout_seconds`는 1–3600이며 default는 900이다. 모든 agent child는 compiler-owned process containment에 넣는다. parent가 정상 종료해도 남은 descendant를 전부 종료·reap하고 containment가 비었음을 확인한 뒤에만 candidate path를 staging workspace handle 기준 `O_NOFOLLOW`로 열어 regular file·`st_nlink == 1`인지 `fstat`으로 확인하고 읽는다. 그 밖의 file kind, 사용자 취소·timeout·비정상 종료나 descendant 정리 실패는 transaction을 폐기한다.
 * containment에는 compiler version이 고정한 process·CPU·memory·open-file·writable-byte ceiling을 적용하고 candidate implementation file은 최대 1 MiB로 제한한다. 어떤 ceiling이라도 넘으면 agent 실패다.
@@ -3236,7 +3248,7 @@ pending agent source는 소유권을 유지한다. 결과는 항상 `.snapshots[
 ### 18.6 구현 생성
 
 ```bash
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <selector>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp|pi [--model <selector>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]
 
 cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
@@ -3244,11 +3256,12 @@ cott generate example.module.calculate --agent codex --target kotlin
 cott generate example.module.calculate --agent omp --target dart
 cott generate example.module.calculate --agent omp --target rust
 cott generate --agent omp --model anthropic/claude-opus-5-5 --target python -j 3
+cott generate example.module.calculate --agent pi --model openai/gpt-5.1 --target kotlin
 ```
 
 Explicit `--target`은 필수고 manifest의 exactly-one target과 일치해야 한다. Selection은 exact
 canonical free-function 또는 eligible impl-method FQN만 받고 glob/alias는 거부한다. 선택된
-unresolved callable이 있으면 `--agent`가 필수이고 허용 값은 `codex`, `claude`, `omp`다. Binding
+unresolved callable이 있으면 `--agent`가 필수이고 허용 값은 `codex`, `claude`, `omp`, `pi`다. `pi`는 `--model <provider>/<model-id>`도 필수다. Binding
 및 fresh accepted source는 재사용하고 stale/unresolved source만 target별 `implementation.py`,
 `implementation.kt`, `implementation.dart`, `implementation.rs` candidate로 생성한다. Source audit와 complete-candidate validation은 실제
 target 규칙을 사용하고 failure checkpoint는 정확한 pending source provenance를 남긴다. 모든
@@ -4043,7 +4056,7 @@ projection에 고정되고 verify-only certification이나 source provenance를 
 
 ### 결정 14
 
-`cott generate`는 user-selected Codex CLI, direct Claude Code CLI 또는 OMP CLI를 callable별 process로, shell 없이 single-file write sandbox staging에서 호출한다. OMP가 Claude model을 선택해도 direct Claude adapter가 되지 않는다. `cott prompt`는 같은 초기 prompt를 provider 없이 검사한다.
+`cott generate`는 user-selected Codex CLI, direct Claude Code CLI, OMP CLI 또는 Pi CLI를 callable별 process로, shell 없이 single-file write sandbox staging에서 호출한다. OMP가 Claude model을 선택해도 direct Claude adapter가 되지 않는다. `cott prompt`는 같은 초기 prompt를 provider 없이 검사한다.
 
 agent는 실제 project를 쓰지 않고 선택 free-function 또는 impl-method file만 변경한다. scratch와 cache는 workspace 밖으로 격리한다.
 

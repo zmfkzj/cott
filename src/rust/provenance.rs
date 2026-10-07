@@ -615,7 +615,7 @@ fn validate_agent_runs<'a>(
             return Err("Rust agent runs must be sorted and unique by symbol".to_owned());
         }
         previous = Some(&run.symbol);
-        if !matches!(run.adapter.as_str(), "claude" | "codex" | "omp") {
+        if !matches!(run.adapter.as_str(), "claude" | "codex" | "omp" | "pi") {
             return Err(format!(
                 "Rust agent run `{}` has unsupported adapter `{}`",
                 run.symbol, run.adapter

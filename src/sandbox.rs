@@ -47,6 +47,66 @@ pub struct BindMounts {
     pub writable: Vec<PathBuf>,
 }
 
+/// A mount whose sandbox destination differs from its host source, or whose
+/// writes must not reach the host. These are applied together with
+/// [`BindMounts`] in destination-depth order, so a mount nested under an
+/// overlay lands on top of it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MappedMount {
+    /// Host directory `source` presented at `destination` through overlayfs:
+    /// reads see the host tree, writes (including new entries and lock
+    /// directories) go to a private tmpfs that is discarded with the sandbox
+    /// (`bwrap --overlay-src SOURCE --tmp-overlay DESTINATION`).
+    EphemeralOverlay {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    /// Read-only bind of `source` at `destination`.
+    ReadOnly {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    /// Writable bind of `source` at `destination`. Writes reach the host and
+    /// count against [`ResourceLimits::writable_bytes`].
+    Writable {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    /// Writable bind of a caller-owned store directory that host processes
+    /// use at the same time (a CLI's own configuration and login directory).
+    /// The sandbox sees the host directory itself: the same device and
+    /// inodes, files created next to existing ones (SQLite `-wal`/`-shm`/
+    /// `-journal`, lock files and directories, `rename` temporaries), and the
+    /// same advisory locks. Its contents are the caller's, not sandbox
+    /// scratch, so they are not walked or counted against
+    /// [`ResourceLimits::writable_bytes`]; the per-file
+    /// [`ResourceLimits::file_size_bytes`] limit still applies.
+    Shared {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+}
+
+impl MappedMount {
+    pub fn source(&self) -> &Path {
+        match self {
+            Self::EphemeralOverlay { source, .. }
+            | Self::ReadOnly { source, .. }
+            | Self::Writable { source, .. }
+            | Self::Shared { source, .. } => source,
+        }
+    }
+
+    pub fn destination(&self) -> &Path {
+        match self {
+            Self::EphemeralOverlay { destination, .. }
+            | Self::ReadOnly { destination, .. }
+            | Self::Writable { destination, .. }
+            | Self::Shared { destination, .. } => destination,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceLimits {
     pub cpu_time: Duration,
@@ -399,6 +459,17 @@ const SCOPE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 const SCOPE_KILL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
+    run_with_mounts(spec, &[])
+}
+
+/// [`run`] with additional [`MappedMount`]s. Their destinations take part in
+/// parent-directory creation and mount ordering exactly like plain binds;
+/// [`MappedMount::Writable`] sources count against the writable limit,
+/// [`MappedMount::Shared`] stores do not.
+pub fn run_with_mounts(
+    spec: &SandboxSpec,
+    mapped: &[MappedMount],
+) -> Result<CompletedProcess, SandboxError> {
     let bwrap = PathBuf::from("/usr/bin/bwrap");
     require_bwrap(&bwrap)?;
     let systemd_run = PathBuf::from("/usr/bin/systemd-run");
@@ -479,7 +550,9 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         .read_only
         .iter()
         .chain(&spec.binds.writable)
-        .chain(std::iter::once(&spec.cwd))
+        .map(PathBuf::as_path)
+        .chain(mapped.iter().map(MappedMount::destination))
+        .chain(std::iter::once(spec.cwd.as_path()))
     {
         let mut parent = path.parent();
         while let Some(path) = parent {
@@ -494,26 +567,49 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
     for path in directories {
         command.args(["--dir", path.to_string_lossy().as_ref()]);
     }
+    // (destination, source, option): a shallower destination is mounted first,
+    // so binds nested below an overlay or a bind land on top of it.
     let mut mounts = spec
         .binds
         .writable
         .iter()
-        .map(|path| (path, true))
-        .chain(spec.binds.read_only.iter().map(|path| (path, false)))
+        .map(|path| (path.as_path(), path.as_path(), "--bind"))
+        .chain(
+            spec.binds
+                .read_only
+                .iter()
+                .map(|path| (path.as_path(), path.as_path(), "--ro-bind")),
+        )
+        .chain(mapped.iter().map(|mount| {
+            let option = match mount {
+                MappedMount::EphemeralOverlay { .. } => "--tmp-overlay",
+                MappedMount::ReadOnly { .. } => "--ro-bind",
+                MappedMount::Writable { .. } | MappedMount::Shared { .. } => "--bind",
+            };
+            (mount.destination(), mount.source(), option)
+        }))
         .collect::<Vec<_>>();
-    mounts.sort_by(|(left, _), (right, _)| {
+    mounts.sort_by(|(left, _, _), (right, _, _)| {
         left.components()
             .count()
             .cmp(&right.components().count())
             .then_with(|| left.cmp(right))
     });
-    for (path, writable) in mounts {
-        let option = if writable { "--bind" } else { "--ro-bind" };
-        command.args([
-            option,
-            path.to_string_lossy().as_ref(),
-            path.to_string_lossy().as_ref(),
-        ]);
+    for (destination, source, option) in mounts {
+        if option == "--tmp-overlay" {
+            command.args([
+                "--overlay-src",
+                source.to_string_lossy().as_ref(),
+                option,
+                destination.to_string_lossy().as_ref(),
+            ]);
+        } else {
+            command.args([
+                option,
+                source.to_string_lossy().as_ref(),
+                destination.to_string_lossy().as_ref(),
+            ]);
+        }
     }
     let environment_args = sealed_environment_args(&spec.environment)?;
     let environment_fd = environment_args.as_raw_fd();
@@ -762,8 +858,17 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
             limit_bytes: spec.limits.stream_limit_bytes,
         });
     }
-    if writable_usage(&spec.binds.writable).map_err(SandboxError::Io)? > spec.limits.writable_bytes
-    {
+    let writable = spec
+        .binds
+        .writable
+        .iter()
+        .cloned()
+        .chain(mapped.iter().filter_map(|mount| match mount {
+            MappedMount::Writable { source, .. } => Some(source.clone()),
+            _ => None,
+        }))
+        .collect::<Vec<_>>();
+    if writable_usage(&writable).map_err(SandboxError::Io)? > spec.limits.writable_bytes {
         return Err(SandboxError::WritableLimitExceeded {
             limit_bytes: spec.limits.writable_bytes,
         });

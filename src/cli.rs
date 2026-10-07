@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub use crate::agent::AgentKind;
 use crate::agent::{
     AgentRunCandidate, AgentSelection, ShadowFacet, adapter, parse_domain_rules, render_prompt,
-    run_agent, scan_doc_candidates, selected_implementation_kind, valid_model,
+    run_agent_in_project, scan_doc_candidates, selected_implementation_kind, valid_model,
 };
 use crate::binding::{
     PythonFileRole, ResolvedBinding, audit_facade_file, recorded_intent_baseline,
@@ -50,7 +50,7 @@ use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, Dart, and Rust.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart|rust] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart|rust [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott requirements [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, Dart, and Rust.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart|rust] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart|rust [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp|pi [--model <model>] --target python|kotlin|dart|rust [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott requirements [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  requirements         Report requirement evidence from the fresh verified snapshot only.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nAn observed requirement only means its checked_by scenarios ran and held.\nUse --version and --help from the same compiler executable used for the project.\n";
 
@@ -828,7 +828,8 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
                     Some("claude") => Some(AgentKind::Claude),
                     Some("codex") => Some(AgentKind::Codex),
                     Some("omp") => Some(AgentKind::Omp),
-                    _ => return Err("`--agent` requires `codex`, `claude`, or `omp`"),
+                    Some("pi") => Some(AgentKind::Pi),
+                    _ => return Err("`--agent` requires `codex`, `claude`, `omp`, or `pi`"),
                 };
             }
             Some("--model") if model.is_none() => {
@@ -888,6 +889,9 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
     if model.is_some() && agent.is_none() {
         return Err("`--model` requires `--agent`");
     }
+    // `--agent pi` without `--model` uses the caller's configured Pi default;
+    // with `--model` the value reaches Pi verbatim in Pi's own syntax
+    // (`provider/id`, a model pattern, an optional `:<thinking>` suffix).
     Ok(Command::Generate {
         target,
         symbol,
@@ -2676,6 +2680,7 @@ fn add_agent_runs(
                 AgentKind::Claude => "claude",
                 AgentKind::Codex => "codex",
                 AgentKind::Omp => "omp",
+                AgentKind::Pi => "pi",
             }
             .to_owned(),
             adapter_version: candidate.adapter_version,
@@ -3325,7 +3330,7 @@ fn generate_project(
         .collect::<BTreeMap<_, _>>();
     if !unresolved.is_empty() {
         let Some(agent) = agent else {
-            eprintln!("error: unresolved selected callable requires `--agent codex|claude|omp`");
+            eprintln!("error: unresolved selected callable requires `--agent codex|claude|omp|pi`");
             return 2;
         };
         if let Err(error) = verified_baseline_guard(&paths, &config, &input_hashes, &pending_paths)
@@ -3391,8 +3396,9 @@ fn generate_project(
                         existing.as_deref(),
                         (!feedback.is_empty()).then_some(feedback.as_str()),
                     )?;
-                    let mut candidate = run_agent(
+                    let mut candidate = run_agent_in_project(
                         AgentSelection { kind: agent, model },
+                        Some(&paths.root),
                         executable.clone(),
                         &temporary.workspace,
                         &temporary.scratch,
@@ -3435,8 +3441,9 @@ fn generate_project(
                                         target.display()
                                     )
                                 })?;
-                                candidate = run_agent(
+                                candidate = run_agent_in_project(
                                     AgentSelection { kind: agent, model },
+                                    Some(&paths.root),
                                     executable.clone(),
                                     &temporary.workspace,
                                     &temporary.scratch,

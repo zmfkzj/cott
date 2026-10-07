@@ -42,7 +42,7 @@ def model_argument(value):
 
 
 script = Path(sys.argv[1]).resolve()
-parser.add_argument("--agent", choices=("codex", "claude", "omp"), default="omp")
+parser.add_argument("--agent", choices=("codex", "claude", "omp", "pi"), default="omp")
 parser.add_argument("--model", type=model_argument, help="provider model selector; omitted uses the agent default")
 parser.add_argument("--dry-run", action="store_true", help="list commands without installing or generating")
 args = parser.parse_args(sys.argv[2:])

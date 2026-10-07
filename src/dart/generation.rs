@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use crate::agent::{AgentKind, AgentRunCandidate, AgentSelection, adapter, run_agent};
+use crate::agent::{AgentKind, AgentRunCandidate, AgentSelection, adapter, run_agent_in_project};
 use crate::hash::sha256_hex;
 use crate::provenance::{AgentRun, AgentStatus, StreamDigest};
 
@@ -167,7 +167,9 @@ pub(crate) fn generate(
         .cloned()
         .collect::<Vec<_>>();
     if agent.is_none() {
-        eprintln!("error: unresolved selected Dart callable requires `--agent codex|claude|omp`");
+        eprintln!(
+            "error: unresolved selected Dart callable requires `--agent codex|claude|omp|pi`"
+        );
         return 2;
     }
 
@@ -371,8 +373,11 @@ fn generate_candidate(
         };
         let workspace = AgentWorkspace::create()?;
         let target = workspace.workspace.join("implementation.dart");
-        let mut candidate = run_agent(
+        // The caller's selected project root (`--project` or the current
+        // directory), so the agent reads that project's own configuration.
+        let mut candidate = run_agent_in_project(
             AgentSelection { kind, model },
+            Some(&project.paths.root),
             executable.to_path_buf(),
             &workspace.workspace,
             &workspace.scratch,
@@ -538,6 +543,7 @@ fn agent_run(symbol: &str, kind: AgentKind, candidate: AgentRunCandidate) -> Age
         adapter: match kind {
             AgentKind::Codex => "codex",
             AgentKind::Omp => "omp",
+            AgentKind::Pi => "pi",
             AgentKind::Claude => "claude",
         }
         .to_owned(),
